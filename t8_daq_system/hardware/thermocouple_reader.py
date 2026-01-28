@@ -10,8 +10,9 @@ from labjack import ljm
 class ThermocoupleReader:
     # Thermocouple type codes for AIN_EF_INDEX register
     TC_TYPES = {
-        'B': 20, 'E': 21, 'J': 22, 'K': 23,
-        'N': 24, 'R': 25, 'S': 26, 'T': 27
+        'E': 20, 'J': 21, 'K': 22, 'R': 23,
+        'T': 24, 'S': 25, 'N': 27, 'B': 28,
+        'C': 30
     }
 
     def __init__(self, handle, tc_config_list):
@@ -84,7 +85,10 @@ class ThermocoupleReader:
                 if temp == -9999:
                     readings[tc['name']] = None
                 else:
-                    readings[tc['name']] = round(temp, 2)
+                    # Apply scale and offset if configured
+                    scale = tc.get('scale', 1.0)
+                    offset = tc.get('offset', 0.0)
+                    readings[tc['name']] = round((temp * scale) + offset, 3)
 
             except ljm.LJMError as e:
                 print(f"Error reading {tc['name']}: {e}")
@@ -109,7 +113,11 @@ class ThermocoupleReader:
                     temp = ljm.eReadName(self.handle, read_name)
                     if temp == -9999:
                         return None
-                    return round(temp, 2)
+                    
+                    # Apply scale and offset if configured
+                    scale = tc.get('scale', 1.0)
+                    offset = tc.get('offset', 0.0)
+                    return round((temp * scale) + offset, 3)
                 except ljm.LJMError as e:
                     print(f"Error reading {channel_name}: {e}")
                     return None

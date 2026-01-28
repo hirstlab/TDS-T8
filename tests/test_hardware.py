@@ -61,7 +61,7 @@ class TestHardware(unittest.TestCase):
         mock_ljm.getHandleInfo.return_value = ("T8", "USB", 12345, "1.1.1.1", 1, 1024)
         mock_ljm.LJMError = Exception # Mocking the error class
         
-        conn = LabJackConnection(config_path=self.temp_config.name)
+        conn = LabJackConnection()
         self.assertTrue(conn.connect())
         self.assertEqual(conn.get_handle(), self.mock_handle)
         self.assertTrue(conn.is_connected())

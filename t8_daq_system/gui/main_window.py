@@ -21,18 +21,27 @@ from t8_daq_system.gui.sensor_panel import SensorPanel
 
 
 class MainWindow:
-    def __init__(self):
+    def __init__(self, config_path=None):
         """
         Initialize the main application window.
         """
         # Default configuration
         self.config = {
             "device": {"type": "T8", "connection": "USB", "identifier": "ANY"},
-            "thermocouples": [{"name": "TC_1", "channel": 0, "type": "K", "units": "C", "enabled": True}],
-            "pressure_sensors": [{"name": "P_1", "channel": 8, "min_voltage": 0.5, "max_voltage": 4.5, "min_pressure": 0, "max_pressure": 100, "units": "PSI", "enabled": True}],
-            "logging": {"interval_ms": 1000, "file_prefix": "data_log", "auto_start": False},
-            "display": {"update_rate_ms": 500, "history_seconds": 60}
+            "thermocouples": [{"name": "TC_1", "channel": 0, "type": "K", "units": "C", "enabled": True, "scale": 1.0, "offset": -15.0}],
+            "pressure_sensors": [{"name": "P_1", "channel": 8, "min_voltage": 0.5, "max_voltage": 4.5, "min_pressure": 0, "max_pressure": 100, "units": "PSI", "enabled": True, "scale": 1.0, "offset": 0.0}],
+            "logging": {"interval_ms": 100, "file_prefix": "data_log", "auto_start": False},
+            "display": {"update_rate_ms": 100, "history_seconds": 60}
         }
+
+        # Load from config file if provided
+        if config_path and os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    loaded_config = json.load(f)
+                    self.config.update(loaded_config)
+            except Exception as e:
+                print(f"Error loading config from {config_path}: {e}")
 
         # Create main window
         self.root = tk.Tk()
@@ -101,7 +110,7 @@ class MainWindow:
         self.tc_type_var = tk.StringVar(value=tc_type)
         self.tc_type_combo = ttk.Combobox(
             config_area, textvariable=self.tc_type_var, 
-            values=["K", "J", "T", "E", "R", "S", "B", "N"], width=3
+            values=["K", "J", "T", "E", "R", "S", "B", "N", "C"], width=3
         )
         self.tc_type_combo.pack(side=tk.LEFT, padx=2)
         self.tc_type_combo.bind("<<ComboboxSelected>>", lambda e: self._on_config_change())
@@ -228,29 +237,39 @@ class MainWindow:
             self.p_count_var.set(str(new_p_count))
 
         # Update thermocouples
+        old_tcs = {tc['name']: tc for tc in self.config['thermocouples']}
         self.config['thermocouples'] = []
         for i in range(new_tc_count):
+            name = f"TC_{i+1}"
+            old_tc = old_tcs.get(name, {})
             self.config['thermocouples'].append({
-                "name": f"TC_{i+1}",
+                "name": name,
                 "channel": i,
                 "type": new_tc_type,
                 "units": new_tc_unit,
-                "enabled": True
+                "enabled": True,
+                "scale": old_tc.get('scale', 1.0),
+                "offset": old_tc.get('offset', 0.0)
             })
 
         # Update pressure sensors
         # Start pressure channels after thermocouples to avoid overlap
+        old_ps = {p['name']: p for p in self.config['pressure_sensors']}
         self.config['pressure_sensors'] = []
         for i in range(new_p_count):
+            name = f"P_{i+1}"
+            old_p = old_ps.get(name, {})
             self.config['pressure_sensors'].append({
-                "name": f"P_{i+1}",
+                "name": name,
                 "channel": 8 + i, # Start P-sensors at channel 8
                 "min_voltage": 0.5,
                 "max_voltage": 4.5,
                 "min_pressure": 0,
                 "max_pressure": new_p_max,
                 "units": new_p_unit,
-                "enabled": True
+                "enabled": True,
+                "scale": old_p.get('scale', 1.0),
+                "offset": old_p.get('offset', 0.0)
             })
 
         # If already connected, we need to update the readers

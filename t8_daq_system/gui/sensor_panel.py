@@ -20,6 +20,7 @@ class SensorPanel:
         self.displays = {}        # sensor_name: Label widget for value
         self.status_labels = {}   # sensor_name: Label widget for status
         self.frames = {}          # sensor_name: LabelFrame widget
+        self.precisions = {}      # sensor_name: decimal places to show
 
         # Configure grid weights for even distribution
         for i in range(4):
@@ -33,6 +34,14 @@ class SensorPanel:
             name = sensor['name']
             units = sensor.get('units', '')
 
+            # Determine precision and placeholder
+            if name.startswith('TC'):
+                self.precisions[name] = 2
+                placeholder = "--.--"
+            else:
+                self.precisions[name] = 1
+                placeholder = "--.-"
+
             # Create frame for this sensor
             frame = ttk.LabelFrame(parent_frame, text=name)
             frame.grid(row=i//4, column=i%4, padx=5, pady=5, sticky='nsew')
@@ -41,7 +50,7 @@ class SensorPanel:
             # Large number display
             value_label = ttk.Label(
                 frame,
-                text="--.-",
+                text=placeholder,
                 font=('Arial', 24, 'bold')
             )
             value_label.pack(padx=10, pady=0)
@@ -62,6 +71,37 @@ class SensorPanel:
             self.displays[name] = value_label
             self.status_labels[name] = status_label
 
+            # Calibration controls (Scale and Offset)
+            cal_frame = ttk.Frame(frame)
+            cal_frame.pack(fill=tk.X, padx=5, pady=5)
+
+            ttk.Label(cal_frame, text="S:", font=('Arial', 7)).grid(row=0, column=0)
+            scale_var = tk.StringVar(value=str(sensor.get('scale', 1.0)))
+            scale_entry = ttk.Entry(cal_frame, textvariable=scale_var, width=5, font=('Arial', 7))
+            scale_entry.grid(row=0, column=1, padx=2)
+
+            ttk.Label(cal_frame, text="O:", font=('Arial', 7)).grid(row=0, column=2)
+            offset_var = tk.StringVar(value=str(sensor.get('offset', 0.0)))
+            offset_entry = ttk.Entry(cal_frame, textvariable=offset_var, width=5, font=('Arial', 7))
+            offset_entry.grid(row=0, column=3, padx=2)
+
+            # Trace the variables to update the sensor config
+            def make_update_callback(s=sensor, sv=scale_var, ov=offset_var):
+                def update_cal(*args):
+                    try:
+                        s['scale'] = float(sv.get())
+                    except ValueError:
+                        pass
+                    try:
+                        s['offset'] = float(ov.get())
+                    except ValueError:
+                        pass
+                return update_cal
+
+            callback = make_update_callback()
+            scale_var.trace_add("write", callback)
+            offset_var.trace_add("write", callback)
+
     def update(self, readings):
         """
         Update displayed values and status.
@@ -76,7 +116,8 @@ class SensorPanel:
                     self.displays[name].config(text="---", foreground='gray')
                     self.status_labels[name].config(text="DISCONNECTED", foreground='red')
                 else:
-                    self.displays[name].config(text=f"{value:.1f}", foreground='black')
+                    precision = self.precisions.get(name, 1)
+                    self.displays[name].config(text=f"{value:.{precision}f}", foreground='black')
                     self.status_labels[name].config(text="CONNECTED", foreground='green')
 
     def set_error(self, sensor_name, message="ERR"):
@@ -94,7 +135,8 @@ class SensorPanel:
     def clear_all(self):
         """Reset all displays to default state."""
         for name in self.displays:
-            self.displays[name].config(text="--.-", foreground='black')
+            placeholder = "--.--" if self.precisions.get(name) == 2 else "--.-"
+            self.displays[name].config(text=placeholder, foreground='black')
             self.status_labels[name].config(text="WAITING", foreground='gray')
 
     def highlight(self, sensor_name, color='green'):
