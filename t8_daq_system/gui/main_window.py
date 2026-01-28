@@ -11,13 +11,13 @@ import time
 import os
 
 # Import our modules
-from hardware.labjack_connection import LabJackConnection
-from hardware.thermocouple_reader import ThermocoupleReader
-from hardware.pressure_reader import PressureReader
-from data.data_buffer import DataBuffer
-from data.data_logger import DataLogger
-from gui.live_plot import LivePlot
-from gui.sensor_panel import SensorPanel
+from t8_daq_system.hardware.labjack_connection import LabJackConnection
+from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
+from t8_daq_system.hardware.pressure_reader import PressureReader
+from t8_daq_system.data.data_buffer import DataBuffer
+from t8_daq_system.data.data_logger import DataLogger
+from t8_daq_system.gui.live_plot import LivePlot
+from t8_daq_system.gui.sensor_panel import SensorPanel
 
 
 class MainWindow:
