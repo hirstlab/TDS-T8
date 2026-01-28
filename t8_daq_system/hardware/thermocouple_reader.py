@@ -46,15 +46,19 @@ class ThermocoupleReader:
             config_name = f"AIN{channel}_EF_CONFIG_A"
             range_name = f"AIN{channel}_RANGE"
 
-            # Set the voltage range (thermocouples use small voltages)
-            ljm.eWriteName(self.handle, range_name, 0.075)  # +/-75mV range
+            try:
+                # Set the voltage range (thermocouples use small voltages)
+                ljm.eWriteName(self.handle, range_name, 0.075)  # +/-75mV range
 
-            # Set the thermocouple type
-            ljm.eWriteName(self.handle, index_name, self.TC_TYPES[tc_type])
+                # Set the thermocouple type
+                ljm.eWriteName(self.handle, index_name, self.TC_TYPES[tc_type])
 
-            # Set output units: 0=Kelvin, 1=Celsius, 2=Fahrenheit
-            units_code = {'K': 0, 'C': 1, 'F': 2}.get(tc['units'], 1)
-            ljm.eWriteName(self.handle, config_name, units_code)
+                # Set output units: 0=Kelvin, 1=Celsius, 2=Fahrenheit
+                units_code = {'K': 0, 'C': 1, 'F': 2}.get(tc['units'], 1)
+                ljm.eWriteName(self.handle, config_name, units_code)
+            except ljm.LJMError as e:
+                print(f"Error configuring thermocouple {tc['name']} on AIN{channel}: {e}")
+                raise e
 
     def read_all(self):
         """

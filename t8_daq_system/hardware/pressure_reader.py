@@ -29,9 +29,13 @@ class PressureReader:
             channel = sensor['channel']
             range_name = f"AIN{channel}_RANGE"
 
-            # Most pressure transducers output 0-5V or 0-10V
-            # Use +/-10V range to be safe
-            ljm.eWriteName(self.handle, range_name, 10.0)
+            try:
+                # Most pressure transducers output 0-5V or 0-10V
+                # Use +/-10V range to be safe
+                ljm.eWriteName(self.handle, range_name, 10.0)
+            except ljm.LJMError as e:
+                print(f"Error configuring pressure sensor {sensor['name']} on AIN{channel}: {e}")
+                raise e
 
     def _voltage_to_pressure(self, voltage, sensor_config):
         """
@@ -50,8 +54,16 @@ class PressureReader:
         p_min = sensor_config['min_pressure']
         p_max = sensor_config['max_pressure']
 
-        # Linear interpolation
+        # Linear interpolation (PSI)
         pressure = (voltage - v_min) / (v_max - v_min) * (p_max - p_min) + p_min
+        
+        # Convert units if necessary
+        units = sensor_config.get('units', 'PSI')
+        if units == 'Bar':
+            pressure = pressure * 0.0689476
+        elif units == 'kPa':
+            pressure = pressure * 6.89476
+            
         return round(pressure, 2)
 
     def read_all(self):
@@ -72,8 +84,14 @@ class PressureReader:
 
             try:
                 voltage = ljm.eReadName(self.handle, read_name)
-                pressure = self._voltage_to_pressure(voltage, sensor)
-                readings[sensor['name']] = pressure
+                
+                # Basic check for disconnected sensor:
+                # If voltage is near 0 and min_voltage is > 0.1, it's likely disconnected
+                if voltage < 0.1 and sensor['min_voltage'] > 0.2:
+                    readings[sensor['name']] = None
+                else:
+                    pressure = self._voltage_to_pressure(voltage, sensor)
+                    readings[sensor['name']] = pressure
 
             except ljm.LJMError as e:
                 print(f"Error reading {sensor['name']}: {e}")

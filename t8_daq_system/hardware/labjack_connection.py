@@ -10,25 +10,12 @@ import os
 
 
 class LabJackConnection:
-    def __init__(self, config_path=None):
+    def __init__(self):
         """
         Initialize the LabJack connection manager.
-
-        Args:
-            config_path: Path to sensor_config.json. If None, uses default location.
         """
         self.handle = None
         self.device_info = None
-
-        # Find config file
-        if config_path is None:
-            # Look relative to this file's location
-            base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-            config_path = os.path.join(base_dir, 'config', 'sensor_config.json')
-
-        # Load config to know how to connect
-        with open(config_path, 'r') as f:
-            self.config = json.load(f)
 
     def connect(self):
         """
@@ -38,23 +25,25 @@ class LabJackConnection:
             True if successful, False if failed
         """
         try:
-            device_cfg = self.config['device']
+            # Default to T8, USB, ANY identifier
+            self.handle = ljm.openS("T8", "USB", "ANY")
 
-            # ljm.openS() - the 'S' means we use Strings for parameters
-            # Parameters: device type, connection type, identifier
-            self.handle = ljm.openS(
-                device_cfg['type'],       # "T8"
-                device_cfg['connection'], # "USB" or "ETHERNET"
-                device_cfg['identifier']  # "ANY" or specific serial
-            )
+            # Verify connection with a read
+            ljm.eReadName(self.handle, "SERIAL_NUMBER")
 
             # Get device info to confirm connection
             self.device_info = ljm.getHandleInfo(self.handle)
             print(f"Connected to T8, Serial: {self.device_info[2]}")
             return True
 
-        except ljm.LJMError as e:
-            print(f"Failed to connect: {e}")
+        except ljm.LJMError:
+            # Silently fail for background auto-connect
+            if self.handle is not None:
+                try:
+                    ljm.close(self.handle)
+                except:
+                    pass
+                self.handle = None
             return False
 
     def disconnect(self):
@@ -69,8 +58,18 @@ class LabJackConnection:
         return self.handle
 
     def is_connected(self):
-        """Check if device is currently connected."""
-        return self.handle is not None
+        """Check if device is currently connected and responsive by performing a small read."""
+        if self.handle is None:
+            return False
+        
+        try:
+            # A real read is more reliable than getHandleInfo for detecting physical USB pull
+            ljm.eReadName(self.handle, "SERIAL_NUMBER")
+            return True
+        except ljm.LJMError:
+            # Connection lost or handle invalid
+            self.handle = None
+            return False
 
     def get_device_info(self):
         """
