@@ -14,11 +14,14 @@ class DataBuffer:
         Initialize the data buffer.
 
         Args:
-            max_seconds: How much history to keep
+            max_seconds: How much history to keep (None for unlimited)
             sample_rate_ms: Expected time between samples
         """
         # Calculate how many samples to store
-        max_samples = int((max_seconds * 1000) / sample_rate_ms)
+        if max_seconds is not None:
+            max_samples = int((max_seconds * 1000) / sample_rate_ms)
+        else:
+            max_samples = None
 
         self.max_samples = max_samples
         self.timestamps = deque(maxlen=max_samples)

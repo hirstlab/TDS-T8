@@ -37,7 +37,7 @@ class MainWindow:
         # Default configuration
         self.config = {
             "device": {"type": "T8", "connection": "USB", "identifier": "ANY"},
-            "thermocouples": [{"name": "TC_1", "channel": 0, "type": "K", "units": "C", "enabled": True, "scale": 1.0, "offset": -15.0}],
+            "thermocouples": [{"name": "TC_1", "channel": 0, "type": "C", "units": "C", "enabled": True, "scale": 1.0, "offset": 0}],
             "pressure_sensors": [{"name": "P_1", "channel": 8, "min_voltage": 0.5, "max_voltage": 4.5, "min_pressure": 0, "max_pressure": 100, "units": "PSI", "enabled": True, "scale": 1.0, "offset": 0.0}],
             "power_supply": {
                 "enabled": True,
@@ -87,9 +87,9 @@ class MainWindow:
         self.ramp_executor = RampExecutor()
         self.safety_monitor = SafetyMonitor(auto_shutoff=True)
 
-        # Initialize data handling
+        # Initialize data handling (None for unlimited history)
         self.data_buffer = DataBuffer(
-            max_seconds=self.config['display']['history_seconds'],
+            max_seconds=None,
             sample_rate_ms=self.config['display']['update_rate_ms']
         )
 
@@ -260,11 +260,19 @@ class MainWindow:
         # Build initial panel
         self._rebuild_sensor_panel()
 
-        # Live plot
-        plot_frame = ttk.LabelFrame(left_frame, text="Live Data")
-        plot_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        # Live plots (Full run and 1 min)
+        plot_container = ttk.Frame(left_frame)
+        plot_container.pack(fill=tk.BOTH, expand=True)
 
-        self.live_plot = LivePlot(plot_frame, self.data_buffer)
+        # Full run plot
+        full_frame = ttk.LabelFrame(plot_container, text="Full Run History (TC/P)")
+        full_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=2)
+        self.full_plot = LivePlot(full_frame, self.data_buffer)
+
+        # Recent plot (1 min)
+        recent_frame = ttk.LabelFrame(plot_container, text="Last 1 Minute (TC/P)")
+        recent_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=2)
+        self.recent_plot = LivePlot(recent_frame, self.data_buffer)
 
         # Right side - Power Supply Control
         right_frame = ttk.Frame(main_paned)
@@ -746,7 +754,7 @@ class MainWindow:
                 color = '#00FF00' if value is not None else '#333333'
                 self.indicators[name].config(bg=color)
 
-        # Update plot - include power supply data
+        # Update plots - include power supply data
         sensor_names = [tc['name'] for tc in self.config['thermocouples']
                        if tc.get('enabled', True)]
         sensor_names += [p['name'] for p in self.config['pressure_sensors']
@@ -757,7 +765,11 @@ class MainWindow:
         if self.ps_controller:
             ps_names = ['PS_Voltage', 'PS_Current']
 
-        self.live_plot.update(sensor_names, ps_names)
+        # Update full run plot (no window)
+        self.full_plot.update(sensor_names, ps_names)
+
+        # Update recent plot (last 60 seconds)
+        self.recent_plot.update(sensor_names, ps_names, window_seconds=60)
 
         # Schedule next update
         self.root.after(self.config['display']['update_rate_ms'], self._update_gui)
