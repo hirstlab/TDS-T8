@@ -21,6 +21,7 @@ from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.frg702_reader import FRG702Reader
 from t8_daq_system.hardware.keysight_connection import KeysightConnection
 from t8_daq_system.hardware.power_supply_controller import PowerSupplyController
+from t8_daq_system.hardware.turbo_pump_controller import TurboPumpController
 from t8_daq_system.control.ramp_executor import RampExecutor
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
 from t8_daq_system.data.data_buffer import DataBuffer
@@ -30,6 +31,7 @@ from t8_daq_system.gui.sensor_panel import SensorPanel
 from t8_daq_system.utils.helpers import convert_temperature
 from t8_daq_system.gui.power_supply_panel import PowerSupplyPanel
 from t8_daq_system.gui.ramp_panel import RampPanel
+from t8_daq_system.gui.turbo_pump_panel import TurboPumpPanel
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog, AxisScaleDialog
 
 
@@ -88,6 +90,9 @@ class MainWindow:
             resource_string=self.config.get('power_supply', {}).get('visa_resource')
         )
         self.ps_controller = None
+
+        # Initialize turbo pump controller (set later when connected)
+        self.turbo_controller = None
 
         # Initialize ramp executor and safety monitor
         self.ramp_executor = RampExecutor()
@@ -300,6 +305,10 @@ class MainWindow:
 
         self.ps_panel = PowerSupplyPanel(ps_frame, self.ps_controller)
         self.ps_panel.on_output_change(self._on_ps_output_change)
+
+        # Turbo Pump Panel
+        self.turbo_panel = TurboPumpPanel(right_frame)
+        self.turbo_panel.pack(fill=tk.X, padx=5, pady=5)
 
         # Ramp Profile Panel
         ramp_frame = ttk.LabelFrame(right_frame, text="Ramp Profile Control")
@@ -776,6 +785,10 @@ class MainWindow:
         if self.ramp_panel.is_running():
             self.ramp_panel.stop_execution()
 
+        # Emergency stop turbo pump on safety trigger
+        if self.turbo_controller:
+            self.turbo_controller.emergency_stop()
+
         # Update power supply panel
         self.ps_panel.emergency_off()
 
@@ -985,6 +998,13 @@ class MainWindow:
                             'PS_Voltage': 12.0 + random.uniform(-0.1, 0.1),
                             'PS_Current': 2.0 + random.uniform(-0.05, 0.05)
                         }
+
+                    turbo_readings = {}
+                    if self.config.get('turbo_pump', {}).get('enabled', False):
+                        turbo_readings = {
+                            'Turbo_Commanded': 'OFF',
+                            'Turbo_Status': 'OFF'
+                        }
                 else:
                     # Read all sensors from hardware
                     tc_readings = self.tc_reader.read_all()
@@ -1000,6 +1020,11 @@ class MainWindow:
                     ps_readings = {}
                     if self.ps_controller:
                         ps_readings = self.ps_controller.get_readings()
+
+                    # Read turbo pump status if connected
+                    turbo_readings = {}
+                    if self.turbo_controller:
+                        turbo_readings = self.turbo_controller.get_status_dict()
 
                 # SAFETY CHECK FIRST
                 if not self._safety_triggered:
@@ -1017,7 +1042,7 @@ class MainWindow:
                             print(f"Error setting voltage: {e}")
 
                 # Combine readings (FRG-702 stored in mbar internally)
-                all_readings = {**tc_readings, **frg702_readings, **ps_readings}
+                all_readings = {**tc_readings, **pressure_readings, **frg702_readings, **ps_readings, **turbo_readings}
 
                 # Store FRG-702 detail readings for GUI status update
                 self._latest_frg702_details = frg702_detail_readings
@@ -1108,6 +1133,10 @@ class MainWindow:
         # Update ramp panel
         self.ramp_panel.update()
 
+        # Update turbo pump status display
+        if self.turbo_controller:
+            self.turbo_panel.update_status_display()
+
         # Update safety display
         if not self._safety_triggered:
             self._update_safety_display(self.safety_monitor.status)
@@ -1182,6 +1211,17 @@ class MainWindow:
             if frg702_config:
                 self.frg702_reader = FRG702Reader(handle, frg702_config)
 
+            # Initialize turbo pump controller if configured
+            turbo_config = self.config.get('turbo_pump', {})
+            if turbo_config.get('enabled', False):
+                try:
+                    self.turbo_controller = TurboPumpController(handle, turbo_config)
+                    self.turbo_panel.set_controller(self.turbo_controller)
+                    print("Turbo pump controller initialized")
+                except Exception as e:
+                    print(f"Failed to initialize turbo pump controller: {e}")
+                    self.turbo_controller = None
+
             self._check_connections()
             return True
         except Exception as e:
@@ -1227,6 +1267,13 @@ class MainWindow:
         # Stop logging if active
         if self.is_logging:
             self.logger.stop_logging()
+
+        # Safely turn off turbo pump
+        if self.turbo_controller:
+            try:
+                self.turbo_controller.cleanup()
+            except Exception:
+                pass
 
         # Safely turn off power supply
         if self.ps_controller:
