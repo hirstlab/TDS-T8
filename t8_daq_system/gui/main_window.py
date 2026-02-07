@@ -2,8 +2,9 @@
 main_window.py
 PURPOSE: Main application window - coordinates everything
 
-Integrates LabJack T8 DAQ with Keysight N5761A power supply control,
-safety monitoring, and ramp profile execution.
+Integrates LabJack T8 DAQ (thermocouples, turbo pump) and XGS-600 controller
+(FRG-702 gauges) with Keysight N5761A power supply control, safety monitoring,
+and ramp profile execution.
 """
 
 import tkinter as tk
@@ -18,6 +19,7 @@ import math
 # Import our modules
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
 from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
+from t8_daq_system.hardware.xgs600_controller import XGS600Controller
 from t8_daq_system.hardware.frg702_reader import FRG702Reader
 from t8_daq_system.hardware.keysight_connection import KeysightConnection
 from t8_daq_system.hardware.power_supply_controller import PowerSupplyController
@@ -80,9 +82,12 @@ class MainWindow:
         # Handle window close
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
-        # Initialize LabJack hardware
+        # Initialize LabJack hardware (thermocouples, turbo pump)
         self.connection = LabJackConnection()
         self.tc_reader = None
+
+        # Initialize XGS-600 controller (FRG-702 gauges)
+        self.xgs600 = None
         self.frg702_reader = None
 
         # Initialize Keysight power supply components
@@ -649,7 +654,8 @@ class MainWindow:
         self.data_buffer.clear()
 
         # Re-enable controls if connected
-        if self.connection and self.connection.is_connected():
+        lj_ok = self.connection and self.connection.is_connected()
+        if lj_ok or self._practice_mode:
             self.start_btn.config(state='normal')
             self.status_var.set("Connected")
         else:
@@ -707,6 +713,13 @@ class MainWindow:
         ttk.Label(lj_frame, text="LJ", font=lbl_font).pack()
         self.indicators['LabJack'] = tk.Canvas(lj_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
         self.indicators['LabJack'].pack()
+
+        # XGS-600 Indicator
+        xgs_frame = ttk.Frame(self.indicator_frame)
+        xgs_frame.pack(side=tk.LEFT, padx=5)
+        ttk.Label(xgs_frame, text="XGS", font=lbl_font).pack()
+        self.indicators['XGS600'] = tk.Canvas(xgs_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+        self.indicators['XGS600'].pack()
 
         # Power Supply Indicator
         ps_frame = ttk.Frame(self.indicator_frame)
@@ -1062,7 +1075,7 @@ class MainWindow:
                             print(f"Error setting voltage: {e}")
 
                 # Combine readings (FRG-702 stored in mbar internally)
-                all_readings = {**tc_readings, **pressure_readings, **frg702_readings, **ps_readings, **turbo_readings}
+                all_readings = {**tc_readings, **frg702_readings, **ps_readings, **turbo_readings}
 
                 # Store FRG-702 detail readings for GUI status update
                 self._latest_frg702_details = frg702_detail_readings
@@ -1129,6 +1142,18 @@ class MainWindow:
         color = '#00FF00' if lj_connected else '#333333'
         if 'LabJack' in self.indicators:
             self.indicators['LabJack'].config(bg=color)
+
+        # Auto-connect XGS-600
+        xgs_connected = self.xgs600 is not None and self.xgs600.is_connected()
+
+        if not xgs_connected and self.config.get('xgs600', {}).get('enabled', False):
+            if self._connect_xgs600():
+                xgs_connected = True
+
+        # Update XGS-600 indicator
+        color = '#00FF00' if xgs_connected else '#333333'
+        if 'XGS600' in self.indicators:
+            self.indicators['XGS600'].config(bg=color)
 
         # Auto-connect Power Supply
         ps_connected = self.ps_connection.is_connected()
@@ -1227,15 +1252,10 @@ class MainWindow:
         self.root.after(self.config['display']['update_rate_ms'], self._update_gui)
 
     def _initialize_hardware_readers(self):
-        """Helper to set up readers once connected."""
+        """Helper to set up LabJack-based readers once connected."""
         try:
             handle = self.connection.get_handle()
             self.tc_reader = ThermocoupleReader(handle, self.config['thermocouples'])
-
-            # Initialize FRG-702 reader if configured
-            frg702_config = self.config.get('frg702_gauges', [])
-            if frg702_config:
-                self.frg702_reader = FRG702Reader(handle, frg702_config)
 
             # Initialize turbo pump controller if configured
             turbo_config = self.config.get('turbo_pump', {})
@@ -1252,6 +1272,35 @@ class MainWindow:
             return True
         except Exception as e:
             print(f"Failed to initialize hardware readers: {e}")
+            return False
+
+    def _connect_xgs600(self):
+        """Connect to XGS-600 controller and initialize FRG-702 reader."""
+        xgs_config = self.config.get('xgs600', {})
+        if not xgs_config.get('enabled', False):
+            return False
+
+        try:
+            self.xgs600 = XGS600Controller(
+                port=xgs_config['port'],
+                baudrate=xgs_config.get('baudrate', 9600),
+                timeout=xgs_config.get('timeout', 1.0),
+                address=xgs_config.get('address', '00'),
+            )
+            if not self.xgs600.connect():
+                self.xgs600 = None
+                return False
+
+            # Initialize FRG-702 reader with XGS-600 controller
+            frg702_config = self.config.get('frg702_gauges', [])
+            if frg702_config:
+                self.frg702_reader = FRG702Reader(self.xgs600, frg702_config)
+
+            print("XGS-600 controller connected, FRG-702 reader initialized")
+            return True
+        except Exception as e:
+            print(f"Failed to connect XGS-600: {e}")
+            self.xgs600 = None
             return False
 
     def _initialize_power_supply(self):
@@ -1312,6 +1361,11 @@ class MainWindow:
         # Disconnect from power supply
         if self.ps_connection:
             self.ps_connection.disconnect()
+
+        # Disconnect from XGS-600
+        if self.xgs600:
+            self.xgs600.disconnect()
+            self.xgs600 = None
 
         # Disconnect from LabJack
         if self.connection:
