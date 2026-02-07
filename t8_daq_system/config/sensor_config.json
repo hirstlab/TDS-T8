@@ -2,8 +2,15 @@
     "thermocouples": [
         {"name": "TC_1", "channel": 0, "type": "C", "units": "C", "enabled": true}
     ],
+    "xgs600": {
+        "enabled": true,
+        "port": "/dev/ttyUSB0",
+        "baudrate": 9600,
+        "timeout": 1.0,
+        "address": "00"
+    },
     "frg702_gauges": [
-        {"name": "FRG702_Chamber", "channel": 4, "status_channel": null, "units": "mbar", "enabled": true}
+        {"name": "FRG702_Chamber", "sensor_code": "T1", "units": "mbar", "enabled": true}
     ],
     "turbo_pump": {
         "enabled": true,
