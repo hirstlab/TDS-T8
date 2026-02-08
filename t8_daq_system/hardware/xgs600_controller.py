@@ -34,9 +34,12 @@ class XGS600Controller:
         self.address = address
         self._serial = None
 
-    def connect(self):
+    def connect(self, silent=False):
         """
         Open serial port and verify connection to XGS-600.
+
+        Args:
+            silent: If True, suppress error messages on failure.
 
         Returns:
             True if connection successful, False otherwise
@@ -61,15 +64,18 @@ class XGS600Controller:
             # Verify connection by requesting software version
             response = self.send_command("05")
             if response is None:
-                print("XGS-600: No response to version query")
+                if not silent:
+                    print("XGS-600: No response to version query")
                 self.disconnect()
                 return False
 
-            print(f"XGS-600 connected on {self.port}, version: {response}")
+            if not silent:
+                print(f"XGS-600 connected on {self.port}, version: {response}")
             return True
 
         except serial.SerialException as e:
-            print(f"XGS-600 connection failed on {self.port}: {e}")
+            if not silent:
+                print(f"XGS-600 connection failed on {self.port}: {e}")
             if self._serial and self._serial.is_open:
                 self._serial.close()
             self._serial = None
@@ -143,6 +149,9 @@ class XGS600Controller:
         Returns:
             Pressure as float (in gauge units, typically mbar), or None on error
         """
+        if not self.is_connected():
+            return None
+
         response = self.send_command(f"02{sensor_code}")
         if response is None:
             return None
@@ -162,6 +171,9 @@ class XGS600Controller:
             List of pressure floats (None for unparseable values),
             ordered left to right by board slot. Returns None if command fails.
         """
+        if not self.is_connected():
+            return None
+
         response = self.send_command("0F")
         if response is None:
             return None

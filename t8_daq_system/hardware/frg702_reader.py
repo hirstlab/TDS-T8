@@ -13,6 +13,18 @@ UNIT_CONVERSIONS = {
     'Pa': 100.0,
 }
 
+# Status constants
+STATUS_VALID = 'valid'
+STATUS_UNDERRANGE = 'underrange'
+STATUS_OVERRANGE = 'overrange'
+STATUS_SENSOR_ERROR_NO_SUPPLY = 'sensor_error_no_supply'
+STATUS_SENSOR_ERROR_PIRANI_DEFECTIVE = 'sensor_error_pirani_defective'
+
+# Operating mode constants
+MODE_PIRANI_ONLY = 'Pirani'
+MODE_COMBINED = 'Combined'
+MODE_UNKNOWN = 'Unknown'
+
 
 class FRG702Reader:
     def __init__(self, xgs600_controller, frg702_config_list):
@@ -41,6 +53,44 @@ class FRG702Reader:
         factor = UNIT_CONVERSIONS.get(to_unit, 1.0)
         return mbar_value * factor
 
+    @staticmethod
+    def voltage_to_pressure_mbar(voltage):
+        """
+        DEPRECATED: Used for analog readings. Convert voltage to pressure in mbar.
+        Formula from Leybold FRG-702 manual: p = 10^(1.667*U - 11.33) [mbar]
+
+        Returns:
+            (pressure, status) - pressure is None if status is not valid
+        """
+        if voltage is None:
+            return None, STATUS_VALID  # Or some other default
+
+        if voltage < 0.5:
+            return None, STATUS_SENSOR_ERROR_NO_SUPPLY
+        if voltage < 1.82:
+            return None, STATUS_UNDERRANGE
+        if voltage > 9.5:
+            return None, STATUS_SENSOR_ERROR_PIRANI_DEFECTIVE
+        if voltage > 8.6:
+            return None, STATUS_OVERRANGE
+
+        # Valid range: 1.82V to 8.6V (5e-9 to 1000 mbar)
+        pressure = 10 ** (1.667 * voltage - 11.33)
+        return pressure, STATUS_VALID
+
+    @staticmethod
+    def read_operating_mode(status_voltage):
+        """
+        DEPRECATED: Used for analog readings. Determine mode from Pin 6 voltage.
+        < 5V: Pirani only
+        > 5V: Combined (Pirani + Cold Cathode)
+        """
+        if status_voltage is None:
+            return MODE_UNKNOWN
+        if status_voltage >= 5.0:
+            return MODE_COMBINED
+        return MODE_PIRANI_ONLY
+
     def read_all(self):
         """
         Read all enabled FRG-702 gauges via XGS-600.
@@ -50,6 +100,10 @@ class FRG702Reader:
             Values are pressure in mbar, or None for error states.
         """
         readings = {}
+
+        # Fail fast if controller not connected
+        if not self.controller.is_connected():
+            return {g['name']: None for g in self.gauges if g['enabled']}
 
         for gauge in self.gauges:
             if not gauge['enabled']:
@@ -75,6 +129,16 @@ class FRG702Reader:
         """
         readings = {}
 
+        # Fail fast if controller not connected
+        if not self.controller.is_connected():
+            return {
+                g['name']: {
+                    'pressure': None,
+                    'status': 'error',
+                    'mode': MODE_UNKNOWN
+                } for g in self.gauges if g['enabled']
+            }
+
         for gauge in self.gauges:
             if not gauge['enabled']:
                 continue
@@ -87,12 +151,14 @@ class FRG702Reader:
                 if pressure is not None:
                     readings[gauge['name']] = {
                         'pressure': pressure,
-                        'status': 'valid',
+                        'status': STATUS_VALID,
+                        'mode': MODE_UNKNOWN,
                     }
                 else:
                     readings[gauge['name']] = {
                         'pressure': None,
                         'status': 'error',
+                        'mode': MODE_UNKNOWN,
                     }
 
             except Exception as e:
@@ -100,6 +166,7 @@ class FRG702Reader:
                 readings[gauge['name']] = {
                     'pressure': None,
                     'status': 'error',
+                    'mode': MODE_UNKNOWN,
                 }
 
         return readings

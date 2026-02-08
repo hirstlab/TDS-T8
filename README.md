@@ -4,7 +4,7 @@ A Python-based data acquisition system for the LabJack T8, designed for real-tim
 
 ## Features
 
-- **Real-time Thermocouple Readings** - Support for Type B, E, J, K, N, R, S, T thermocouples
+- **Real-time Thermocouple Readings** - Support for Type B, E, J, K, N, R, S, T, and C thermocouples
 - **FRG-702 Vacuum Gauge Support** - Logarithmic voltage-to-pressure conversion for Inficon FRG-702
 - **Live Plotting** - Real-time matplotlib graphs with scrolling history
 - **CSV Data Logging** - Timestamped data export for analysis
@@ -15,12 +15,12 @@ A Python-based data acquisition system for the LabJack T8, designed for real-tim
 
 ## Hardware Requirements
 
-| Component | Description                               |
-|-----------|-------------------------------------------|
-| **LabJack T8** | USB or Ethernet connected DAQ device      |
-| **Thermocouples** | Type K, J, T, B, E, N, R, S, or C sensors |
-| **FRG-702 Gauge** | Inficon FRG-702 Pirani/Cold Cathode Gauge |
-| **USB Cable** | For T8 connection (or Ethernet)           |
+| Component | Description                                |
+|-----------|--------------------------------------------|
+| **LabJack T8** | USB or Ethernet connected DAQ device       |
+| **Thermocouples** | Type K, J, T, B, E, N, R, S, and C sensors |
+| **FRG-702 Gauge** | Inficon FRG-702 Pirani/Cold Cathode Gauge  |
+| **USB Cable** | For T8 connection (or Ethernet)            |
 
 ---
 

@@ -253,6 +253,12 @@ fabric.properties
 .DS_Store
 Thumbs.db
 
+/*
+.zencoder/docs/
+.zencoder/docs/*
+.zencoder/rules/
+.zencoder/rules/*
+
 # Project specific
 .zencoder/rules/repo.md
 

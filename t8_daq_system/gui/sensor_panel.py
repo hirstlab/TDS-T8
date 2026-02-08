@@ -246,9 +246,10 @@ class SensorPanel:
                 self.status_labels[name].config(text="ERROR", foreground='red')
 
             else:
-                indicator_color = '#FF0000'
-                self.displays[name].config(text="ERR", foreground='red')
-                self.status_labels[name].config(text="ERROR", foreground='red')
+                # This handles 'error' status from read_all_with_status when disconnected
+                indicator_color = 'gray'
+                self.displays[name].config(text="-.--e--", foreground='gray')
+                self.status_labels[name].config(text="DISCONNECTED", foreground='red')
 
             self._set_frg702_indicator(name, indicator_color)
 

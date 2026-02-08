@@ -303,7 +303,7 @@ class LoadCSVDialog(tk.Toplevel):
 class AxisScaleDialog(tk.Toplevel):
     """Dialog for configuring axis scale settings."""
 
-    def __init__(self, parent, current_temp_range, use_absolute=False):
+    def __init__(self, parent, current_temp_range, current_press_range=None, current_ps_range=None, use_absolute=False):
         super().__init__(parent)
         self.title("Configure Axis Scales")
         self.transient(parent)
@@ -312,10 +312,10 @@ class AxisScaleDialog(tk.Toplevel):
         self.result = None
 
         # Configure dialog size
-        self.geometry("350x180")
+        self.geometry("400x320")
         self.resizable(False, False)
 
-        self._build_ui(current_temp_range, use_absolute)
+        self._build_ui(current_temp_range, current_press_range, current_ps_range, use_absolute)
 
         # Center on parent
         self.update_idletasks()
@@ -327,7 +327,7 @@ class AxisScaleDialog(tk.Toplevel):
         self.bind('<Escape>', lambda e: self._on_cancel())
         self.bind('<Return>', lambda e: self._on_ok())
 
-    def _build_ui(self, temp_range, use_absolute):
+    def _build_ui(self, temp_range, press_range, ps_range, use_absolute):
         """Build the dialog UI."""
         main_frame = ttk.Frame(self, padding=10)
         main_frame.pack(fill=tk.BOTH, expand=True)
@@ -348,16 +348,44 @@ class AxisScaleDialog(tk.Toplevel):
         self.temp_min_entry.grid(row=0, column=1, padx=5)
 
         ttk.Label(temp_frame, text="Max:").grid(row=0, column=2, padx=5)
-        self.temp_max_var = tk.StringVar(value=str(temp_range[1] if temp_range else 300))
+        self.temp_max_var = tk.StringVar(value=str(temp_range[1] if temp_range else 2500))
         self.temp_max_entry = ttk.Entry(temp_frame, textvariable=self.temp_max_var, width=10)
         self.temp_max_entry.grid(row=0, column=3, padx=5)
+
+        # Pressure range (FRG-702)
+        press_frame = ttk.LabelFrame(main_frame, text="Pressure Range (mbar)", padding=5)
+        press_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(press_frame, text="Min:").grid(row=0, column=0, padx=5)
+        self.press_min_var = tk.StringVar(value=str(press_range[0] if press_range else 1e-9))
+        self.press_min_entry = ttk.Entry(press_frame, textvariable=self.press_min_var, width=10)
+        self.press_min_entry.grid(row=0, column=1, padx=5)
+
+        ttk.Label(press_frame, text="Max:").grid(row=0, column=2, padx=5)
+        self.press_max_var = tk.StringVar(value=str(press_range[1] if press_range else 1e-3))
+        self.press_max_entry = ttk.Entry(press_frame, textvariable=self.press_max_var, width=10)
+        self.press_max_entry.grid(row=0, column=3, padx=5)
+
+        # PS range
+        ps_frame = ttk.LabelFrame(main_frame, text="Power Supply Range (V/A)", padding=5)
+        ps_frame.pack(fill=tk.X, pady=5)
+
+        ttk.Label(ps_frame, text="Min:").grid(row=0, column=0, padx=5)
+        self.ps_min_var = tk.StringVar(value=str(ps_range[0] if ps_range else 0))
+        self.ps_min_entry = ttk.Entry(ps_frame, textvariable=self.ps_min_var, width=10)
+        self.ps_min_entry.grid(row=0, column=1, padx=5)
+
+        ttk.Label(ps_frame, text="Max:").grid(row=0, column=2, padx=5)
+        self.ps_max_var = tk.StringVar(value=str(ps_range[1] if ps_range else 60))
+        self.ps_max_entry = ttk.Entry(ps_frame, textvariable=self.ps_max_var, width=10)
+        self.ps_max_entry.grid(row=0, column=3, padx=5)
 
         # Update entry states
         self._on_toggle_absolute()
 
         # Buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=(20, 0))
+        button_frame.pack(fill=tk.X, pady=(10, 0))
 
         ttk.Button(button_frame, text="Cancel", command=self._on_cancel).pack(side=tk.RIGHT, padx=5)
         ttk.Button(button_frame, text="Apply", command=self._on_ok).pack(side=tk.RIGHT)
@@ -367,6 +395,10 @@ class AxisScaleDialog(tk.Toplevel):
         state = 'normal' if self.use_absolute_var.get() else 'disabled'
         self.temp_min_entry.config(state=state)
         self.temp_max_entry.config(state=state)
+        self.press_min_entry.config(state=state)
+        self.press_max_entry.config(state=state)
+        self.ps_min_entry.config(state=state)
+        self.ps_max_entry.config(state=state)
 
     def _on_ok(self):
         """Handle OK button click."""
@@ -375,9 +407,19 @@ class AxisScaleDialog(tk.Toplevel):
                 float(self.temp_min_var.get()),
                 float(self.temp_max_var.get())
             )
+            press_range = (
+                float(self.press_min_var.get()),
+                float(self.press_max_var.get())
+            )
+            ps_range = (
+                float(self.ps_min_var.get()),
+                float(self.ps_max_var.get())
+            )
             self.result = {
                 'use_absolute': self.use_absolute_var.get(),
-                'temp_range': temp_range
+                'temp_range': temp_range,
+                'press_range': press_range,
+                'ps_range': ps_range
             }
             self.destroy()
         except ValueError:

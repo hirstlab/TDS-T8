@@ -37,6 +37,112 @@ from t8_daq_system.gui.turbo_pump_panel import TurboPumpPanel
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog, AxisScaleDialog
 
 
+class MockPowerSupplyController:
+    """Simulated power supply for practice mode."""
+    def __init__(self, voltage_limit=20.0, current_limit=50.0):
+        self.voltage = 0.0
+        self.current = 0.0
+        self.output_state = False
+        self.voltage_limit = voltage_limit
+        self.current_limit = current_limit
+
+    def set_voltage(self, volts):
+        self.voltage = min(volts, self.voltage_limit)
+        return True
+
+    def set_current(self, amps):
+        self.current = min(amps, self.current_limit)
+        return True
+
+    def output_on(self):
+        self.output_state = True
+        return True
+
+    def output_off(self):
+        self.output_state = False
+        return True
+
+    def is_output_on(self):
+        return self.output_state
+
+    def get_voltage_setpoint(self):
+        return self.voltage
+
+    def get_current_setpoint(self):
+        return self.current
+
+    def get_voltage(self):
+        if not self.output_state: return 0.0
+        return self.voltage + random.uniform(-0.02, 0.02)
+
+    def get_current(self):
+        if not self.output_state: return 0.0
+        return self.current + random.uniform(-0.01, 0.01)
+
+    def get_readings(self):
+        return {'PS_Voltage': self.get_voltage(), 'PS_Current': self.get_current()}
+
+    def get_status(self):
+        return {
+            'output_on': self.output_state,
+            'voltage_setpoint': self.voltage,
+            'current_setpoint': self.current,
+            'voltage_actual': self.get_voltage(),
+            'current_actual': self.get_current(),
+            'errors': [],
+            'in_current_limit': False
+        }
+
+    def emergency_shutdown(self):
+        self.output_off()
+        self.voltage = 0
+        return True
+
+
+class MockTurboPumpController:
+    """Simulated turbo pump for practice mode."""
+    def __init__(self):
+        self.state = "OFF"
+        self._is_commanded_on = False
+        self._start_time = 0
+
+    def start(self):
+        self._is_commanded_on = True
+        self.state = "STARTING"
+        self._start_time = time.time()
+        return True, "Start command sent (Mock)"
+
+    def stop(self):
+        self._is_commanded_on = False
+        self.state = "OFF"
+        return True, "Stop command sent (Mock)"
+
+    def read_status(self):
+        if self._is_commanded_on:
+            if time.time() - self._start_time > 5.0:
+                self.state = "NORMAL"
+            else:
+                self.state = "STARTING"
+        else:
+            self.state = "OFF"
+        return self.state
+
+    def get_status_dict(self):
+        return {
+            'Turbo_Commanded': 'ON' if self._is_commanded_on else 'OFF',
+            'Turbo_Status': self.read_status()
+        }
+
+    def is_commanded_on(self):
+        return self._is_commanded_on
+
+    def emergency_stop(self):
+        self.stop()
+
+    def cleanup(self):
+        self.stop()
+
+
 class MainWindow:
     # Available sampling rates in milliseconds
     SAMPLE_RATES = [50, 100, 200, 500, 1000, 2000]
@@ -133,7 +239,9 @@ class MainWindow:
 
         # Axis scale settings
         self._use_absolute_scales = True  # Default to absolute scales
-        self._temp_range = (0, 2500)  # Default temp range
+        self._temp_range = (0, 2500)      # Default temp range
+        self._press_range = (1e-9, 1e-3)  # Default pressure range (log)
+        self._ps_range = (0, 60)          # Default PS range (V/A)
 
         # FRG-702 detail readings for GUI status
         self._latest_frg702_details = {}
@@ -214,6 +322,16 @@ class MainWindow:
         )
         self.sample_rate_combo.pack(side=tk.LEFT, padx=2)
         self.sample_rate_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sample_rate_change())
+
+        # Power Supply Resource Selection
+        ttk.Label(config_area, text="PS:").pack(side=tk.LEFT, padx=2)
+        self.ps_resource_var = tk.StringVar(value="None")
+        self.ps_resource_combo = ttk.Combobox(
+            config_area, textvariable=self.ps_resource_var,
+            values=["None"], width=15, state='readonly'
+        )
+        self.ps_resource_combo.pack(side=tk.LEFT, padx=2)
+        self.ps_resource_combo.bind("<<ComboboxSelected>>", lambda e: self._on_ps_resource_change())
 
         # Control buttons
         self.start_btn = ttk.Button(
@@ -395,16 +513,111 @@ class MainWindow:
             self.practice_btn.config(text="Practice Mode: ON")
             self.start_btn.config(state='normal')
             self.status_var.set("Practice Mode Active")
+
+            # Expand practice mode: add mock sensors if not already configured
+            if not self.config.get('frg702_gauges'):
+                self.config['frg702_gauges'] = [
+                    {"name": "FRG702_Mock", "sensor_code": "T1", "units": "mbar", "enabled": True}
+                ]
+
+            if 'turbo_pump' not in self.config:
+                self.config['turbo_pump'] = {
+                    "enabled": True,
+                    "start_stop_channel": "DIO0",
+                    "status_channel": "DIO1"
+                }
+            self.config['turbo_pump']['enabled'] = True
+
+            # Use mock controllers for UI interaction
+            self.ps_controller = MockPowerSupplyController()
+            self.ps_panel.set_controller(self.ps_controller)
+            self.safety_monitor.set_power_supply(self.ps_controller)
+            self.ramp_executor.set_power_supply(self.ps_controller)
+
+            self.turbo_controller = MockTurboPumpController()
+            self.turbo_panel.set_controller(self.turbo_controller)
+
+            self._update_ps_resources()
+            self.ps_resource_var.set("Mock Power Supply")
+            self._on_ps_resource_change()
         else:
             self.practice_btn.config(text="Practice Mode: OFF")
+            self._update_ps_resources()
+            self.ps_resource_var.set("None")
+            self._on_ps_resource_change()
+
             if not self.connection or not self.connection.is_connected():
                 self.start_btn.config(state='disabled')
                 self.status_var.set("Disconnected")
+
+                # Remove mock controllers
+                self.ps_controller = None
+                self.ps_panel.set_controller(None)
+                self.turbo_controller = None
+                self.turbo_panel.set_controller(None)
             else:
                 self.status_var.set("Connected")
-        
+                # Re-initialize real hardware
+                self._initialize_hardware_readers()
+                if self.ps_connection.is_connected():
+                    self._initialize_power_supply()
+
         self._rebuild_sensor_panel()
         self._update_plot_settings()
+
+    def _update_ps_resources(self):
+        """Refresh the list of available power supply resources."""
+        resources = list(self.ps_connection.list_available_resources())
+        
+        # Always allow "None"
+        values = ["None"]
+        
+        # Add "Mock Power Supply" if in practice mode or if user wants it available
+        if self._practice_mode:
+            values.append("Mock Power Supply")
+            
+        values.extend(resources)
+        self.ps_resource_combo.config(values=values)
+        
+        # Set current value if not set
+        current_res = self.config.get('power_supply', {}).get('visa_resource')
+        if current_res and current_res in values:
+            self.ps_resource_var.set(current_res)
+        elif self._practice_mode and not self.ps_resource_var.get() in values:
+            self.ps_resource_var.set("Mock Power Supply")
+        elif not self.ps_resource_var.get() in values:
+            self.ps_resource_var.set("None")
+
+    def _on_ps_resource_change(self):
+        """Handle power supply resource selection change."""
+        selected = self.ps_resource_var.get()
+        
+        # Update config
+        if selected == "None":
+            self.config['power_supply']['visa_resource'] = None
+            if not self._practice_mode:
+                self.ps_connection.disconnect()
+                self.ps_controller = None
+                self.ps_panel.set_controller(None)
+        elif selected == "Mock Power Supply":
+            self.config['power_supply']['visa_resource'] = "MOCK"
+            # Switch to mock controller regardless of practice mode button? 
+            # Better to just use it if selected.
+            self.ps_controller = MockPowerSupplyController()
+            self.ps_panel.set_controller(self.ps_controller)
+            self.safety_monitor.set_power_supply(self.ps_controller)
+            self.ramp_executor.set_power_supply(self.ps_controller)
+        else:
+            self.config['power_supply']['visa_resource'] = selected
+            if not self._practice_mode:
+                # Try to connect to real hardware
+                self.ps_connection.resource_string = selected
+                if self.ps_connection.connect():
+                    self._initialize_power_supply()
+                else:
+                    messagebox.showerror("Connection Error", f"Failed to connect to {selected}")
+                    self.ps_resource_var.set("None")
+                    self._on_ps_resource_change()
 
     def _on_sample_rate_change(self):
         """Handle change in sampling rate."""
@@ -426,10 +639,11 @@ class MainWindow:
         temp_symbols = {'C': '°C', 'F': '°F', 'K': 'K'}
         temp_unit_display = temp_symbols.get(t_unit, '°C')
         
-        # Update temperature range (base range is 0-300C)
-        t_min_display = convert_temperature(0, 'C', t_unit)
-        t_max_display = convert_temperature(300, 'C', t_unit)
-        self._temp_range = (t_min_display, t_max_display)
+        # Update temperature range only if it hasn't been set
+        if not hasattr(self, '_temp_range'):
+            t_min_display = convert_temperature(0, 'C', t_unit)
+            t_max_display = convert_temperature(300, 'C', t_unit)
+            self._temp_range = (t_min_display, t_max_display)
 
         # Update plot units
         press_unit = 'mbar'
@@ -442,30 +656,27 @@ class MainWindow:
 
         if hasattr(self, 'full_plot'):
             self.full_plot.set_units(temp_unit_display, press_unit)
-        if hasattr(self, 'recent_plot'):
-            self.recent_plot.set_units(temp_unit_display, press_unit)
-
-        # Update axis scales
-        if hasattr(self, 'full_plot'):
             self.full_plot.set_absolute_scales(
                 self._use_absolute_scales,
-                self._temp_range
+                self._temp_range,
+                self._press_range,
+                self._ps_range
             )
         if hasattr(self, 'recent_plot'):
+            self.recent_plot.set_units(temp_unit_display, press_unit)
             self.recent_plot.set_absolute_scales(
                 self._use_absolute_scales,
-                self._temp_range
+                self._temp_range,
+                self._press_range,
+                self._ps_range
             )
             
         # Calculate names to plot based on current config
         sensor_names = [tc['name'] for tc in self.config['thermocouples'] if tc.get('enabled', True)]
         sensor_names += [g['name'] for g in self.config.get('frg702_gauges', []) if g.get('enabled', True)]
         
-        # Power supply names to show (if enabled in config or present in loaded data)
-        ps_names = []
-        if self.config.get('power_supply', {}).get('enabled', True):
-            ps_names = ['PS_Voltage', 'PS_Current']
-
+        ps_names = ['PS_Voltage', 'PS_Current'] if self.config.get('power_supply', {}).get('enabled', True) else []
+        
         # Trigger redraw if viewing historical data or if running
         if self._viewing_historical and self._loaded_data:
             if hasattr(self, 'full_plot'):
@@ -475,7 +686,7 @@ class MainWindow:
                 )
             if hasattr(self, 'recent_plot'):
                 self.recent_plot.update_from_loaded_data(
-                    self._loaded_data, sensor_names, ps_names, 
+                    self._loaded_data, sensor_names, [], 
                     window_seconds=60, data_units=self._loaded_data_units
                 )
             
@@ -499,9 +710,9 @@ class MainWindow:
         else:
             # Not viewing historical and not running - force a redraw with empty data to update units/axes
             if hasattr(self, 'full_plot'):
-                self.full_plot.update(sensor_names, ps_names)
+                self.full_plot.update(sensor_names, [])
             if hasattr(self, 'recent_plot'):
-                self.recent_plot.update(sensor_names, ps_names, window_seconds=60)
+                self.recent_plot.update(sensor_names, [], window_seconds=60)
 
     def _toggle_dual_display(self):
         """Toggle between single window and dual window (for 2 displays)."""
@@ -537,6 +748,8 @@ class MainWindow:
         dialog = AxisScaleDialog(
             self.root,
             self._temp_range,
+            self._press_range,
+            self._ps_range,
             self._use_absolute_scales
         )
         self.root.wait_window(dialog)
@@ -544,6 +757,8 @@ class MainWindow:
         if dialog.result:
             self._use_absolute_scales = dialog.result['use_absolute']
             self._temp_range = dialog.result['temp_range']
+            self._press_range = dialog.result['press_range']
+            self._ps_range = dialog.result['ps_range']
             self._update_plot_settings()
 
     def _on_load_csv(self):
@@ -888,6 +1103,12 @@ class MainWindow:
 
     def _check_connections(self):
         """Do a one-time read to update connection indicators."""
+        if self._practice_mode:
+            # In practice mode, everything is "connected"
+            for name in self.indicators:
+                self.indicators[name].config(bg='#00FF00')
+            return
+
         if not self.tc_reader:
             return
 
@@ -1026,14 +1247,18 @@ class MainWindow:
                             }
 
                     ps_readings = {}
-                    if self.config.get('power_supply', {}).get('enabled', True):
+                    if self.ps_controller:
+                        ps_readings = self.ps_controller.get_readings()
+                    elif self.config.get('power_supply', {}).get('enabled', True):
                         ps_readings = {
                             'PS_Voltage': 12.0 + random.uniform(-0.1, 0.1),
                             'PS_Current': 2.0 + random.uniform(-0.05, 0.05)
                         }
 
                     turbo_readings = {}
-                    if self.config.get('turbo_pump', {}).get('enabled', False):
+                    if self.turbo_controller:
+                        turbo_readings = self.turbo_controller.get_status_dict()
+                    elif self.config.get('turbo_pump', {}).get('enabled', False):
                         turbo_readings = {
                             'Turbo_Commanded': 'OFF',
                             'Turbo_Status': 'OFF'
@@ -1065,8 +1290,8 @@ class MainWindow:
                         self.is_running = False
                         break
 
-                # If ramp is running and not in practice mode, update setpoint
-                if self.ps_controller and not self._practice_mode:
+                # If ramp is running, update setpoint
+                if self.ps_controller:
                     if self.ramp_executor.is_running():
                         new_setpoint = self.ramp_executor.get_current_setpoint()
                         try:
@@ -1116,10 +1341,11 @@ class MainWindow:
             self.root.after(self.config['display']['update_rate_ms'], self._update_gui)
             return
 
-        # Auto-connect LabJack
+        # Auto-connect hardware if not in practice mode
         lj_connected = self.connection.is_connected()
-
-        if not lj_connected:
+        if self._practice_mode:
+            lj_connected = True
+        elif not lj_connected:
             if self.connection.connect():
                 if self._initialize_hardware_readers():
                     lj_connected = True
@@ -1143,10 +1369,15 @@ class MainWindow:
         if 'LabJack' in self.indicators:
             self.indicators['LabJack'].config(bg=color)
 
-        # Auto-connect XGS-600
-        xgs_connected = self.xgs600 is not None and self.xgs600.is_connected()
+        # Refresh PS resources list occasionally or on connect
+        if not hasattr(self, '_last_ps_refresh') or time.time() - self._last_ps_refresh > 5.0:
+            self._update_ps_resources()
+            self._last_ps_refresh = time.time()
 
-        if not xgs_connected and self.config.get('xgs600', {}).get('enabled', False):
+        # Auto-connect XGS-600
+        xgs_connected = (self.xgs600 is not None and self.xgs600.is_connected()) or self._practice_mode
+
+        if not xgs_connected and not self._practice_mode and self.config.get('xgs600', {}).get('enabled', False):
             if self._connect_xgs600():
                 xgs_connected = True
 
@@ -1156,9 +1387,11 @@ class MainWindow:
             self.indicators['XGS600'].config(bg=color)
 
         # Auto-connect Power Supply
-        ps_connected = self.ps_connection.is_connected()
+        ps_connected = self.ps_connection.is_connected() or \
+                       (self._practice_mode and self.ps_controller is not None) or \
+                       (self.ps_resource_var.get() == "Mock Power Supply")
 
-        if not ps_connected and self.config.get('power_supply', {}).get('enabled', True):
+        if not ps_connected and not self._practice_mode and self.config.get('power_supply', {}).get('enabled', True):
             if self.ps_connection.connect():
                 ps_connected = True
                 self._initialize_power_supply()
@@ -1176,6 +1409,11 @@ class MainWindow:
 
         # Update power supply panel
         if ps_connected and self.ps_controller:
+            # If in practice mode, the panel update is handled by its own controls, 
+            # but we still want to show the readings.
+            if self._practice_mode:
+                self.ps_panel.set_connected(True)
+            
             ps_readings = self.ps_controller.get_readings()
             self.ps_panel.update(ps_readings)
         else:
@@ -1234,10 +1472,9 @@ class MainWindow:
                        if tc.get('enabled', True)]
         sensor_names += [g['name'] for g in self.config.get('frg702_gauges', [])
                         if g.get('enabled', True)]
-
-        # Add PS data to plot if available
+        
         ps_names = []
-        if self.ps_controller:
+        if self.config.get('power_supply', {}).get('enabled', True):
             ps_names = ['PS_Voltage', 'PS_Current']
 
         # Update full run plot (no window)
@@ -1270,8 +1507,8 @@ class MainWindow:
 
             self._check_connections()
             return True
-        except Exception as e:
-            print(f"Failed to initialize hardware readers: {e}")
+        except Exception:
+            # Silent fail for background connection attempts
             return False
 
     def _connect_xgs600(self):
@@ -1287,7 +1524,7 @@ class MainWindow:
                 timeout=xgs_config.get('timeout', 1.0),
                 address=xgs_config.get('address', '00'),
             )
-            if not self.xgs600.connect():
+            if not self.xgs600.connect(silent=True):
                 self.xgs600 = None
                 return False
 
@@ -1298,8 +1535,8 @@ class MainWindow:
 
             print("XGS-600 controller connected, FRG-702 reader initialized")
             return True
-        except Exception as e:
-            print(f"Failed to connect XGS-600: {e}")
+        except Exception:
+            # Silent fail for background connection attempts
             self.xgs600 = None
             return False
 
@@ -1327,8 +1564,8 @@ class MainWindow:
             print("Power supply initialized successfully")
             return True
 
-        except Exception as e:
-            print(f"Failed to initialize power supply: {e}")
+        except Exception:
+            # Silent fail for background connection attempts
             return False
 
     def _on_close(self):

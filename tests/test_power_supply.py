@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import MagicMock, patch, PropertyMock
 import sys
 
-# Mock labjack before importing the modules (needed because hardware/__init__.py imports them)
+# Mock labjack before importing the modules (needed because hardware imports them)
 mock_ljm = MagicMock()
 mock_labjack = MagicMock()
 mock_labjack.ljm = mock_ljm

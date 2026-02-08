@@ -21,6 +21,8 @@ from t8_daq_system.hardware.frg702_reader import FRG702Reader
 class LivePlot:
     # Default axis ranges (absolute scales)
     DEFAULT_TEMP_RANGE = (0, 300)  # Celsius
+    DEFAULT_PRESS_RANGE = (1e-9, 1e-3) # mbar
+    DEFAULT_PS_RANGE = (0, 60) # V or A
 
     def __init__(self, parent_frame, data_buffer):
         """
@@ -77,23 +79,29 @@ class LivePlot:
         self._showing_ps = False
 
         # Axis scale settings (for absolute scaling)
-        self._temp_range = None  # None = auto, tuple = (min, max)
+        self._temp_range = None
+        self._press_range = None
+        self._ps_range = None
         self._use_absolute_scales = False
 
         # Unit labels
         self._temp_unit = "°C"
         self._press_unit = "mbar"
 
-    def set_absolute_scales(self, enabled=True, temp_range=None):
+    def set_absolute_scales(self, enabled=True, temp_range=None, press_range=None, ps_range=None):
         """
         Enable or disable absolute (fixed) axis scales.
 
         Args:
             enabled: Whether to use absolute scales
-            temp_range: Tuple (min, max) for temperature axis, or None for default
+            temp_range: Tuple (min, max) for temperature axis
+            press_range: Tuple (min, max) for pressure axis
+            ps_range: Tuple (min, max) for power supply axis
         """
         self._use_absolute_scales = enabled
         self._temp_range = temp_range if temp_range else self.DEFAULT_TEMP_RANGE
+        self._press_range = press_range if press_range else self.DEFAULT_PRESS_RANGE
+        self._ps_range = ps_range if ps_range else self.DEFAULT_PS_RANGE
 
     def set_units(self, temp_unit="°C", press_unit="mbar"):
         """Set the unit labels for the axes."""
@@ -193,8 +201,8 @@ class LivePlot:
         """Core plotting logic used by both live and historical updates."""
         # Separate sensor types
         tc_names = [name for name in plot_data.keys() if name.startswith('TC_')]
-        ps_names = [name for name in plot_data.keys() if name.startswith('PS_')]
         frg702_names = [name for name in plot_data.keys() if name.startswith('FRG702_')]
+        ps_names = [name for name in plot_data.keys() if name.startswith('PS_')]
 
         # Create/remove FRG-702 subplot as needed
         self._ensure_frg702_subplot(len(frg702_names) > 0)
@@ -207,8 +215,7 @@ class LivePlot:
         has_ps = len(ps_names) > 0
 
         show_left_axis = has_tc
-        # Show right axis if we have PS data and no TC (PS takes right)
-        show_right_axis = has_ps and not has_tc
+        show_right_axis = has_ps
 
         # Configure Left Axis (Temperature)
         if show_left_axis:
@@ -231,12 +238,12 @@ class LivePlot:
             self.ax2.set_visible(True)
             self.ax2.yaxis.set_visible(True)
 
-            label_parts = ['Power Supply']
-
-            # Ensure PS title is on the right side
-            self.ax2.set_ylabel(' / '.join(label_parts), color='black', rotation=270, labelpad=20)
+            self.ax2.set_ylabel('PS Voltage (V) / Current (A)', color='black', rotation=270, labelpad=20)
             self.ax2.yaxis.set_label_position('right')
             self.ax2.tick_params(axis='y', labelcolor='black')
+            
+            if self._use_absolute_scales and self._ps_range:
+                self.ax2.set_ylim(self._ps_range)
         else:
             if self.ax2 is not None:
                 self.ax2.clear()
@@ -278,29 +285,25 @@ class LivePlot:
                 legend_handles.append(line)
                 legend_labels.append(name)
 
-        # Plot PS data
-        if ps_names:
-            ps_axis = self.ax2 if self.ax2 and self.ax2.get_visible() else self.ax
-            for name in ps_names:
-                values = plot_data.get(name, [])
-                times, vals = self._prepare_data(timestamps, values, window_seconds, now)
-                
-                if times:
-                    color = self.ps_colors.get(name, '#d62728')
-                    if name == 'PS_Voltage':
-                        label, linestyle = 'Voltage (V)', ':'
-                    elif name == 'PS_Current':
-                        label, linestyle = 'Current (A)', '-.'
-                    else:
-                        label, linestyle = name, '-'
-                        
-                    line, = ps_axis.plot(times, vals, label=label,
-                                        linewidth=2, color=color, linestyle=linestyle)
-                    legend_handles.append(line)
-                    legend_labels.append(label)
+        # Plot PS data on RIGHT axis
+        for i, name in enumerate(ps_names):
+            values = plot_data.get(name, [])
+            times, vals = self._prepare_data(timestamps, values, window_seconds, now)
+            
+            if times:
+                color = self.ps_colors.get(name, self.colors[color_idx % len(self.colors)])
+                color_idx += 1
+                line, = self.ax2.plot(times, vals, label=name, linewidth=2, color=color, linestyle='--')
+                legend_handles.append(line)
+                legend_labels.append(name)
 
         if legend_handles:
-            self.ax.legend(legend_handles, legend_labels, loc='upper left', fontsize=8)
+            # Sort legend to keep it somewhat organized
+            combined = list(zip(legend_handles, legend_labels))
+            # Sort: TC first, then PS
+            combined.sort(key=lambda x: (not x[1].startswith('TC_'), x[1]))
+            handles, labels = zip(*combined)
+            self.ax.legend(handles, labels, loc='upper left', fontsize=8)
 
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
         # Manual adjustment for x-axis labels to save space
@@ -315,6 +318,8 @@ class LivePlot:
             self.ax_frg702.set_xlabel('Time (HH:MM:SS)')
             self.ax_frg702.set_ylabel(f'Pressure ({self._press_unit})')
             self.ax_frg702.set_yscale('log')
+            if self._use_absolute_scales and self._press_range:
+                self.ax_frg702.set_ylim(self._press_range)
 
             frg702_color_idx = 0
             data_press_unit = data_units.get('press', 'mbar') if data_units else 'mbar'

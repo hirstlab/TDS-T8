@@ -8,8 +8,26 @@ import sys
 from datetime import datetime, timedelta
 
 # Mock tkinter since it's not available in test environment
-sys.modules['tkinter'] = MagicMock()
+mock_tk = MagicMock()
+mock_tk.__path__ = []
+sys.modules['tkinter'] = mock_tk
+sys.modules['tkinter.filedialog'] = MagicMock()
+sys.modules['tkinter.messagebox'] = MagicMock()
+sys.modules['tkinter.font'] = MagicMock()
+sys.modules['tkinter.commondialog'] = MagicMock()
+sys.modules['tkinter.simpledialog'] = MagicMock()
 sys.modules['tk'] = MagicMock()
+
+# Mock matplotlib backend to avoid Tcl errors in headless environment
+sys.modules['matplotlib'] = MagicMock()
+sys.modules['matplotlib.figure'] = MagicMock()
+sys.modules['matplotlib.backends'] = MagicMock()
+sys.modules['matplotlib.backends.backend_tkagg'] = MagicMock()
+sys.modules['matplotlib.dates'] = MagicMock()
+sys.modules['matplotlib.pyplot'] = MagicMock()
+
+# Import the module to be patched to ensure attributes are resolved for patch()
+import t8_daq_system.gui.live_plot
 
 
 class TestLivePlotAxesConfiguration(unittest.TestCase):
@@ -25,7 +43,9 @@ class TestLivePlotAxesConfiguration(unittest.TestCase):
 
         # Set up mock figure and axes
         self.mock_ax = MagicMock()
+        self.mock_ax.plot.return_value = [MagicMock()]
         self.mock_ax2 = MagicMock()
+        self.mock_ax2.plot.return_value = [MagicMock()]
         self.mock_fig = MagicMock()
         self.mock_fig.add_subplot.return_value = self.mock_ax
         mock_figure.return_value = self.mock_fig
@@ -49,10 +69,12 @@ class TestLivePlotAxesConfiguration(unittest.TestCase):
 
     def test_set_absolute_scales_enabled(self):
         """Test enabling absolute scales."""
-        self.plot.set_absolute_scales(True, (0, 500))
+        self.plot.set_absolute_scales(True, (0, 500), (1e-8, 1e-4), (0, 100))
 
         self.assertTrue(self.plot._use_absolute_scales)
         self.assertEqual(self.plot._temp_range, (0, 500))
+        self.assertEqual(self.plot._press_range, (1e-8, 1e-4))
+        self.assertEqual(self.plot._ps_range, (0, 100))
 
     def test_set_absolute_scales_with_defaults(self):
         """Test setting absolute scales with default ranges."""
@@ -60,6 +82,8 @@ class TestLivePlotAxesConfiguration(unittest.TestCase):
 
         self.assertTrue(self.plot._use_absolute_scales)
         self.assertEqual(self.plot._temp_range, self.plot.DEFAULT_TEMP_RANGE)
+        self.assertEqual(self.plot._press_range, self.plot.DEFAULT_PRESS_RANGE)
+        self.assertEqual(self.plot._ps_range, self.plot.DEFAULT_PS_RANGE)
 
     def test_set_absolute_scales_disabled(self):
         """Test disabling absolute scales."""
@@ -81,6 +105,7 @@ class TestLivePlotDynamicAxes(unittest.TestCase):
         self.mock_data_buffer.get_sensor_data.return_value = ([], [])
 
         self.mock_ax = MagicMock()
+        self.mock_ax.plot.return_value = [MagicMock()]
         self.mock_fig = MagicMock()
         self.mock_fig.add_subplot.return_value = self.mock_ax
 
@@ -116,6 +141,7 @@ class TestLivePlotColorCycles(unittest.TestCase):
         mock_buffer = MagicMock()
 
         mock_ax = MagicMock()
+        mock_ax.plot.return_value = [MagicMock()]
         mock_fig = MagicMock()
         mock_fig.add_subplot.return_value = mock_ax
         mock_figure.return_value = mock_fig
@@ -139,6 +165,7 @@ class TestLivePlotColorCycles(unittest.TestCase):
         mock_buffer = MagicMock()
 
         mock_ax = MagicMock()
+        mock_ax.plot.return_value = [MagicMock()]
         mock_fig = MagicMock()
         mock_fig.add_subplot.return_value = mock_ax
         mock_figure.return_value = mock_fig
@@ -165,6 +192,7 @@ class TestLivePlotUpdateFromLoadedData(unittest.TestCase):
         mock_buffer = MagicMock()
 
         mock_ax = MagicMock()
+        mock_ax.plot.return_value = [MagicMock()]
         mock_fig = MagicMock()
         mock_fig.add_subplot.return_value = mock_ax
         mock_figure.return_value = mock_fig
@@ -195,6 +223,7 @@ class TestLivePlotUpdateFromLoadedData(unittest.TestCase):
         mock_buffer = MagicMock()
 
         mock_ax = MagicMock()
+        mock_ax.plot.return_value = [MagicMock()]
         mock_fig = MagicMock()
         mock_fig.add_subplot.return_value = mock_ax
         mock_figure.return_value = mock_fig

@@ -4,7 +4,7 @@
     ],
     "xgs600": {
         "enabled": true,
-        "port": "/dev/ttyUSB0",
+        "port": "COM3",
         "baudrate": 9600,
         "timeout": 1.0,
         "address": "00"
