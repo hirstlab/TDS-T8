@@ -108,20 +108,20 @@ class RampPanel:
         self.profile_var = tk.StringVar(value="(No profile loaded)")
         self.profile_combo = ttk.Combobox(
             profile_frame, textvariable=self.profile_var,
-            state='readonly', width=25
+            state='readonly', width=17
         )
-        self.profile_combo.pack(side=tk.LEFT, padx=5)
+        self.profile_combo.pack(side=tk.LEFT, padx=2)
         self.profile_combo.bind("<<ComboboxSelected>>", self._on_profile_selected)
 
         self.load_btn = ttk.Button(
             profile_frame, text="Load...", command=self._on_load_profile, width=8
         )
-        self.load_btn.pack(side=tk.LEFT, padx=2)
+        self.load_btn.pack(side=tk.LEFT, padx=1)
 
         self.refresh_btn = ttk.Button(
             profile_frame, text="Refresh", command=self._load_available_profiles, width=8
         )
-        self.refresh_btn.pack(side=tk.LEFT, padx=2)
+        self.refresh_btn.pack(side=tk.LEFT, padx=1)
 
         # Profile info display
         info_frame = ttk.LabelFrame(main_frame, text="Profile Info")
