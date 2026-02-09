@@ -3,7 +3,7 @@ turbo_pump_panel.py
 PURPOSE: GUI panel with ON/OFF buttons and status display for the turbo pump.
 
 Includes vacuum pressure interlock: turbo pump cannot start unless FRG
-pressure is below the required threshold (1E-3 to 8E-3 Torr).
+pressure is below the required threshold (5E-3 Torr).
 """
 
 import tkinter as tk
@@ -31,7 +31,7 @@ class TurboPumpPanel(ttk.LabelFrame):
     }
 
     # Pressure threshold for turbo pump interlock (in Torr)
-    PRESSURE_THRESHOLD_TORR = 8e-3  # 8E-3 Torr max allowed
+    PRESSURE_THRESHOLD_TORR = 5e-3  # 5E-3 Torr max allowed
 
     def __init__(self, parent, **kwargs):
         super().__init__(parent, text="Turbo Pump", **kwargs)

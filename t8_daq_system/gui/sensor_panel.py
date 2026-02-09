@@ -29,7 +29,7 @@ class SensorPanel:
         self.precisions = {}      # sensor_name: decimal places to show
 
         # FRG-702 specific widgets
-        self.frg702_unit_vars = {}     # sensor_name: StringVar for unit dropdown
+        self.global_pressure_unit = "mbar"
         self.frg702_mode_labels = {}   # sensor_name: Label for operating mode
         self.frg702_status_indicators = {}  # sensor_name: Canvas for status color
 
@@ -107,21 +107,12 @@ class SensorPanel:
                     text="-.--e--",
                     font=('Courier', 14, 'bold')
                 )
-                value_label.pack(padx=5, pady=1)
+                value_label.pack(padx=5, pady=5)
 
-                # Unit selector row
-                unit_frame = ttk.Frame(frame)
-                unit_frame.pack(pady=(0, 1))
-
-                unit_var = tk.StringVar(value=default_unit)
-                self.frg702_unit_vars[name] = unit_var
-
-                unit_combo = ttk.Combobox(
-                    unit_frame, textvariable=unit_var,
-                    values=["mbar", "Torr", "Pa"], width=5,
-                    state='readonly'
-                )
-                unit_combo.pack(side=tk.LEFT, padx=2)
+                # Unit display label (fixed)
+                self.unit_labels = {} if not hasattr(self, 'unit_labels') else self.unit_labels
+                self.unit_labels[name] = ttk.Label(frame, text=default_unit)
+                self.unit_labels[name].pack(pady=(0, 1))
 
                 # Operating mode label
                 mode_label = ttk.Label(
@@ -156,7 +147,7 @@ class SensorPanel:
         """
         for name, value in readings.items():
             if name in self.displays:
-                if name in self.frg702_unit_vars:
+                if name in self.frg702_mode_labels:
                     # FRG-702 display: use scientific notation
                     self._update_frg702_display(name, value)
                 elif value is None:
@@ -176,7 +167,7 @@ class SensorPanel:
             return
 
         # Convert to selected display unit
-        display_unit = self.frg702_unit_vars[name].get()
+        display_unit = self.global_pressure_unit
         display_value = FRG702Reader.convert_pressure(value, display_unit)
 
         # Show in scientific notation
@@ -217,7 +208,7 @@ class SensorPanel:
                     indicator_color = '#00FF00'  # Green default for valid
 
                 # Convert and display value
-                display_unit = self.frg702_unit_vars.get(name, tk.StringVar(value='mbar')).get()
+                display_unit = self.global_pressure_unit
                 display_value = FRG702Reader.convert_pressure(pressure, display_unit)
                 self.displays[name].config(
                     text=f"{display_value:.2e}",
@@ -253,6 +244,13 @@ class SensorPanel:
 
             self._set_frg702_indicator(name, indicator_color)
 
+    def update_global_pressure_unit(self, new_unit):
+        """Update the global pressure unit and labels."""
+        self.global_pressure_unit = new_unit
+        if hasattr(self, 'unit_labels'):
+            for label in self.unit_labels.values():
+                label.config(text=new_unit)
+
     def _set_frg702_indicator(self, name, color):
         """Set the color of an FRG-702 status indicator circle."""
         if name in self.frg702_status_indicators:
@@ -278,7 +276,7 @@ class SensorPanel:
     def clear_all(self):
         """Reset all displays to default state."""
         for name in self.displays:
-            if name in self.frg702_unit_vars:
+            if name in self.frg702_mode_labels:
                 self.displays[name].config(text="-.--e--", foreground='black')
             else:
                 placeholder = "--.--" if self.precisions.get(name) == 2 else "--.-"

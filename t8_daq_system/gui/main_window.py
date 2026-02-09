@@ -8,7 +8,7 @@ and ramp profile execution.
 
 Safety interlocks:
 - Power supply ramp locked unless turbo pump is running (NORMAL)
-- Turbo pump locked unless FRG pressure is below 8E-3 Torr
+- Turbo pump locked unless FRG pressure is below 5E-3 Torr
 - 2200C temperature override triggers controlled ramp-down
 - Restart lockout until temperature drops below 2150C
 """
@@ -318,6 +318,19 @@ class MainWindow:
         self.t_unit_combo.pack(side=tk.LEFT, padx=2)
         self.t_unit_combo.bind("<<ComboboxSelected>>", lambda e: self._on_config_change())
 
+        # Pressure Units Selection
+        ttk.Label(config_area, text="P-Unit:").pack(side=tk.LEFT, padx=2)
+        p_unit = "mbar"
+        if self.config.get('frg702_gauges'):
+            p_unit = self.config['frg702_gauges'][0].get('units', 'mbar')
+        self.p_unit_var = tk.StringVar(value=p_unit)
+        self.p_unit_combo = ttk.Combobox(
+            config_area, textvariable=self.p_unit_var,
+            values=["mbar", "Torr", "Pa"], width=5
+        )
+        self.p_unit_combo.pack(side=tk.LEFT, padx=2)
+        self.p_unit_combo.bind("<<ComboboxSelected>>", lambda e: self._on_pressure_unit_change())
+
         # Sampling rate dropdown
         ttk.Label(config_area, text="Rate:").pack(side=tk.LEFT, padx=2)
         current_rate = self.config['logging']['interval_ms']
@@ -411,7 +424,7 @@ class MainWindow:
 
         # Create main content area with PanedWindow
         main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=2)
 
         # Left side - Monitoring
         left_frame = ttk.Frame(main_paned)
@@ -419,12 +432,12 @@ class MainWindow:
 
         # Current readings panel
         self.panel_container = ttk.LabelFrame(left_frame, text="Current Readings")
-        self.panel_container.pack(fill=tk.X, padx=5, pady=5)
+        self.panel_container.pack(fill=tk.X, padx=5, pady=2)
         self._rebuild_sensor_panel()
 
         # Live plots container
         self.plot_container_main = ttk.Frame(left_frame)
-        self.plot_container_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.plot_container_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
         self._build_plots(self.plot_container_main)
 
         # Right side - Power Supply Control (unified ramp interface)
@@ -433,14 +446,14 @@ class MainWindow:
 
         # Power Supply Status Panel (read-only display with interlock)
         ps_frame = ttk.LabelFrame(right_frame, text="Power Supply Status")
-        ps_frame.pack(fill=tk.X, padx=5, pady=5)
+        ps_frame.pack(fill=tk.X, padx=5, pady=2)
 
         self.ps_panel = PowerSupplyPanel(ps_frame, self.ps_controller)
         self.ps_panel.on_output_change(self._on_ps_output_change)
 
         # Ramp Profile Panel (ONLY power control interface)
         ramp_frame = ttk.LabelFrame(right_frame, text="Power Supply Ramp Control")
-        ramp_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        ramp_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
 
         self.ramp_panel = RampPanel(
             ramp_frame,
@@ -452,22 +465,22 @@ class MainWindow:
 
         # Turbo Pump Panel
         self.turbo_panel = TurboPumpPanel(right_frame)
-        self.turbo_panel.pack(fill=tk.X, padx=5, pady=5)
+        self.turbo_panel.pack(fill=tk.X, padx=5, pady=2)
 
         # Safety Status Bar at bottom
         safety_frame = ttk.Frame(self.root)
-        safety_frame.pack(fill=tk.X, padx=10, pady=5)
+        safety_frame.pack(fill=tk.X, padx=10, pady=(2, 10))
 
-        ttk.Label(safety_frame, text="Safety:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(safety_frame, text="Safety:", font=('Arial', 8, 'bold')).pack(side=tk.LEFT)
 
         self.safety_indicator = tk.Canvas(
-            safety_frame, width=16, height=16,
+            safety_frame, width=12, height=12,
             bg='#00FF00', highlightthickness=1, highlightbackground='black'
         )
         self.safety_indicator.pack(side=tk.LEFT, padx=5)
 
         self.safety_status_label = ttk.Label(
-            safety_frame, text="OK", font=('Arial', 9)
+            safety_frame, text="OK", font=('Arial', 8)
         )
         self.safety_status_label.pack(side=tk.LEFT)
 
@@ -622,6 +635,20 @@ class MainWindow:
                     self.ps_resource_var.set("None")
                     self._on_ps_resource_change()
 
+    def _on_pressure_unit_change(self):
+        """Handle pressure unit selection change."""
+        new_unit = self.p_unit_var.get()
+        # Update config for persistence
+        if self.config.get('frg702_gauges'):
+            for gauge in self.config['frg702_gauges']:
+                gauge['units'] = new_unit
+        
+        # Update sensor panel if it exists
+        if hasattr(self, 'sensor_panel'):
+            self.sensor_panel.update_global_pressure_unit(new_unit)
+            
+        self._update_plot_settings()
+
     def _on_sample_rate_change(self):
         rate_str = self.sample_rate_var.get()
         rate_ms = int(rate_str.replace('ms', ''))
@@ -645,14 +672,7 @@ class MainWindow:
             t_max_display = convert_temperature(300, 'C', t_unit)
             self._temp_range = (t_min_display, t_max_display)
 
-        press_unit = 'mbar'
-        if hasattr(self, 'sensor_panel') and getattr(self.sensor_panel, 'frg702_unit_vars', None):
-            keys = list(self.sensor_panel.frg702_unit_vars.keys())
-            if keys:
-                first_gauge = keys[0]
-                press_unit = self.sensor_panel.frg702_unit_vars[first_gauge].get()
-        elif self.config.get('frg702_gauges'):
-            press_unit = self.config['frg702_gauges'][0].get('units', 'mbar')
+        press_unit = self.p_unit_var.get()
 
         if hasattr(self, 'full_plot'):
             self.full_plot.set_units(temp_unit_display, press_unit)
@@ -876,29 +896,30 @@ class MainWindow:
         self.indicators = {}
 
         lbl_font = ('Arial', 7, 'bold')
+        canvas_size = 14
 
         lj_frame = ttk.Frame(self.indicator_frame)
         lj_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(lj_frame, text="LJ", font=lbl_font).pack()
-        self.indicators['LabJack'] = tk.Canvas(lj_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+        self.indicators['LabJack'] = tk.Canvas(lj_frame, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
         self.indicators['LabJack'].pack()
 
         xgs_frame = ttk.Frame(self.indicator_frame)
         xgs_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(xgs_frame, text="XGS", font=lbl_font).pack()
-        self.indicators['XGS600'] = tk.Canvas(xgs_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+        self.indicators['XGS600'] = tk.Canvas(xgs_frame, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
         self.indicators['XGS600'].pack()
 
         ps_frame = ttk.Frame(self.indicator_frame)
         ps_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(ps_frame, text="PS", font=lbl_font).pack()
-        self.indicators['PowerSupply'] = tk.Canvas(ps_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+        self.indicators['PowerSupply'] = tk.Canvas(ps_frame, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
         self.indicators['PowerSupply'].pack()
 
         turbo_frame = ttk.Frame(self.indicator_frame)
         turbo_frame.pack(side=tk.LEFT, padx=5)
         ttk.Label(turbo_frame, text="Turbo", font=lbl_font).pack()
-        self.indicators['Turbo'] = tk.Canvas(turbo_frame, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+        self.indicators['Turbo'] = tk.Canvas(turbo_frame, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
         self.indicators['Turbo'].pack()
 
         for i, tc in enumerate(self.config['thermocouples']):
@@ -906,7 +927,7 @@ class MainWindow:
             f = ttk.Frame(self.indicator_frame)
             f.pack(side=tk.LEFT, padx=2)
             ttk.Label(f, text=f"TC{i+1}", font=lbl_font).pack()
-            self.indicators[name] = tk.Canvas(f, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+            self.indicators[name] = tk.Canvas(f, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
             self.indicators[name].pack()
 
         for i, gauge in enumerate(self.config.get('frg702_gauges', [])):
@@ -914,7 +935,7 @@ class MainWindow:
             f = ttk.Frame(self.indicator_frame)
             f.pack(side=tk.LEFT, padx=2)
             ttk.Label(f, text=f"FRG{i+1}", font=lbl_font).pack()
-            self.indicators[name] = tk.Canvas(f, width=20, height=20, bg='#333333', highlightthickness=1, highlightbackground="black")
+            self.indicators[name] = tk.Canvas(f, width=canvas_size, height=canvas_size, bg='#333333', highlightthickness=1, highlightbackground="black")
             self.indicators[name].pack()
 
     def _rebuild_sensor_panel(self):
@@ -924,9 +945,6 @@ class MainWindow:
         all_sensors = self.config['thermocouples']
         frg702_configs = self.config.get('frg702_gauges', [])
         self.sensor_panel = SensorPanel(self.panel_container, all_sensors, frg702_configs)
-
-        for var in self.sensor_panel.frg702_unit_vars.values():
-            var.trace_add("write", lambda *args: self._update_plot_settings())
 
         self._build_indicators()
 

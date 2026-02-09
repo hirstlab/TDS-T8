@@ -220,14 +220,14 @@ class RampPanel:
                 plot_frame,
                 text="(matplotlib not available - install for real-time V/I plot)",
                 font=('Arial', 8, 'italic'), foreground='gray'
-            ).pack(padx=10, pady=10)
+            ).pack(padx=20, pady=10)
             self._has_plot = False
             return
 
         self._has_plot = True
 
         self._fig = Figure(figsize=(4, 2), dpi=80)
-        self._fig.subplots_adjust(left=0.12, right=0.88, top=0.92, bottom=0.18)
+        self._fig.subplots_adjust(left=0.15, right=0.85, top=0.92, bottom=0.18)
 
         self._ax_v = self._fig.add_subplot(111)
         self._ax_v.set_xlabel('Time (s)', fontsize=7)

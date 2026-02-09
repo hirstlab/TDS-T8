@@ -10,7 +10,7 @@
         "address": "00"
     },
     "frg702_gauges": [
-        {"name": "FRG702_Chamber", "sensor_code": "T1", "units": "mbar", "enabled": true}
+        {"name": "FRG702_Chamber", "sensor_code": "T1", "units": "Torr", "enabled": true}
     ],
     "turbo_pump": {
         "enabled": true,
