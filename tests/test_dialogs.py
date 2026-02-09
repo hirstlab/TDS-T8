@@ -155,7 +155,7 @@ class TestSamplingRateLogic(unittest.TestCase):
     def test_available_rates(self):
         """Test that available sampling rates are reasonable."""
         # These are the rates defined in MainWindow
-        SAMPLE_RATES = [50, 100, 200, 500, 1000, 2000]
+        SAMPLE_RATES = [100, 200, 500, 1000, 2000]
 
         for rate in SAMPLE_RATES:
             self.assertGreater(rate, 0)
@@ -163,7 +163,7 @@ class TestSamplingRateLogic(unittest.TestCase):
 
     def test_rate_string_parsing(self):
         """Test parsing rate string to integer."""
-        rate_strings = ["50ms", "100ms", "200ms", "500ms", "1000ms", "2000ms"]
+        rate_strings = ["100ms", "200ms", "500ms", "1000ms", "2000ms"]
 
         for rate_str in rate_strings:
             rate_ms = int(rate_str.replace('ms', ''))

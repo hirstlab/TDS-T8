@@ -64,7 +64,7 @@ class RampExecutor:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
         # Callbacks
         self._on_setpoint_change: Optional[Callable[[float], None]] = None

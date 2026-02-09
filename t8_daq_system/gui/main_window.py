@@ -146,7 +146,7 @@ class MockTurboPumpController:
 
 class MainWindow:
     # Available sampling rates in milliseconds
-    SAMPLE_RATES = [50, 100, 200, 500, 1000, 2000]
+    SAMPLE_RATES = [100, 200, 500, 1000, 2000]
 
     def __init__(self, config_path=None):
         """
@@ -668,10 +668,11 @@ class MainWindow:
 
         # Update plot units
         press_unit = 'mbar'
-        if hasattr(self, 'sensor_panel') and self.sensor_panel.frg702_unit_vars:
-            # Use the unit from the first FRG gauge in the panel
-            first_gauge = list(self.sensor_panel.frg702_unit_vars.keys())[0]
-            press_unit = self.sensor_panel.frg702_unit_vars[first_gauge].get()
+        if hasattr(self, 'sensor_panel') and getattr(self.sensor_panel, 'frg702_unit_vars', None):
+            keys = list(self.sensor_panel.frg702_unit_vars.keys())
+            if keys:
+                first_gauge = keys[0]
+                press_unit = self.sensor_panel.frg702_unit_vars[first_gauge].get()
         elif self.config.get('frg702_gauges'):
             press_unit = self.config['frg702_gauges'][0].get('units', 'mbar')
 
