@@ -11,23 +11,12 @@ Tests cover:
 """
 
 import sys
-from unittest.mock import MagicMock
-
-# Mock the labjack library before any imports that depend on it
-mock_ljm = MagicMock()
-mock_ljm.LJMError = Exception
-mock_labjack = MagicMock()
-mock_labjack.ljm = mock_ljm
-sys.modules['labjack'] = mock_labjack
-sys.modules['labjack.ljm'] = mock_ljm
-
-# Mock pyvisa before importing the modules that use it
-mock_pyvisa = MagicMock()
-mock_pyvisa.Error = Exception
-sys.modules['pyvisa'] = mock_pyvisa
-
 import pytest
 import time
+from unittest.mock import MagicMock
+
+# Get the mock ljm that conftest.py already placed in sys.modules
+mock_ljm = sys.modules['labjack'].ljm
 
 from t8_daq_system.hardware.turbo_pump_controller import TurboPumpController
 
@@ -44,7 +33,8 @@ def reset_ljm_mock():
     mock_ljm.eWriteName.return_value = None
     mock_ljm.eReadName.side_effect = None
     mock_ljm.eReadName.return_value = 1.0  # Default: HIGH = not normal
-    mock_ljm.LJMError = Exception
+    # Ensure LJMError is a real exception class for `except ljm.LJMError`
+    mock_ljm.LJMError = type("LJMError", (Exception,), {})
     yield mock_ljm
 
 
@@ -122,7 +112,7 @@ class TestTurboPumpStart:
     def test_start_fails_on_ljm_error(self, turbo_config):
         """Start should return failure on LabJack error."""
         ctrl = TurboPumpController(handle=12345, config=turbo_config)
-        mock_ljm.eWriteName.side_effect = Exception("LJM fail")
+        mock_ljm.eWriteName.side_effect = mock_ljm.LJMError("LJM fail")
         success, msg = ctrl.start()
         assert success is False
         assert "error" in msg.lower() or "LJM" in msg
@@ -219,7 +209,7 @@ class TestTurboPumpStatus:
     def test_status_unknown_on_error(self, controller):
         """Status should be UNKNOWN on LabJack read error."""
         controller.start()
-        mock_ljm.eReadName.side_effect = Exception("read error")
+        mock_ljm.eReadName.side_effect = mock_ljm.LJMError("read error")
         status = controller.read_status()
         assert status == controller.STATE_UNKNOWN
 
@@ -270,7 +260,7 @@ class TestEmergencyStop:
     def test_emergency_stop_survives_ljm_error(self, controller):
         """Emergency stop should not raise even if LabJack fails."""
         controller.start()
-        mock_ljm.eWriteName.side_effect = Exception("hardware gone")
+        mock_ljm.eWriteName.side_effect = mock_ljm.LJMError("hardware gone")
         # Should not raise
         controller.emergency_stop()
         assert controller.is_commanded_on() is False

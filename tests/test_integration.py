@@ -5,28 +5,7 @@ import json
 import os
 import tempfile
 
-# Mock everything that requires a display or hardware
-mock_ljm = MagicMock()
-mock_labjack = MagicMock()
-mock_labjack.ljm = mock_ljm
-sys.modules['labjack'] = mock_labjack
-sys.modules['labjack.ljm'] = mock_ljm
-
-# Mock tkinter and matplotlib
-sys.modules['tkinter'] = MagicMock()
-sys.modules['tkinter.ttk'] = MagicMock()
-sys.modules['tkinter.messagebox'] = MagicMock()
-
-# Create a robust mock for matplotlib that identifies as a package
-mock_matplotlib = MagicMock()
-mock_matplotlib.__path__ = []
-sys.modules['matplotlib'] = mock_matplotlib
-sys.modules['matplotlib.pyplot'] = MagicMock()
-sys.modules['matplotlib.backends'] = MagicMock()
-sys.modules['matplotlib.backends.backend_tkagg'] = MagicMock()
-sys.modules['matplotlib.figure'] = MagicMock()
-sys.modules['matplotlib.dates'] = MagicMock()
-
+# conftest.py handles mocking of labjack, pyvisa, serial, tkinter, matplotlib
 from t8_daq_system.gui.main_window import MainWindow
 
 class TestIntegration(unittest.TestCase):
@@ -49,9 +28,12 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
-    def test_main_window_init(self, mock_panel, mock_plot, mock_tk):
-        # This tests that MainWindow can at least be instantiated without crashing
-        # when GUI and hardware are mocked.
+    @patch('t8_daq_system.gui.main_window.RampPanel')
+    @patch('t8_daq_system.gui.main_window.TurboPumpPanel')
+    @patch('t8_daq_system.gui.main_window.PowerSupplyPanel')
+    def test_main_window_init(self, mock_ps_panel, mock_turbo_panel, mock_ramp_panel,
+                               mock_panel, mock_plot, mock_tk):
+        """Test that MainWindow can be instantiated with all GUI components mocked."""
         app = MainWindow(config_path=self.temp_config.name)
         self.assertEqual(app.config['device']['type'], "T8")
         self.assertFalse(app.is_running)
