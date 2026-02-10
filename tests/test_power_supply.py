@@ -2,17 +2,8 @@ import unittest
 from unittest.mock import MagicMock, patch, PropertyMock
 import sys
 
-# Mock labjack before importing the modules (needed because hardware imports them)
-mock_ljm = MagicMock()
-mock_labjack = MagicMock()
-mock_labjack.ljm = mock_ljm
-sys.modules['labjack'] = mock_labjack
-sys.modules['labjack.ljm'] = mock_ljm
-
-# Mock pyvisa before importing the modules that use it
-mock_pyvisa = MagicMock()
-mock_pyvisa.Error = Exception  # Mock the Error class
-sys.modules['pyvisa'] = mock_pyvisa
+# Use the mocks that conftest.py already placed in sys.modules
+mock_pyvisa = sys.modules['pyvisa']
 
 from t8_daq_system.hardware.keysight_connection import KeysightConnection
 from t8_daq_system.hardware.power_supply_controller import PowerSupplyController

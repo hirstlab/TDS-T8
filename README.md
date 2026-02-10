@@ -268,28 +268,146 @@ Add to the `frg702_gauges` array in `sensor_config.json`:
 
 ---
 
+## Running Unit Tests
+
+The project has a comprehensive test suite (248 tests) that runs **without any hardware connected** and **without a display**. All hardware dependencies (LabJack LJM, PyVISA, PySerial, tkinter, matplotlib) are automatically mocked by `tests/conftest.py`.
+
+### Quick Start
+
+```bash
+# From the project root (TDS-T8/):
+pip install pytest
+python -m pytest
+```
+
+That's it. Pytest will discover and run all tests in the `tests/` directory.
+
+### Useful Commands
+
+```bash
+# Run all tests with verbose output
+python -m pytest -v
+
+# Run a specific test file
+python -m pytest tests/test_safety_monitor.py
+
+# Run a specific test class or method
+python -m pytest tests/test_ramp_profile.py::TestRampStep::test_ramp_step_creation
+
+# Run tests matching a keyword
+python -m pytest -k "safety"
+
+# Show print output from tests
+python -m pytest -s
+
+# Stop on first failure
+python -m pytest -x
+```
+
+### Test Structure
+
+| Test File | What It Tests |
+|-----------|---------------|
+| `test_data_buffer.py` | Circular data buffer operations |
+| `test_data_logger.py` | CSV file logging |
+| `test_data_logger_extended.py` | Extended CSV logging (metadata, multi-sensor) |
+| `test_dialogs.py` | GUI dialog logic (filename sanitization, file discovery) |
+| `test_frg702_reader.py` | FRG-702 vacuum gauge voltage-to-pressure conversion |
+| `test_hardware.py` | LabJack connection and thermocouple batch reads |
+| `test_helpers.py` | Utility functions (temperature conversion, formatting) |
+| `test_integration.py` | MainWindow instantiation with all components mocked |
+| `test_live_plot.py` | Real-time plot axes, colors, and data loading |
+| `test_power_supply.py` | Keysight N5761A connection and SCPI commands |
+| `test_ramp_executor.py` | Ramp profile execution engine |
+| `test_ramp_profile.py` | Ramp step/profile definitions and validation |
+| `test_safety_monitor.py` | Temperature limits, emergency shutdown, interlocks |
+| `test_turbo_pump_controller.py` | Turbo pump DIO start/stop/status via LabJack |
+| `test_turbo_pump_panel.py` | Turbo pump GUI panel button handlers |
+
+### How Mocking Works
+
+The test suite can run on any machine (no hardware, no display) because `tests/conftest.py` automatically mocks:
+
+- **`labjack.ljm`** -- LabJack hardware driver calls (`eWriteName`, `eReadName`, etc.)
+- **`pyvisa`** -- VISA instrument communication (Keysight power supply)
+- **`serial`** -- RS-232 communication (XGS-600 controller)
+- **`tkinter`** -- GUI framework (no display needed)
+- **`matplotlib`** -- Plotting library (no rendering needed)
+
+Individual test files then configure the mock return values for their specific scenarios. For example, `test_turbo_pump_controller.py` sets `mock_ljm.eReadName.return_value = 0.0` to simulate a "pump at normal speed" DIO reading.
+
+---
+
+## Sensor Naming Convention
+
+Sensors in this system follow a prefix convention:
+
+| Prefix | Meaning | Example |
+|--------|---------|---------|
+| **TC** | Thermocouple (temperature) | `TC_1`, `TC2_Inlet` |
+| **FRG702** | FRG-702 vacuum pressure gauge | `FRG702_Chamber` |
+| **PS_** | Power Supply reading | `PS_Voltage`, `PS_Current` |
+| **Turbo_** | Turbo pump status | `Turbo_Commanded`, `Turbo_Status` |
+
+The **PS_** prefix (sometimes referred to as "P$" informally) denotes **Power Supply** readings. In the live plot and data logger, `PS_Voltage` and `PS_Current` track the Keysight N5761A power supply's measured output. They appear on a dedicated right-hand Y-axis in the plot with distinct colors (red for voltage, orange for current).
+
+The **P-Unit** dropdown in the GUI config bar refers to **Pressure Units** (Torr, mbar, Pa) for the FRG-702 gauge -- it is unrelated to the PS_ power supply readings.
+
+---
+
 ## Project Structure
 
 ```
 TDS-T8/
 ├── README.md                      # Main documentation
-├── repo.md                        # AI/Developer reference
+├── pytest.ini                     # Pytest configuration
+├── requirements.txt               # Python dependencies
+├── tests/                         # Unit tests (248 tests)
+│   ├── conftest.py                # Shared mocks (labjack, pyvisa, tkinter, etc.)
+│   ├── test_data_buffer.py
+│   ├── test_data_logger.py
+│   ├── test_data_logger_extended.py
+│   ├── test_dialogs.py
+│   ├── test_frg702_reader.py
+│   ├── test_hardware.py
+│   ├── test_helpers.py
+│   ├── test_integration.py
+│   ├── test_live_plot.py
+│   ├── test_power_supply.py
+│   ├── test_ramp_executor.py
+│   ├── test_ramp_profile.py
+│   ├── test_safety_monitor.py
+│   ├── test_turbo_pump_controller.py
+│   └── test_turbo_pump_panel.py
 └── t8_daq_system/
     ├── main.py                    # Application entry point
-    ├── requirements.txt           # Python dependencies
     ├── config/
     │   └── sensor_config.json     # Sensor definitions
     ├── hardware/                  # Device communication
     │   ├── labjack_connection.py  # Connection manager
     │   ├── thermocouple_reader.py # TC reading logic
-    │   └── frg702_reader.py       # FRG-702 vacuum gauge logic
+    │   ├── xgs600_controller.py   # XGS-600 vacuum controller
+    │   ├── frg702_reader.py       # FRG-702 vacuum gauge logic
+    │   ├── keysight_connection.py # Keysight power supply connection
+    │   ├── power_supply_controller.py # Power supply SCPI control
+    │   └── turbo_pump_controller.py   # Turbo pump DIO control
     ├── data/                      # Data handling
     │   ├── data_buffer.py         # In-memory circular buffer
     │   └── data_logger.py         # CSV file logging
+    ├── control/                   # Control logic
+    │   ├── ramp_profile.py        # Ramp step/profile definitions
+    │   ├── ramp_executor.py       # Ramp profile execution
+    │   └── safety_monitor.py      # Safety limits & emergency shutdown
     ├── gui/                       # User interface
     │   ├── main_window.py         # Main window & orchestration
     │   ├── live_plot.py           # Real-time matplotlib graphs
-    │   └── sensor_panel.py        # Numeric sensor displays
+    │   ├── sensor_panel.py        # Numeric sensor displays
+    │   ├── power_supply_panel.py  # Power supply status display
+    │   ├── ramp_panel.py          # Ramp execution panel
+    │   ├── turbo_pump_panel.py    # Turbo pump controls
+    │   └── dialogs.py             # Modal dialogs
+    ├── core/
+    │   └── data_acquisition.py    # Main acquisition loop
     ├── utils/
     │   └── helpers.py             # Utility functions
     └── logs/                      # CSV output files

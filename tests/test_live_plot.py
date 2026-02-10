@@ -7,26 +7,7 @@ from unittest.mock import MagicMock, patch, Mock
 import sys
 from datetime import datetime, timedelta
 
-# Mock tkinter since it's not available in test environment
-mock_tk = MagicMock()
-mock_tk.__path__ = []
-sys.modules['tkinter'] = mock_tk
-sys.modules['tkinter.filedialog'] = MagicMock()
-sys.modules['tkinter.messagebox'] = MagicMock()
-sys.modules['tkinter.font'] = MagicMock()
-sys.modules['tkinter.commondialog'] = MagicMock()
-sys.modules['tkinter.simpledialog'] = MagicMock()
-sys.modules['tk'] = MagicMock()
-
-# Mock matplotlib backend to avoid Tcl errors in headless environment
-sys.modules['matplotlib'] = MagicMock()
-sys.modules['matplotlib.figure'] = MagicMock()
-sys.modules['matplotlib.backends'] = MagicMock()
-sys.modules['matplotlib.backends.backend_tkagg'] = MagicMock()
-sys.modules['matplotlib.dates'] = MagicMock()
-sys.modules['matplotlib.pyplot'] = MagicMock()
-
-# Import the module to be patched to ensure attributes are resolved for patch()
+# conftest.py handles mocking of tkinter, matplotlib, and hardware libs
 import t8_daq_system.gui.live_plot
 
 
