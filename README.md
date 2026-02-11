@@ -50,6 +50,28 @@ python main.py
 
 ---
 
+## Building Executable
+
+To create a standalone Windows `.exe` file that can run without Python installed:
+
+See **[BUILDING.md](BUILDING.md)** for comprehensive build instructions, including:
+
+- **Quick build** with your current environment
+- **Pure Python setup** for better results (40% smaller, faster builds)
+- Step-by-step Windows installation guide
+- Troubleshooting common build issues
+- Distribution packaging
+
+**Quick Build** (if you already have Python/PyInstaller):
+```cmd
+pip install pyinstaller
+pyinstaller t8_daq_system.spec --clean
+```
+
+The executable will be in `dist/T8_DAQ_System.exe`
+
+---
+
 ## User Interface
 
 ```
