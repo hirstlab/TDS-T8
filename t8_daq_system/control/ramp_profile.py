@@ -17,20 +17,27 @@ class StepType(Enum):
     HOLD = "hold"
 
 
+class ControlMode(Enum):
+    """Control modes for the power supply."""
+    VOLTAGE = "voltage"
+    CURRENT = "current"
+
+
 @dataclass
 class RampStep:
     """
     A single step in a ramp profile.
 
     Attributes:
-        step_type: Either 'ramp' (change voltage) or 'hold' (maintain voltage)
+        step_type: Either 'ramp' (change value) or 'hold' (maintain value)
         duration_sec: How long this step takes in seconds
-        target_voltage: For ramp steps, the voltage to reach by end of step
-                       For hold steps, this is ignored (uses previous voltage)
+        target_voltage: For ramp steps in voltage mode, the voltage to reach
+        target_current: For ramp steps in current mode, the current to reach
     """
     step_type: str
     duration_sec: float
     target_voltage: Optional[float] = None
+    target_current: Optional[float] = None
 
     def __post_init__(self):
         """Validate step after initialization."""
@@ -39,10 +46,16 @@ class RampStep:
                            f"Must be 'ramp' or 'hold'")
         if self.duration_sec <= 0:
             raise ValueError(f"Duration must be positive: {self.duration_sec}")
-        if self.step_type == StepType.RAMP.value and self.target_voltage is None:
-            raise ValueError("Ramp steps must have a target_voltage")
+        
+        # Validation for ramp steps - requires either voltage or current target
+        if self.step_type == StepType.RAMP.value:
+            if self.target_voltage is None and self.target_current is None:
+                raise ValueError("Ramp steps must have either a target_voltage or target_current")
+        
         if self.target_voltage is not None and self.target_voltage < 0:
             raise ValueError(f"Target voltage cannot be negative: {self.target_voltage}")
+        if self.target_current is not None and self.target_current < 0:
+            raise ValueError(f"Target current cannot be negative: {self.target_current}")
 
     def to_dict(self) -> dict:
         """Convert step to dictionary for JSON serialization."""
@@ -52,6 +65,8 @@ class RampStep:
         }
         if self.target_voltage is not None:
             result["target_voltage"] = self.target_voltage
+        if self.target_current is not None:
+            result["target_current"] = self.target_current
         return result
 
     @classmethod
@@ -60,7 +75,8 @@ class RampStep:
         return cls(
             step_type=data.get("type", "hold"),
             duration_sec=data.get("duration_sec", 0),
-            target_voltage=data.get("target_voltage")
+            target_voltage=data.get("target_voltage"),
+            target_current=data.get("target_current")
         )
 
 
@@ -85,7 +101,10 @@ class RampProfile:
     def __init__(self, name: str = "Untitled Profile",
                  description: str = "",
                  start_voltage: float = 0.0,
-                 current_limit: float = 50.0):
+                 start_current: float = 0.0,
+                 current_limit: float = 50.0,
+                 voltage_limit: float = 100.0,
+                 control_mode: str = "voltage"):
         """
         Initialize an empty ramp profile.
 
@@ -93,12 +112,18 @@ class RampProfile:
             name: Human-readable name for the profile
             description: Optional description of the profile purpose
             start_voltage: Initial voltage before first step (default 0V)
+            start_current: Initial current before first step (default 0A)
             current_limit: Current limit to apply during profile (Amps)
+            voltage_limit: Voltage limit to apply during profile (Volts)
+            control_mode: Either 'voltage' or 'current'
         """
         self.name = name
         self.description = description
         self.start_voltage = start_voltage
+        self.start_current = start_current
         self.current_limit = current_limit
+        self.voltage_limit = voltage_limit
+        self.control_mode = control_mode
         self.steps: List[RampStep] = []
         self._filepath: Optional[str] = None
 
@@ -111,26 +136,48 @@ class RampProfile:
         """
         self.steps.append(step)
 
-    def add_ramp(self, target_voltage: float, duration_sec: float) -> None:
+    def add_ramp(self, target_value: float = None, duration_sec: float = 0.0, 
+                 target_voltage: float = None, target_current: float = None) -> None:
         """
         Convenience method to add a ramp step.
 
         Args:
-            target_voltage: Voltage to reach by end of ramp
+            target_value: Value (voltage or current) to reach by end of ramp
             duration_sec: Duration of the ramp in seconds
+            target_voltage: Explicit target voltage (alternative to target_value)
+            target_current: Explicit target current (alternative to target_value)
         """
-        self.steps.append(RampStep(
-            step_type=StepType.RAMP.value,
-            duration_sec=duration_sec,
-            target_voltage=target_voltage
-        ))
+        # Resolve target value from explicit arguments if target_value is None
+        if target_value is None:
+            if target_voltage is not None:
+                target_value = target_voltage
+            elif target_current is not None:
+                target_value = target_current
+            else:
+                # Fallback to maintaining current behavior if called with positional args incorrectly
+                # but here target_value is the first arg, so it should be provided.
+                raise ValueError("add_ramp requires a target value")
+
+        if self.control_mode == ControlMode.CURRENT.value:
+            step = RampStep(
+                step_type=StepType.RAMP.value,
+                duration_sec=duration_sec,
+                target_current=target_value
+            )
+        else:
+            step = RampStep(
+                step_type=StepType.RAMP.value,
+                duration_sec=duration_sec,
+                target_voltage=target_value
+            )
+        self.steps.append(step)
 
     def add_hold(self, duration_sec: float) -> None:
         """
         Convenience method to add a hold step.
 
         Args:
-            duration_sec: Duration to hold at current voltage
+            duration_sec: Duration to hold at current value
         """
         self.steps.append(RampStep(
             step_type=StepType.HOLD.value,
@@ -185,27 +232,29 @@ class RampProfile:
 
     def get_setpoint_at_time(self, elapsed_sec: float) -> float:
         """
-        Calculate the voltage setpoint at a given elapsed time.
+        Calculate the setpoint (voltage or current) at a given elapsed time.
 
-        For ramp steps, linearly interpolates between start and target voltage.
-        For hold steps, maintains the voltage from the previous step.
+        For ramp steps, linearly interpolates between start and target value.
+        For hold steps, maintains the value from the previous step.
 
         Args:
             elapsed_sec: Elapsed time since profile start in seconds
 
         Returns:
-            Voltage setpoint in Volts
+            Setpoint in Volts or Amps depending on control_mode
         """
+        is_current_mode = self.control_mode == ControlMode.CURRENT.value
+        start_val = self.start_current if is_current_mode else self.start_voltage
+
         if elapsed_sec <= 0:
-            return self.start_voltage
+            return start_val
 
         if not self.steps:
-            return self.start_voltage
+            return start_val
 
-        # Find current voltage at the START of each step
-        # by tracking what voltage we reach at each step
+        # Find current value at the START of each step
         cumulative_time = 0.0
-        current_voltage = self.start_voltage
+        current_val = start_val
 
         for step in self.steps:
             step_start_time = cumulative_time
@@ -217,28 +266,33 @@ class RampProfile:
                 progress = time_into_step / step.duration_sec if step.duration_sec > 0 else 1.0
 
                 if step.step_type == StepType.RAMP.value:
-                    # Linear interpolation from current_voltage to target
-                    return current_voltage + (step.target_voltage - current_voltage) * progress
+                    # Linear interpolation from current_val to target
+                    target = step.target_current if is_current_mode else step.target_voltage
+                    if target is None:
+                        # Fallback if specific target is missing but ramp is requested
+                        return current_val
+                    return current_val + (target - current_val) * progress
                 else:
-                    # Hold step - maintain current voltage
-                    return current_voltage
+                    # Hold step - maintain current value
+                    return current_val
 
-            # Move to next step - update current_voltage to what it is at step end
+            # Move to next step - update current_val to what it is at step end
             if step.step_type == StepType.RAMP.value:
-                current_voltage = step.target_voltage
-            # Hold steps don't change voltage
+                target = step.target_current if is_current_mode else step.target_voltage
+                if target is not None:
+                    current_val = target
 
             cumulative_time = step_end_time
 
-        # Past end of profile - return final voltage
-        return current_voltage
+        # Past end of profile - return final value
+        return current_val
 
     def get_final_voltage(self) -> float:
         """
-        Get the voltage at the end of the profile.
+        Get the setpoint value at the end of the profile.
 
         Returns:
-            Final voltage in Volts
+            Final value in Volts or Amps
         """
         return self.get_setpoint_at_time(self.get_total_duration())
 
@@ -254,11 +308,22 @@ class RampProfile:
         if not self.steps:
             errors.append("Profile has no steps")
 
+        if self.control_mode not in [ControlMode.VOLTAGE.value, ControlMode.CURRENT.value]:
+            errors.append(f"Invalid control mode: {self.control_mode}")
+
         if self.start_voltage < 0:
             errors.append(f"Start voltage cannot be negative: {self.start_voltage}")
+        
+        if self.start_current < 0:
+            errors.append(f"Start current cannot be negative: {self.start_current}")
 
         if self.current_limit <= 0:
             errors.append(f"Current limit must be positive: {self.current_limit}")
+        
+        if self.voltage_limit <= 0:
+            errors.append(f"Voltage limit must be positive: {self.voltage_limit}")
+
+        is_current_mode = self.control_mode == ControlMode.CURRENT.value
 
         for i, step in enumerate(self.steps):
             try:
@@ -267,11 +332,18 @@ class RampProfile:
                     errors.append(f"Step {i+1}: Invalid step type '{step.step_type}'")
                 if step.duration_sec <= 0:
                     errors.append(f"Step {i+1}: Duration must be positive")
+                
                 if step.step_type == StepType.RAMP.value:
-                    if step.target_voltage is None:
-                        errors.append(f"Step {i+1}: Ramp step missing target_voltage")
-                    elif step.target_voltage < 0:
-                        errors.append(f"Step {i+1}: Target voltage cannot be negative")
+                    if is_current_mode:
+                        if step.target_current is None:
+                            errors.append(f"Step {i+1}: Ramp step in current mode missing target_current")
+                        elif step.target_current < 0:
+                            errors.append(f"Step {i+1}: Target current cannot be negative")
+                    else:
+                        if step.target_voltage is None:
+                            errors.append(f"Step {i+1}: Ramp step in voltage mode missing target_voltage")
+                        elif step.target_voltage < 0:
+                            errors.append(f"Step {i+1}: Target voltage cannot be negative")
             except Exception as e:
                 errors.append(f"Step {i+1}: {str(e)}")
 
@@ -287,8 +359,11 @@ class RampProfile:
         return {
             "name": self.name,
             "description": self.description,
+            "control_mode": self.control_mode,
             "start_voltage": self.start_voltage,
+            "start_current": self.start_current,
             "current_limit": self.current_limit,
+            "voltage_limit": self.voltage_limit,
             "steps": [step.to_dict() for step in self.steps]
         }
 
@@ -306,8 +381,11 @@ class RampProfile:
         profile = cls(
             name=data.get("name", "Untitled Profile"),
             description=data.get("description", ""),
+            control_mode=data.get("control_mode", "voltage"),
             start_voltage=data.get("start_voltage", 0.0),
-            current_limit=data.get("current_limit", 50.0)
+            start_current=data.get("start_current", 0.0),
+            current_limit=data.get("current_limit", 50.0),
+            voltage_limit=data.get("voltage_limit", 100.0)
         )
         for step_data in data.get("steps", []):
             profile.add_step(RampStep.from_dict(step_data))

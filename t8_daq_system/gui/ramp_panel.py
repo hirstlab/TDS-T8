@@ -41,6 +41,8 @@ class RampPanel:
 
     # Max data points to keep in the embedded plot history
     PLOT_MAX_POINTS = 600
+    VOLTAGE_LIMIT = 60.0
+    CURRENT_LIMIT = 100.0
 
     def __init__(self, parent_frame, ramp_executor: RampExecutor = None,
                  profiles_folder: str = None):
@@ -80,14 +82,14 @@ class RampPanel:
     def _build_gui(self):
         """Create all GUI elements."""
         main_frame = ttk.Frame(self.parent)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=2, pady=2)
 
         # Safety interlock indicator at the top
         interlock_frame = ttk.Frame(main_frame)
-        interlock_frame.pack(fill=tk.X, pady=(0, 5))
+        interlock_frame.pack(fill=tk.X, pady=(0, 2))
 
         self.ramp_interlock_indicator = tk.Canvas(
-            interlock_frame, width=16, height=16,
+            interlock_frame, width=12, height=12,
             bg='#FF0000', highlightthickness=1, highlightbackground='black'
         )
         self.ramp_interlock_indicator.pack(side=tk.LEFT, padx=5)
@@ -101,9 +103,9 @@ class RampPanel:
 
         # Profile selection
         profile_frame = ttk.Frame(main_frame)
-        profile_frame.pack(fill=tk.X, pady=(0, 5))
+        profile_frame.pack(fill=tk.X, pady=(0, 2))
 
-        ttk.Label(profile_frame, text="Profile:", font=('Arial', 9, 'bold')).pack(side=tk.LEFT)
+        ttk.Label(profile_frame, text="Profile:", font=('Arial', 8, 'bold')).pack(side=tk.LEFT)
 
         self.profile_var = tk.StringVar(value="(No profile loaded)")
         self.profile_combo = ttk.Combobox(
@@ -125,26 +127,26 @@ class RampPanel:
 
         # Profile info display
         info_frame = ttk.LabelFrame(main_frame, text="Profile Info")
-        info_frame.pack(fill=tk.X, pady=5)
+        info_frame.pack(fill=tk.X, pady=1)
 
         self.profile_info = ttk.Label(
             info_frame, text="No profile loaded",
             font=('Arial', 8), wraplength=350
         )
-        self.profile_info.pack(fill=tk.X, padx=10, pady=5)
+        self.profile_info.pack(fill=tk.X, padx=5, pady=2)
 
         # Progress section
         progress_frame = ttk.LabelFrame(main_frame, text="Execution Progress")
-        progress_frame.pack(fill=tk.X, pady=5)
+        progress_frame.pack(fill=tk.X, pady=1)
 
         status_row = ttk.Frame(progress_frame)
-        status_row.pack(fill=tk.X, padx=10, pady=(5, 0))
+        status_row.pack(fill=tk.X, padx=5, pady=(2, 0))
 
-        ttk.Label(status_row, text="Status:").pack(side=tk.LEFT)
+        ttk.Label(status_row, text="Status:", font=('Arial', 8)).pack(side=tk.LEFT)
         self.state_label = ttk.Label(
             status_row, text="IDLE", font=('Arial', 8, 'bold')
         )
-        self.state_label.pack(side=tk.LEFT, padx=5)
+        self.state_label.pack(side=tk.LEFT, padx=2)
 
         self.step_label = ttk.Label(status_row, text="Step: --/--", font=('Arial', 8))
         self.step_label.pack(side=tk.RIGHT)
@@ -152,12 +154,12 @@ class RampPanel:
         self.progress_var = tk.DoubleVar(value=0)
         self.progress_bar = ttk.Progressbar(
             progress_frame, variable=self.progress_var,
-            maximum=100, mode='determinate', length=300
+            maximum=100, mode='determinate'
         )
-        self.progress_bar.pack(fill=tk.X, padx=10, pady=5)
+        self.progress_bar.pack(fill=tk.X, padx=5, pady=2)
 
         time_row = ttk.Frame(progress_frame)
-        time_row.pack(fill=tk.X, padx=10, pady=(0, 5))
+        time_row.pack(fill=tk.X, padx=5, pady=(0, 2))
 
         self.elapsed_label = ttk.Label(time_row, text="Elapsed: 00:00", font=('Arial', 8))
         self.elapsed_label.pack(side=tk.LEFT)
@@ -165,7 +167,7 @@ class RampPanel:
         self.setpoint_label = ttk.Label(
             time_row, text="Setpoint: 0.00 V", font=('Arial', 8, 'bold')
         )
-        self.setpoint_label.pack(side=tk.LEFT, padx=20)
+        self.setpoint_label.pack(side=tk.LEFT, padx=10)
 
         self.remaining_label = ttk.Label(time_row, text="Remaining: 00:00", font=('Arial', 8))
         self.remaining_label.pack(side=tk.RIGHT)
@@ -175,28 +177,39 @@ class RampPanel:
 
         # Control buttons
         button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
+        button_frame.pack(fill=tk.X, pady=(2, 1))
 
         self.start_btn = tk.Button(
             button_frame, text="Start Ramp", command=self._on_start,
-            bg='#4CAF50', fg='white', font=('Arial', 9, 'bold'),
-            width=12, height=1
+            bg='#4CAF50', fg='white', font=('Arial', 8, 'bold'),
+            width=10, height=1
         )
-        self.start_btn.pack(side=tk.LEFT, expand=True, padx=5)
+        self.start_btn.pack(side=tk.LEFT, expand=True, padx=2)
 
         self.pause_btn = tk.Button(
             button_frame, text="Pause", command=self._on_pause,
-            bg='#FF9800', fg='white', font=('Arial', 9, 'bold'),
-            width=12, height=1, state='disabled'
+            bg='#FF9800', fg='white', font=('Arial', 8, 'bold'),
+            width=10, height=1, state='disabled'
         )
-        self.pause_btn.pack(side=tk.LEFT, expand=True, padx=5)
+        self.pause_btn.pack(side=tk.LEFT, expand=True, padx=2)
 
         self.stop_btn = tk.Button(
             button_frame, text="Stop Ramp", command=self._on_stop,
-            bg='#f44336', fg='white', font=('Arial', 9, 'bold'),
-            width=12, height=1, state='disabled'
+            bg='#f44336', fg='white', font=('Arial', 8, 'bold'),
+            width=10, height=1, state='disabled'
         )
-        self.stop_btn.pack(side=tk.LEFT, expand=True, padx=5)
+        self.stop_btn.pack(side=tk.LEFT, expand=True, padx=2)
+
+        # Emergency Stop Button (separate row below)
+        emergency_frame = ttk.Frame(main_frame)
+        emergency_frame.pack(fill=tk.X, pady=(0, 2))
+
+        self.emergency_stop_btn = tk.Button(
+            emergency_frame, text="EMERGENCY STOP", command=self._on_emergency_stop,
+            bg='#D32F2F', fg='white', font=('Arial', 9, 'bold'),
+            width=25, height=1
+        )
+        self.emergency_stop_btn.pack(side=tk.TOP, expand=True, padx=2)
 
         # Initially disable start button until profile is loaded
         self.start_btn.config(state='disabled')
@@ -213,7 +226,7 @@ class RampPanel:
     def _build_embedded_plot(self, parent):
         """Build the embedded real-time voltage/current plot."""
         plot_frame = ttk.LabelFrame(parent, text="Voltage / Current Monitor")
-        plot_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        plot_frame.pack(fill=tk.X, pady=1)
 
         if not HAS_MATPLOTLIB:
             ttk.Label(
@@ -226,7 +239,7 @@ class RampPanel:
 
         self._has_plot = True
 
-        self._fig = Figure(figsize=(4, 2), dpi=80)
+        self._fig = Figure(figsize=(4, 2.5), dpi=80)
         self._fig.subplots_adjust(left=0.15, right=0.85, top=0.92, bottom=0.18)
 
         self._ax_v = self._fig.add_subplot(111)
@@ -283,10 +296,10 @@ class RampPanel:
         self._line_v.set_data(times, voltages)
         self._line_a.set_data(times, currents)
 
-        self._ax_v.relim()
-        self._ax_v.autoscale_view()
-        self._ax_a.relim()
-        self._ax_a.autoscale_view()
+        # Use absolute scales to prevent "bouncing"
+        self._ax_v.set_xlim(left=0, right=max(60, times[-1] if times else 60))
+        self._ax_v.set_ylim(0, self.VOLTAGE_LIMIT)
+        self._ax_a.set_ylim(0, self.CURRENT_LIMIT)
 
         try:
             self._canvas.draw_idle()
@@ -544,6 +557,23 @@ class RampPanel:
             self._update_button_states(ExecutorState.ABORTED)
             if self._on_ramp_stop:
                 self._on_ramp_stop()
+
+    def _on_emergency_stop(self):
+        """Immediately stop everything and shut down the power supply."""
+        if self.executor:
+            # 1. Stop the executor thread
+            self.executor.stop()
+            
+            # 2. Directly call emergency shutdown on the hardware if available
+            if hasattr(self.executor, 'power_supply') and self.executor.power_supply:
+                try:
+                    self.executor.power_supply.emergency_shutdown()
+                except Exception as e:
+                    messagebox.showerror("Emergency Error", f"Failed to shut down PS hardware: {e}")
+        
+        # 3. Update UI
+        self.set_emergency_shutdown(True, "EMERGENCY STOP ACTIVATED")
+        messagebox.showwarning("Emergency Stop", "Emergency stop activated! Power supply output should be disabled.")
 
     def _update_button_states(self, state: ExecutorState):
         if state in [ExecutorState.RUNNING, ExecutorState.PAUSED]:

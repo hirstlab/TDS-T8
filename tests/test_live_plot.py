@@ -50,12 +50,13 @@ class TestLivePlotAxesConfiguration(unittest.TestCase):
 
     def test_set_absolute_scales_enabled(self):
         """Test enabling absolute scales."""
-        self.plot.set_absolute_scales(True, (0, 500), (1e-8, 1e-4), (0, 100))
+        self.plot.set_absolute_scales(True, (0, 500), (1e-8, 1e-4), (0, 100), (0, 50))
 
         self.assertTrue(self.plot._use_absolute_scales)
         self.assertEqual(self.plot._temp_range, (0, 500))
         self.assertEqual(self.plot._press_range, (1e-8, 1e-4))
-        self.assertEqual(self.plot._ps_range, (0, 100))
+        self.assertEqual(self.plot._ps_v_range, (0, 100))
+        self.assertEqual(self.plot._ps_i_range, (0, 50))
 
     def test_set_absolute_scales_with_defaults(self):
         """Test setting absolute scales with default ranges."""
@@ -64,7 +65,8 @@ class TestLivePlotAxesConfiguration(unittest.TestCase):
         self.assertTrue(self.plot._use_absolute_scales)
         self.assertEqual(self.plot._temp_range, self.plot.DEFAULT_TEMP_RANGE)
         self.assertEqual(self.plot._press_range, self.plot.DEFAULT_PRESS_RANGE)
-        self.assertEqual(self.plot._ps_range, self.plot.DEFAULT_PS_RANGE)
+        self.assertEqual(self.plot._ps_v_range, self.plot.DEFAULT_PS_V_RANGE)
+        self.assertEqual(self.plot._ps_i_range, self.plot.DEFAULT_PS_I_RANGE)
 
     def test_set_absolute_scales_disabled(self):
         """Test disabling absolute scales."""

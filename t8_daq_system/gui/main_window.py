@@ -175,11 +175,54 @@ class MainWindow:
             "display": {"update_rate_ms": 250, "history_seconds": 60}
         }
 
+        # Default Axis scale settings
+        self._use_absolute_scales = True
+        self._temp_range = (0, 2500)
+        self._press_range = (1e-9, 1e-3)
+        self._ps_v_range = (0, 100)
+        self._ps_i_range = (0, 100)
+
         if config_path and os.path.exists(config_path):
             try:
                 with open(config_path, 'r') as f:
                     loaded_config = json.load(f)
                     self.config.update(loaded_config)
+                    
+                    # Apply defaults if present
+                    if 'defaults' in loaded_config:
+                        defaults = loaded_config['defaults']
+                        
+                        # Apply temperature units
+                        if 'temperature_units' in defaults:
+                            for tc in self.config.get('thermocouples', []):
+                                if 'units' not in tc:
+                                    tc['units'] = defaults['temperature_units']
+                        
+                        # Apply pressure units
+                        if 'pressure_units' in defaults:
+                            for gauge in self.config.get('frg702_gauges', []):
+                                if 'units' not in gauge:
+                                    gauge['units'] = defaults['pressure_units']
+                        
+                        # Apply acquisition rates
+                        if 'internal_acquisition_ms' in defaults:
+                            self.config['logging']['interval_ms'] = defaults['internal_acquisition_ms']
+                        elif 'acquisition_rate' in defaults:
+                            rate_hz = defaults['acquisition_rate']
+                            if rate_hz > 0:
+                                self.config['logging']['interval_ms'] = int(1000 / rate_hz)
+                                
+                        if 'display_acquisition_ms' in defaults:
+                            self.config['display']['update_rate_ms'] = defaults['display_acquisition_ms']
+
+                        # Apply axis scales
+                        if 'axis_scales' in defaults:
+                            scales = defaults['axis_scales']
+                            self._use_absolute_scales = scales.get('use_absolute', True)
+                            if 'temp_range' in scales: self._temp_range = tuple(scales['temp_range'])
+                            if 'press_range' in scales: self._press_range = tuple(scales['press_range'])
+                            if 'voltage_range' in scales: self._ps_v_range = tuple(scales['voltage_range'])
+                            if 'current_range' in scales: self._ps_i_range = tuple(scales['current_range'])
             except Exception as e:
                 print(f"Error loading config from {config_path}: {e}")
 
@@ -212,7 +255,7 @@ class MainWindow:
         # Initialize data handling
         self.data_buffer = DataBuffer(
             max_seconds=None,
-            sample_rate_ms=self.config['display']['update_rate_ms']
+            sample_rate_ms=self.config['logging']['interval_ms']
         )
 
         # Set up log folder path
@@ -243,12 +286,6 @@ class MainWindow:
         self.is_logging = False
         self.read_thread = None
         self._safety_triggered = False
-
-        # Axis scale settings
-        self._use_absolute_scales = True
-        self._temp_range = (0, 2500)
-        self._press_range = (1e-9, 1e-3)
-        self._ps_range = (0, 60)
 
         # Mode tracking
         self._viewing_historical = False
@@ -348,30 +385,21 @@ class MainWindow:
         rate_values = [f"{r}ms" for r in self.SAMPLE_RATES]
         self.sample_rate_combo = ttk.Combobox(
             config_area, textvariable=self.sample_rate_var,
-            values=rate_values, width=6
+            values=rate_values, width=8
         )
         self.sample_rate_combo.pack(side=tk.LEFT, padx=2)
         self.sample_rate_combo.bind("<<ComboboxSelected>>", lambda e: self._on_sample_rate_change())
 
         # Display rate dropdown
         ttk.Label(config_area, text="Display:").pack(side=tk.LEFT, padx=2)
-        self.display_rate_var = tk.StringVar(value="250ms")
+        display_rate = self.config['display']['update_rate_ms']
+        self.display_rate_var = tk.StringVar(value=f"{display_rate}ms")
         self.display_rate_combo = ttk.Combobox(
             config_area, textvariable=self.display_rate_var,
-            values=["100ms", "250ms", "500ms", "1000ms"], width=5
+            values=["100ms", "250ms", "500ms", "1000ms"], width=8
         )
         self.display_rate_combo.pack(side=tk.LEFT, padx=2)
         self.display_rate_combo.bind("<<ComboboxSelected>>", lambda e: self._on_display_rate_change())
-
-        # Power Supply Resource Selection
-        ttk.Label(config_area, text="PS:").pack(side=tk.LEFT, padx=2)
-        self.ps_resource_var = tk.StringVar(value="None")
-        self.ps_resource_combo = ttk.Combobox(
-            config_area, textvariable=self.ps_resource_var,
-            values=["None"], width=15, state='readonly'
-        )
-        self.ps_resource_combo.pack(side=tk.LEFT, padx=2)
-        self.ps_resource_combo.bind("<<ComboboxSelected>>", lambda e: self._on_ps_resource_change())
 
         # Control buttons
         self.start_btn = ttk.Button(
@@ -417,6 +445,7 @@ class MainWindow:
 
         # Status label
         self.status_var = tk.StringVar(value="Disconnected")
+        self.ps_resource_var = tk.StringVar(value="None")
 
         # Connection Status Indicators
         self.indicator_frame = ttk.Frame(control_frame)
@@ -432,54 +461,9 @@ class MainWindow:
 
         ttk.Label(control_frame, text="Status:").pack(side=tk.RIGHT)
 
-        # Create main content area with PanedWindow
-        main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
-        main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=2)
-
-        # Left side - Monitoring
-        left_frame = ttk.Frame(main_paned)
-        main_paned.add(left_frame, weight=1)
-
-        # Current readings panel
-        self.panel_container = ttk.LabelFrame(left_frame, text="Current Readings")
-        self.panel_container.pack(fill=tk.X, padx=5, pady=2)
-        self._rebuild_sensor_panel()
-
-        # Live plots container
-        self.plot_container_main = ttk.Frame(left_frame)
-        self.plot_container_main.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
-        self._build_plots(self.plot_container_main)
-
-        # Right side - Power Supply Control (unified ramp interface)
-        right_frame = ttk.Frame(main_paned)
-        main_paned.add(right_frame, weight=1)
-
-        # Power Supply Status Panel (read-only display with interlock)
-        ps_frame = ttk.LabelFrame(right_frame, text="Power Supply Status")
-        ps_frame.pack(fill=tk.X, padx=5, pady=2)
-
-        self.ps_panel = PowerSupplyPanel(ps_frame, self.ps_controller)
-        self.ps_panel.on_output_change(self._on_ps_output_change)
-
-        # Ramp Profile Panel (ONLY power control interface)
-        ramp_frame = ttk.LabelFrame(right_frame, text="Power Supply Ramp Control")
-        ramp_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=2)
-
-        self.ramp_panel = RampPanel(
-            ramp_frame,
-            self.ramp_executor,
-            self.profiles_folder
-        )
-        self.ramp_panel.on_ramp_start(self._on_ramp_start)
-        self.ramp_panel.on_ramp_stop(self._on_ramp_stop)
-
-        # Turbo Pump Panel
-        self.turbo_panel = TurboPumpPanel(right_frame)
-        self.turbo_panel.pack(fill=tk.X, padx=5, pady=2)
-
         # Safety Status Bar at bottom
         safety_frame = ttk.Frame(self.root)
-        safety_frame.pack(fill=tk.X, padx=10, pady=(2, 10))
+        safety_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=(2, 10))
 
         ttk.Label(safety_frame, text="Safety:", font=('Arial', 8, 'bold')).pack(side=tk.LEFT)
 
@@ -522,6 +506,51 @@ class MainWindow:
             font=('Arial', 9, 'bold'), foreground='blue'
         )
 
+        # Create main content area with PanedWindow
+        main_paned = ttk.PanedWindow(self.root, orient=tk.HORIZONTAL)
+        main_paned.pack(fill=tk.BOTH, expand=True, padx=10, pady=2)
+
+        # Left side - Monitoring
+        left_frame = ttk.Frame(main_paned)
+        main_paned.add(left_frame, weight=1)
+
+        # Current readings panel
+        self.panel_container = ttk.LabelFrame(left_frame, text="Current Readings")
+        self.panel_container.pack(fill=tk.X, padx=5, pady=2)
+        self._rebuild_sensor_panel()
+
+        # Live plots container
+        self.plot_container_main = ttk.Frame(left_frame)
+        self.plot_container_main.pack(fill=tk.BOTH, expand=True, padx=2, pady=1)
+        self._build_plots(self.plot_container_main)
+
+        # Right side - Power Supply Control (unified ramp interface)
+        right_frame = ttk.Frame(main_paned)
+        main_paned.add(right_frame, weight=2)
+
+        # Power Supply Status Panel (read-only display with interlock)
+        ps_frame = ttk.LabelFrame(right_frame, text="Power Supply Status")
+        ps_frame.pack(fill=tk.X, padx=5, pady=1)
+
+        self.ps_panel = PowerSupplyPanel(ps_frame, self.ps_controller)
+        self.ps_panel.on_output_change(self._on_ps_output_change)
+
+        # Ramp Profile Panel (ONLY power control interface)
+        ramp_frame = ttk.LabelFrame(right_frame, text="Power Supply Ramp Control")
+        ramp_frame.pack(fill=tk.X, expand=True, padx=5, pady=1)
+
+        self.ramp_panel = RampPanel(
+            ramp_frame,
+            self.ramp_executor,
+            self.profiles_folder
+        )
+        self.ramp_panel.on_ramp_start(self._on_ramp_start)
+        self.ramp_panel.on_ramp_stop(self._on_ramp_stop)
+
+        # Turbo Pump Panel
+        self.turbo_panel = TurboPumpPanel(right_frame)
+        self.turbo_panel.pack(fill=tk.BOTH, padx=5, pady=1)
+
         # Dual window tracking
         self.dual_window = None
 
@@ -562,6 +591,8 @@ class MainWindow:
                 }
             self.config['turbo_pump']['enabled'] = True
 
+            # Set up Mock Power Supply
+            self.ps_connection.disconnect()
             self.ps_controller = MockPowerSupplyController()
             self.ps_panel.set_controller(self.ps_controller)
             self.safety_monitor.set_power_supply(self.ps_controller)
@@ -574,14 +605,10 @@ class MainWindow:
             self._latest_frg_pressure_mbar = 1e-4  # Well below threshold
             self.turbo_panel.update_pressure_interlock(self._latest_frg_pressure_mbar)
 
-            self._update_ps_resources()
             self.ps_resource_var.set("Mock Power Supply")
-            self._on_ps_resource_change()
         else:
             self.practice_btn.config(text="Practice Mode: OFF")
-            self._update_ps_resources()
             self.ps_resource_var.set("None")
-            self._on_ps_resource_change()
 
             self._latest_frg_pressure_mbar = None
             self.turbo_panel.update_pressure_interlock(None)
@@ -596,55 +623,13 @@ class MainWindow:
             else:
                 self.status_var.set("Connected")
                 self._initialize_hardware_readers()
-                if self.ps_connection.is_connected():
+                # Attempt to auto-detect real power supply
+                self.ps_connection.resource_string = None
+                if self.ps_connection.connect():
                     self._initialize_power_supply()
 
         self._rebuild_sensor_panel()
         self._update_plot_settings()
-
-    def _update_ps_resources(self):
-        """Refresh the list of available power supply resources."""
-        resources = list(self.ps_connection.list_available_resources())
-        values = ["None"]
-        if self._practice_mode:
-            values.append("Mock Power Supply")
-        values.extend(resources)
-        self.ps_resource_combo.config(values=values)
-
-        current_res = self.config.get('power_supply', {}).get('visa_resource')
-        if current_res and current_res in values:
-            self.ps_resource_var.set(current_res)
-        elif self._practice_mode and not self.ps_resource_var.get() in values:
-            self.ps_resource_var.set("Mock Power Supply")
-        elif not self.ps_resource_var.get() in values:
-            self.ps_resource_var.set("None")
-
-    def _on_ps_resource_change(self):
-        """Handle power supply resource selection change."""
-        selected = self.ps_resource_var.get()
-
-        if selected == "None":
-            self.config['power_supply']['visa_resource'] = None
-            if not self._practice_mode:
-                self.ps_connection.disconnect()
-                self.ps_controller = None
-                self.ps_panel.set_controller(None)
-        elif selected == "Mock Power Supply":
-            self.config['power_supply']['visa_resource'] = "MOCK"
-            self.ps_controller = MockPowerSupplyController()
-            self.ps_panel.set_controller(self.ps_controller)
-            self.safety_monitor.set_power_supply(self.ps_controller)
-            self.ramp_executor.set_power_supply(self.ps_controller)
-        else:
-            self.config['power_supply']['visa_resource'] = selected
-            if not self._practice_mode:
-                self.ps_connection.resource_string = selected
-                if self.ps_connection.connect():
-                    self._initialize_power_supply()
-                else:
-                    messagebox.showerror("Connection Error", f"Failed to connect to {selected}")
-                    self.ps_resource_var.set("None")
-                    self._on_ps_resource_change()
 
     def _on_pressure_unit_change(self):
         """Handle pressure unit selection change."""
@@ -691,7 +676,8 @@ class MainWindow:
                 self._use_absolute_scales,
                 self._temp_range,
                 self._press_range,
-                self._ps_range
+                self._ps_v_range,
+                self._ps_i_range
             )
         if hasattr(self, 'recent_plot'):
             self.recent_plot.set_units(temp_unit_display, press_unit)
@@ -699,17 +685,18 @@ class MainWindow:
                 self._use_absolute_scales,
                 self._temp_range,
                 self._press_range,
-                self._ps_range
+                self._ps_v_range,
+                self._ps_i_range
             )
 
         sensor_names = [tc['name'] for tc in self.config['thermocouples'] if tc.get('enabled', True)]
         sensor_names += [g['name'] for g in self.config.get('frg702_gauges', []) if g.get('enabled', True)]
-        ps_names = ['PS_Voltage', 'PS_Current'] if self.config.get('power_supply', {}).get('enabled', True) else []
+        ps_names = []  # Explicitly empty to remove from thermocouple plots
 
         if self._viewing_historical and self._loaded_data:
             if hasattr(self, 'full_plot'):
                 self.full_plot.update_from_loaded_data(
-                    self._loaded_data, sensor_names, ps_names,
+                    self._loaded_data, sensor_names, [],
                     data_units=self._loaded_data_units
                 )
             if hasattr(self, 'recent_plot'):
@@ -765,7 +752,8 @@ class MainWindow:
             self.root,
             self._temp_range,
             self._press_range,
-            self._ps_range,
+            self._ps_v_range,
+            self._ps_i_range,
             self._use_absolute_scales
         )
         self.root.wait_window(dialog)
@@ -774,7 +762,8 @@ class MainWindow:
             self._use_absolute_scales = dialog.result['use_absolute']
             self._temp_range = dialog.result['temp_range']
             self._press_range = dialog.result['press_range']
-            self._ps_range = dialog.result['ps_range']
+            self._ps_v_range = dialog.result['ps_v_range']
+            self._ps_i_range = dialog.result['ps_i_range']
             self._update_plot_settings()
 
     def _on_load_csv(self):
@@ -1331,11 +1320,6 @@ class MainWindow:
         if 'LabJack' in self.indicators:
             self.indicators['LabJack'].config(bg=color)
 
-        # Refresh PS resources
-        if not hasattr(self, '_last_ps_refresh') or time.time() - self._last_ps_refresh > 5.0:
-            self._update_ps_resources()
-            self._last_ps_refresh = time.time()
-
         # Auto-connect XGS-600
         xgs_connected = (self.xgs600 is not None and self.xgs600.is_connected()) or self._practice_mode
         if not xgs_connected and not self._practice_mode and self.config.get('xgs600', {}).get('enabled', False):
@@ -1348,8 +1332,7 @@ class MainWindow:
 
         # Auto-connect Power Supply
         ps_connected = self.ps_connection.is_connected() or \
-                       (self._practice_mode and self.ps_controller is not None) or \
-                       (self.ps_resource_var.get() == "Mock Power Supply")
+                       (self._practice_mode and self.ps_controller is not None)
 
         if not ps_connected and not self._practice_mode and self.config.get('power_supply', {}).get('enabled', True):
             if self.ps_connection.connect():
@@ -1439,9 +1422,7 @@ class MainWindow:
         sensor_names += [g['name'] for g in self.config.get('frg702_gauges', [])
                         if g.get('enabled', True)]
 
-        ps_names = []
-        if self.config.get('power_supply', {}).get('enabled', True):
-            ps_names = ['PS_Voltage', 'PS_Current']
+        ps_names = []  # Explicitly empty to remove from thermocouple plots
 
         if hasattr(self, 'full_plot'):
             self.full_plot.update(sensor_names, ps_names)
@@ -1511,6 +1492,11 @@ class MainWindow:
             self.safety_monitor.set_power_supply(self.ps_controller)
             self.ramp_executor.set_power_supply(self.ps_controller)
             self.ps_panel.set_controller(self.ps_controller)
+            
+            # Update resource display
+            resource = self.ps_connection.get_resource_string()
+            if resource:
+                self.ps_resource_var.set(resource)
 
             print("Power supply initialized successfully")
             return True

@@ -1,4 +1,17 @@
 {
+    "defaults": {
+        "temperature_units": "C",
+        "pressure_units": "mbar",
+        "internal_acquisition_ms": 1000,
+        "display_acquisition_ms": 1000,
+        "axis_scales": {
+            "use_absolute": false,
+            "temp_range": [0, 500],
+            "press_range": [1e-9, 1e-3],
+            "voltage_range": [0, 10],
+            "current_range": [0, 100]
+        }
+    },
     "thermocouples": [
         {"name": "TC_1", "channel": 0, "type": "C", "units": "C", "enabled": true}
     ],

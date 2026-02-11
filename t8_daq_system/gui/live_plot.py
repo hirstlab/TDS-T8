@@ -4,8 +4,8 @@ PURPOSE: Display real-time updating graphs of sensor data
 KEY CONCEPT: Use matplotlib's FigureCanvasTkAgg to embed plots in tkinter
 
 Supports dual Y-axis plotting:
-- Left Y-axis: Temperature sensors (only if thermocouples selected)
-- Right Y-axis: Pressure sensors (only if pressure gauges selected)
+- Top plot: Temperature sensors (only if thermocouples selected)
+- Bottom plot: Pressure sensors (only if pressure gauges selected)
 - Power supply data on whichever axis is available
 """
 
@@ -22,7 +22,8 @@ class LivePlot:
     # Default axis ranges (absolute scales)
     DEFAULT_TEMP_RANGE = (0, 300)  # Celsius
     DEFAULT_PRESS_RANGE = (1e-9, 1e-3) # mbar
-    DEFAULT_PS_RANGE = (0, 60) # V or A
+    DEFAULT_PS_V_RANGE = (0, 60) # V
+    DEFAULT_PS_I_RANGE = (0, 60) # A
 
     def __init__(self, parent_frame, data_buffer):
         """
@@ -36,15 +37,16 @@ class LivePlot:
         self.parent = parent_frame
 
         # Create matplotlib figure with space for FRG-702 subplot
-        self.fig = Figure(figsize=(8, 4), dpi=100)
+        self.fig = Figure(figsize=(7.5, 3), dpi=100)
         self.fig.patch.set_facecolor('#f0f0f0')  # Match tkinter background if needed
         self.ax = self.fig.add_subplot(111)
 
         # Maximize space
-        self.fig.subplots_adjust(left=0.1, right=0.9, top=0.95, bottom=0.15)
+        self.fig.subplots_adjust(left=0.08, right=0.98, top=0.98, bottom=0.12)
 
-        # Create secondary axis for pressure data
-        self.ax2 = None  # Created on demand
+        # Create secondary axes for power supply data
+        self.ax2 = None  # Voltage
+        self.ax3 = None  # Current
 
         # FRG-702 logarithmic subplot (created on demand)
         self.ax_frg702 = None
@@ -81,14 +83,16 @@ class LivePlot:
         # Axis scale settings (for absolute scaling)
         self._temp_range = None
         self._press_range = None
-        self._ps_range = None
+        self._ps_v_range = None
+        self._ps_i_range = None
         self._use_absolute_scales = False
 
         # Unit labels
         self._temp_unit = "°C"
         self._press_unit = "mbar"
 
-    def set_absolute_scales(self, enabled=True, temp_range=None, press_range=None, ps_range=None):
+    def set_absolute_scales(self, enabled=True, temp_range=None, press_range=None, 
+                            ps_v_range=None, ps_i_range=None):
         """
         Enable or disable absolute (fixed) axis scales.
 
@@ -96,12 +100,14 @@ class LivePlot:
             enabled: Whether to use absolute scales
             temp_range: Tuple (min, max) for temperature axis
             press_range: Tuple (min, max) for pressure axis
-            ps_range: Tuple (min, max) for power supply axis
+            ps_v_range: Tuple (min, max) for power supply voltage axis
+            ps_i_range: Tuple (min, max) for power supply current axis
         """
         self._use_absolute_scales = enabled
         self._temp_range = temp_range if temp_range else self.DEFAULT_TEMP_RANGE
         self._press_range = press_range if press_range else self.DEFAULT_PRESS_RANGE
-        self._ps_range = ps_range if ps_range else self.DEFAULT_PS_RANGE
+        self._ps_v_range = ps_v_range if ps_v_range else self.DEFAULT_PS_V_RANGE
+        self._ps_i_range = ps_i_range if ps_i_range else self.DEFAULT_PS_I_RANGE
 
     def set_units(self, temp_unit="°C", press_unit="mbar"):
         """Set the unit labels for the axes."""
@@ -186,16 +192,18 @@ class LivePlot:
             self.ax_frg702 = self.fig.add_subplot(212)
             self.ax_frg702.set_yscale('log')
             self.ax2 = None  # Will be recreated on demand
+            self.ax3 = None
             self._has_frg702 = True
-            self.fig.subplots_adjust(left=0.1, right=0.9, top=0.95, bottom=0.1, hspace=0.35)
+            self.fig.subplots_adjust(left=0.08, right=0.92, top=0.98, bottom=0.08, hspace=0.25)
         elif not has_frg702_data and self._has_frg702:
             # Remove FRG-702 subplot
             self.fig.clear()
             self.ax = self.fig.add_subplot(111)
             self.ax_frg702 = None
             self.ax2 = None
+            self.ax3 = None
             self._has_frg702 = False
-            self.fig.subplots_adjust(left=0.1, right=0.9, top=0.95, bottom=0.15)
+            self.fig.subplots_adjust(left=0.08, right=0.92, top=0.98, bottom=0.12)
 
     def _core_update(self, timestamps, plot_data, window_seconds=None, data_units=None):
         """Core plotting logic used by both live and historical updates."""
@@ -229,8 +237,8 @@ class LivePlot:
             self.ax.tick_params(axis='y', labelleft=False)
             self.ax.yaxis.set_visible(False)
 
-        # Configure Right Axis (PS)
-        if show_right_axis:
+        # Configure Right Axis (PS Voltage)
+        if has_ps:
             if self.ax2 is None:
                 self.ax2 = self.ax.twinx()
             
@@ -238,16 +246,36 @@ class LivePlot:
             self.ax2.set_visible(True)
             self.ax2.yaxis.set_visible(True)
 
-            self.ax2.set_ylabel('PS Voltage (V) / Current (A)', color='black', rotation=270, labelpad=20)
+            self.ax2.set_ylabel('PS Voltage (V)', color=self.ps_colors['PS_Voltage'], rotation=270, labelpad=15)
             self.ax2.yaxis.set_label_position('right')
-            self.ax2.tick_params(axis='y', labelcolor='black')
+            self.ax2.tick_params(axis='y', labelcolor=self.ps_colors['PS_Voltage'])
             
-            if self._use_absolute_scales and self._ps_range:
-                self.ax2.set_ylim(self._ps_range)
+            if self._use_absolute_scales and self._ps_v_range:
+                self.ax2.set_ylim(self._ps_v_range)
+                
+            # Configure Third Axis (PS Current)
+            if self.ax3 is None:
+                self.ax3 = self.ax.twinx()
+                # Offset the right spine to make room for the second axis
+                self.ax3.spines['right'].set_position(('outward', 50))
+                
+            self.ax3.clear()
+            self.ax3.set_visible(True)
+            self.ax3.yaxis.set_visible(True)
+
+            self.ax3.set_ylabel('PS Current (A)', color=self.ps_colors['PS_Current'], rotation=270, labelpad=15)
+            self.ax3.yaxis.set_label_position('right')
+            self.ax3.tick_params(axis='y', labelcolor=self.ps_colors['PS_Current'])
+            
+            if self._use_absolute_scales and self._ps_i_range:
+                self.ax3.set_ylim(self._ps_i_range)
         else:
             if self.ax2 is not None:
                 self.ax2.clear()
                 self.ax2.set_visible(False)
+            if self.ax3 is not None:
+                self.ax3.clear()
+                self.ax3.set_visible(False)
 
         if not timestamps:
             self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
@@ -293,7 +321,10 @@ class LivePlot:
             if times:
                 color = self.ps_colors.get(name, self.colors[color_idx % len(self.colors)])
                 color_idx += 1
-                line, = self.ax2.plot(times, vals, label=name, linewidth=2, color=color, linestyle='--')
+                
+                # Use ax2 for voltage, ax3 for current
+                target_ax = self.ax2 if name == 'PS_Voltage' else self.ax3
+                line, = target_ax.plot(times, vals, label=name, linewidth=2, color=color, linestyle='--')
                 legend_handles.append(line)
                 legend_labels.append(name)
 
@@ -356,6 +387,9 @@ class LivePlot:
         if self.ax2 is not None:
             self.ax2.clear()
 
+        if self.ax3 is not None:
+            self.ax3.clear()
+
         if self.ax_frg702 is not None:
             self.ax_frg702.clear()
             self.ax_frg702.grid(True, alpha=0.3, which='both')
@@ -382,9 +416,15 @@ class LivePlot:
         Args:
             ymin: Minimum Y value (None for auto)
             ymax: Maximum Y value (None for auto)
-            axis: 'primary' for left axis, 'secondary' for right axis
+            axis: 'primary' for left axis, 'secondary' for right axis, 'tertiary' for offset right
         """
-        target_ax = self.ax if axis == 'primary' else self.ax2
+        if axis == 'primary':
+            target_ax = self.ax
+        elif axis == 'secondary':
+            target_ax = self.ax2
+        else:
+            target_ax = self.ax3
+
         if target_ax is None:
             return
 

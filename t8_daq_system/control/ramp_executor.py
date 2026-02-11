@@ -10,7 +10,7 @@ import time
 from typing import Optional, Callable
 from enum import Enum
 
-from .ramp_profile import RampProfile
+from .ramp_profile import RampProfile, ControlMode
 
 
 class ExecutorState(Enum):
@@ -235,14 +235,26 @@ class RampExecutor:
                 # Resume from pause
                 return self.resume()
 
-        # Set initial current limit if power supply is connected
+        # Set initial limits if power supply is connected
         if self.power_supply:
             try:
                 with self._lock:
+                    is_current_mode = self._profile.control_mode == ControlMode.CURRENT.value
                     current_limit = self._profile.current_limit
-                self.power_supply.set_current(current_limit)
+                    voltage_limit = self._profile.voltage_limit
+                
+                if is_current_mode:
+                    # In current mode, we ramp current and set a voltage limit
+                    self.power_supply.set_voltage(voltage_limit)
+                    # Initial setpoint is start current
+                    self._current_setpoint = self._profile.start_current
+                else:
+                    # In voltage mode, we ramp voltage and set a current limit
+                    self.power_supply.set_current(current_limit)
+                    # Initial setpoint is start voltage
+                    self._current_setpoint = self._profile.start_voltage
             except Exception as e:
-                self._error_message = f"Failed to set current limit: {e}"
+                self._error_message = f"Failed to set initial power supply limits: {e}"
                 self._set_state(ExecutorState.ERROR)
                 return False
 
@@ -254,7 +266,9 @@ class RampExecutor:
             self._start_time = time.time()
             self._paused_elapsed = 0.0
             self._current_step_index = 0
-            self._current_setpoint = self._profile.start_voltage
+            # Setpoint already initialized above, but ensuring it matches profile
+            is_current_mode = self._profile.control_mode == ControlMode.CURRENT.value
+            self._current_setpoint = self._profile.start_current if is_current_mode else self._profile.start_voltage
 
         # Set state to RUNNING before starting thread to avoid race condition
         # where thread sets ERROR and then we overwrite it with RUNNING
@@ -278,10 +292,12 @@ class RampExecutor:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
 
-        # Set voltage to 0 for safety
+        # Set voltage/current to 0 and turn off output for safety
         if self.power_supply:
             try:
                 self.power_supply.set_voltage(0.0)
+                self.power_supply.set_current(0.0)
+                self.power_supply.output_off()
             except Exception:
                 pass
 
@@ -373,10 +389,17 @@ class RampExecutor:
             # Send setpoint to power supply
             if self.power_supply:
                 try:
-                    self.power_supply.set_voltage(self._current_setpoint)
+                    with self._lock:
+                        is_current_mode = self._profile.control_mode == ControlMode.CURRENT.value
+                    
+                    if is_current_mode:
+                        self.power_supply.set_current(self._current_setpoint)
+                    else:
+                        self.power_supply.set_voltage(self._current_setpoint)
                 except Exception as e:
                     with self._lock:
-                        self._error_message = f"Failed to set voltage: {e}"
+                        mode_str = "current" if is_current_mode else "voltage"
+                        self._error_message = f"Failed to set {mode_str}: {e}"
                     if self._on_error:
                         try:
                             self._on_error(self._error_message)
@@ -397,14 +420,17 @@ class RampExecutor:
 
         # Profile completed normally
         if not self._stop_event.is_set():
-            # Send final setpoint
+            # Ramp is done - set voltage/current to 0 and turn off output
             if self.power_supply:
                 try:
-                    with self._lock:
-                        final_voltage = self._current_setpoint
-                    self.power_supply.set_voltage(final_voltage)
+                    self.power_supply.set_voltage(0.0)
+                    self.power_supply.set_current(0.0)
+                    self.power_supply.output_off()
                 except Exception:
                     pass
+
+            with self._lock:
+                self._current_setpoint = 0.0
 
             self._set_state(ExecutorState.COMPLETED)
 
