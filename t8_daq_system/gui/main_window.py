@@ -19,6 +19,7 @@ import json
 import threading
 import time
 import os
+import sys
 import random
 import math
 
@@ -259,7 +260,13 @@ class MainWindow:
         )
 
         # Set up log folder path
-        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if getattr(sys, 'frozen', False):
+            # If the application is run as a bundle, use the directory of the executable
+            base_dir = os.path.dirname(sys.executable)
+        else:
+            # If run as a script, use the parent of t8_daq_system
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        
         self.log_folder = os.path.join(base_dir, 'logs')
         self.profiles_folder = os.path.join(base_dir, 'config', 'profiles')
 

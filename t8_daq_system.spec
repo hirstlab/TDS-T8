@@ -13,7 +13,7 @@ from pathlib import Path
 # ============================================================================
 
 # Project root and entry point
-project_root = os.path.abspath(os.path.dirname(__file__))
+project_root = SPECPATH
 main_script = os.path.join(project_root, 't8_daq_system', 'main.py')
 
 # Detect Anaconda/Python environment
@@ -84,9 +84,10 @@ for dll_name in tcl_dll_names:
 # -----------------------
 # LabJack hardware driver DLL
 ljm_dll_locations = [
-    r'C:\Program Files (x86)\LabJack\LJM\ljm.dll',
-    r'C:\Program Files\LabJack\LJM\ljm.dll',
-    os.path.join(conda_bin, 'ljm.dll'),
+    r'C:\Windows\System32\LabJackM.dll',
+    r'C:\Program Files\LabJack\LJM\LabJackM.dll',
+    r'C:\Program Files (x86)\LabJack\LJM\LabJackM.dll',
+    os.path.join(conda_bin, 'LabJackM.dll'),
 ]
 
 for ljm_path in ljm_dll_locations:
