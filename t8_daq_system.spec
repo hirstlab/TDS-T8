@@ -100,18 +100,31 @@ else:
 
 # 4. ADDITIONAL RUNTIME DLLS
 # ---------------------------
-# Other Anaconda runtime dependencies
+# Search multiple locations for runtime DLLs to ensure compatibility on other PCs
 runtime_dlls = [
-    'msvcp140.dll',       # Microsoft Visual C++ Runtime
-    'vcruntime140.dll',   # Visual C++ Runtime
-    'vcruntime140_1.dll', # Visual C++ Runtime (additional)
+    'msvcp140.dll',
+    'vcruntime140.dll',
+    'vcruntime140_1.dll',
+]
+
+runtime_search_paths = [
+    conda_bin,
+    r'C:\Windows\System32',
+    r'C:\Windows\SysWOW64',
+    os.path.join(os.environ.get('WINDIR', r'C:\Windows'), 'System32'),
 ]
 
 for dll_name in runtime_dlls:
-    dll_path = os.path.join(conda_bin, dll_name)
-    if os.path.exists(dll_path):
-        binaries.append((dll_path, '.'))
-        print(f"✓ Found runtime DLL: {dll_name}")
+    found = False
+    for search_path in runtime_search_paths:
+        dll_path = os.path.join(search_path, dll_name)
+        if os.path.exists(dll_path):
+            binaries.append((dll_path, '.'))
+            print(f"✓ Found runtime DLL: {dll_name} in {search_path}")
+            found = True
+            break
+    if not found:
+        print(f"⚠ Warning: {dll_name} not found in any search path")
 
 print(f"\nTotal binaries to bundle: {len(binaries)}")
 
@@ -181,6 +194,18 @@ hiddenimports = [
     'typing',
     'enum',
     'datetime',
+
+    # Missing dependencies for pyvisa and serial
+    'pyvisa.resources.serial',
+    'pyvisa.resources.gpib',
+    'pyvisa.resources.usb',
+    'pyvisa.resources.tcpip',
+    'serial.serialwin32',   # Windows serial backend
+    'serial.serialutil',
+    'encodings',
+    'encodings.utf_8',
+    'encodings.ascii',
+    'encodings.latin_1',
 ]
 
 print(f"Hidden imports: {len(hiddenimports)}")

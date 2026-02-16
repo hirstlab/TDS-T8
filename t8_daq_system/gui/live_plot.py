@@ -37,12 +37,12 @@ class LivePlot:
         self.parent = parent_frame
 
         # Create matplotlib figure with space for FRG-702 subplot
-        self.fig = Figure(figsize=(7, 3), dpi=100)
+        self.fig = Figure(figsize=(10, 5), dpi=100)
         self.fig.patch.set_facecolor('#f0f0f0')  # Match tkinter background if needed
         self.ax = self.fig.add_subplot(111)
 
         # Maximize space
-        self.fig.subplots_adjust(left=0.25, right=0.7, top=0.98, bottom=0.12)
+        self.fig.subplots_adjust(left=0.10, right=0.90, top=0.98, bottom=0.07, hspace=0.22)
 
         # Create secondary axes for power supply data
         self.ax2 = None  # Voltage
