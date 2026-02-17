@@ -36,12 +36,17 @@ class KeysightConnection:
             True if successful, False if failed
         """
         try:
-            # Create resource manager
-            self.resource_manager = pyvisa.ResourceManager()
+            # Create resource manager with pyvisa-py backend to avoid NI-VISA scanning
+            try:
+                self.resource_manager = pyvisa.ResourceManager('@py')
+            except Exception:
+                self.resource_manager = pyvisa.ResourceManager()
 
             if self.resource_string:
                 # Use specified resource string
-                self.instrument = self.resource_manager.open_resource(self.resource_string)
+                self.instrument = self.resource_manager.open_resource(
+                    self.resource_string, open_timeout=2000
+                )
             else:
                 # Auto-detect: look for Keysight/Agilent power supplies
                 self.instrument = self._auto_detect()
@@ -49,7 +54,7 @@ class KeysightConnection:
                     return False
 
             # Configure communication settings
-            self.instrument.timeout = 5000  # 5 second timeout
+            self.instrument.timeout = 5000  # 5 second timeout for commands
             self.instrument.read_termination = '\n'
             self.instrument.write_termination = '\n'
 
@@ -78,7 +83,7 @@ class KeysightConnection:
             for resource in resources:
                 try:
                     instr = self.resource_manager.open_resource(resource)
-                    instr.timeout = 2000
+                    instr.timeout = 500  # 500ms is enough for USB/GPIB instruments
                     instr.read_termination = '\n'
                     instr.write_termination = '\n'
 

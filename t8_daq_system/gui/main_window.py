@@ -402,11 +402,11 @@ class MainWindow:
         # Track latest FRG pressure for turbo interlock
         self._latest_frg_pressure_mbar = None
 
-        # FIX 3: Reconnection cooldown to prevent blocking the GUI thread
-        self._last_lj_reconnect_attempt = 0
-        self._last_xgs_reconnect_attempt = 0
-        self._last_ps_reconnect_attempt = 0
-        self._reconnect_cooldown_sec = 5.0  # Only try reconnecting every 5 seconds
+        # Reconnection cooldown timers (prevent blocking GUI with repeated failed attempts)
+        self._last_ps_reconnect_time = 0
+        self._last_xgs_reconnect_time = 0
+        self._last_lj_reconnect_time = 0
+        self._reconnect_interval = 30.0  # Only retry connection every 30 seconds
 
         # FIX 4: Plot skip counter - reduce plot frequency in frozen mode
         self._plot_skip_count = 10 if getattr(sys, 'frozen', False) else 3
@@ -443,6 +443,20 @@ class MainWindow:
 
         profiler.section("MainWindow.__init__ COMPLETE")
         profiler.summary()
+
+    def _background_ps_reconnect(self):
+        """Try to reconnect Keysight power supply in background thread."""
+        if hasattr(self, '_ps_reconnect_thread') and self._ps_reconnect_thread.is_alive():
+            return  # Already trying
+
+        def _try_connect():
+            success = self.ps_connection.connect()
+            # Schedule UI update back on main thread
+            if success:
+                self.root.after(0, self._initialize_power_supply)
+
+        self._ps_reconnect_thread = threading.Thread(target=_try_connect, daemon=True)
+        self._ps_reconnect_thread.start()
 
     def _deferred_hardware_init(self):
         """
@@ -1548,9 +1562,8 @@ class MainWindow:
         if self._practice_mode:
             lj_connected = True
         elif not lj_connected and self._hardware_init_attempted:
-            # FIX 3: Only attempt reconnection after cooldown period
-            if (now - self._last_lj_reconnect_attempt) >= self._reconnect_cooldown_sec:
-                self._last_lj_reconnect_attempt = now
+            if (now - self._last_lj_reconnect_time) >= self._reconnect_interval:
+                self._last_lj_reconnect_time = now
                 if self.connection.connect():
                     if self._initialize_hardware_readers():
                         lj_connected = True
@@ -1579,9 +1592,8 @@ class MainWindow:
         # Auto-connect XGS-600 (only after initial deferred init)
         xgs_connected = (self.xgs600 is not None and self.xgs600.is_connected()) or self._practice_mode
         if not xgs_connected and not self._practice_mode and self._hardware_init_attempted and self.config.get('xgs600', {}).get('enabled', False):
-            # FIX 3: Only attempt reconnection after cooldown period
-            if (now - self._last_xgs_reconnect_attempt) >= self._reconnect_cooldown_sec:
-                self._last_xgs_reconnect_attempt = now
+            if (now - self._last_xgs_reconnect_time) >= self._reconnect_interval:
+                self._last_xgs_reconnect_time = now
                 if self._connect_xgs600():
                     xgs_connected = True
 
@@ -1595,12 +1607,9 @@ class MainWindow:
                        (self._practice_mode and self.ps_controller is not None)
 
         if not ps_connected and not self._practice_mode and self._hardware_init_attempted and self.config.get('power_supply', {}).get('enabled', True):
-            # FIX 3: Only attempt reconnection after cooldown period
-            if (now - self._last_ps_reconnect_attempt) >= self._reconnect_cooldown_sec:
-                self._last_ps_reconnect_attempt = now
-                if self.ps_connection.connect():
-                    ps_connected = True
-                    self._initialize_power_supply()
+            if (now - self._last_ps_reconnect_time) >= self._reconnect_interval:
+                self._last_ps_reconnect_time = now
+                self._background_ps_reconnect()
 
         color = '#00FF00' if ps_connected else '#333333'
         if 'PowerSupply' in self.indicators:
