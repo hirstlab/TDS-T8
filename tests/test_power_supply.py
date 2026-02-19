@@ -36,7 +36,7 @@ class TestKeysightConnection(unittest.TestCase):
         result = conn.connect()
 
         self.assertTrue(result)
-        self.mock_rm.open_resource.assert_called_with(resource_string)
+        self.mock_rm.open_resource.assert_called_with(resource_string, open_timeout=2000)
         self.assertEqual(conn.get_resource_string(), resource_string)
 
     def test_connect_verifies_identity(self):
