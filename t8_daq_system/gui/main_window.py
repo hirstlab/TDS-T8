@@ -86,9 +86,7 @@ from t8_daq_system.hardware.labjack_connection import LabJackConnection
 from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.xgs600_controller import XGS600Controller
 from t8_daq_system.hardware.frg702_reader import FRG702Reader
-from t8_daq_system.hardware.keysight_connection import KeysightConnection
-from t8_daq_system.hardware.keysight_background_monitor import KeysightBackgroundMonitor
-from t8_daq_system.hardware.power_supply_controller import PowerSupplyController
+from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 from t8_daq_system.control.ramp_executor import RampExecutor
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
 from t8_daq_system.data.data_buffer import DataBuffer
@@ -219,21 +217,12 @@ class MainWindow:
         self.frg702_reader = None
         profiler.checkpoint("XGS-600 variables initialized (not connected yet)")
 
-        profiler.section("Keysight Power Supply Connection")
-        profiler.checkpoint("Creating KeysightConnection instance")
-        # Initialize Keysight power supply components
-        # Prefer visa_resource from AppSettings (overrides config default)
-        _visa = settings.visa_resource.strip() if settings.visa_resource else None
-        self.ps_connection = KeysightConnection(
-            resource_string=_visa or self.config.get('power_supply', {}).get('visa_resource')
-        )
-        profiler.checkpoint("KeysightConnection instance created (not connected yet)")
+        profiler.section("Analog Power Supply Controller")
+        profiler.checkpoint("Analog PS controller will be created after T8 connects")
+        # The analog controller is initialized in _initialize_power_supply() once
+        # the LabJack T8 handle is available.  No separate network connection needed.
         self.ps_controller = None
-
-        profiler.checkpoint("Creating KeysightBackgroundMonitor instance")
-        # Initialize background monitor for Keysight (will be started after connection)
-        self.keysight_monitor = KeysightBackgroundMonitor(self.ps_connection)
-        profiler.checkpoint("KeysightBackgroundMonitor instance created (not started yet)")
+        profiler.checkpoint("Analog PS controller placeholder set")
 
         profiler.section("Control Systems Initialization")
         profiler.checkpoint("Creating RampExecutor...")
@@ -304,7 +293,6 @@ class MainWindow:
         self._loaded_data_units = {'temp': 'C', 'press': 'PSI'}
 
         # Reconnection cooldown timers (prevent blocking GUI with repeated failed attempts)
-        self._last_ps_reconnect_time = 0
         self._last_xgs_reconnect_time = 0
         self._last_lj_reconnect_time = 0
         self._reconnect_interval = 30.0  # Only retry connection every 30 seconds
@@ -463,35 +451,6 @@ class MainWindow:
         SettingsDialog(self.root, self._app_settings,
                        on_save_callback=self._apply_settings_to_gui)
 
-    def _background_ps_reconnect(self):
-        """Try to reconnect Keysight power supply in background thread."""
-        if hasattr(self, '_ps_reconnect_thread') and self._ps_reconnect_thread.is_alive():
-            return  # Already trying
-
-        def _try_connect():
-            # Stop the monitor so it doesn't race with reconnection
-            self.keysight_monitor.stop()
-
-            # Acquire the VISA lock during reconnection
-            with self.ps_connection.visa_lock:
-                success = self.ps_connection.connect()
-
-            if success:
-                self.root.after(0, self._on_ps_reconnected)
-            else:
-                # Restart monitor even on failure so it can detect recovery
-                self.keysight_monitor.start()
-
-        self._ps_reconnect_thread = threading.Thread(target=_try_connect, daemon=True)
-        self._ps_reconnect_thread.start()
-
-    def _on_ps_reconnected(self):
-        """Called on main thread after successful power supply reconnection."""
-        self._initialize_power_supply()
-        # Restart the background monitor with the fresh connection
-        if not self.is_running:
-            self.keysight_monitor.start()
-
     def _deferred_hardware_init(self):
         """
         Initialize hardware connections AFTER GUI is displayed.
@@ -518,6 +477,15 @@ class MainWindow:
                         if self._initialize_hardware_readers():
                             print("[DEFERRED] Hardware readers initialized")
 
+                    # Initialize the analog power supply controller using the T8 handle.
+                    # No separate network connection is needed — the DAC/AIN channels on
+                    # the T8 are the sole interface once the J1 wiring is in place.
+                    if self.config.get('power_supply', {}).get('enabled', True):
+                        if self._initialize_power_supply():
+                            print("[DEFERRED] Analog power supply controller initialized")
+                        else:
+                            print("[DEFERRED] Analog PS init failed — running without PS")
+
                     # Update button states
                     self._update_connection_state(True)
                 else:
@@ -530,42 +498,12 @@ class MainWindow:
                 if self._connect_xgs600():
                     print("[DEFERRED] XGS-600 connected")
 
-            print("[DEFERRED] Hardware initialization (non-PS) complete")
+            print("[DEFERRED] Hardware initialization complete")
             self._hardware_init_attempted = True
-
-            # Connect to Keysight power supply in a background thread so it
-            # cannot block or crash the GUI if the network is unavailable.
-            if self.config.get('power_supply', {}).get('enabled', True):
-                def _ps_connect_bg():
-                    try:
-                        print("[DEFERRED-PS] Connecting to Keysight power supply...")
-                        if self.ps_connection.connect():
-                            print("[DEFERRED-PS] Power supply connected")
-                            # Schedule UI update back on the main thread
-                            self.root.after(0, self._on_ps_init_success)
-                        else:
-                            print("[DEFERRED-PS] Power supply not found — running without PS")
-                            # ps_controller remains None; GUI stays in Disconnected PS state
-                    except Exception as exc:
-                        print(f"[DEFERRED-PS] Power supply connection error (non-fatal): {exc}")
-                        # ps_controller remains None; GUI stays in Disconnected PS state
-
-                ps_thread = threading.Thread(target=_ps_connect_bg, daemon=True,
-                                             name="PS-init")
-                ps_thread.start()
 
         except Exception as exc:
             print(f"[DEFERRED] Hardware init error (non-fatal): {exc}")
             self._hardware_init_attempted = True
-
-    def _on_ps_init_success(self):
-        """
-        Called on the main thread after successful background PS connection.
-        Sets up the controller and starts the background monitor.
-        """
-        self._initialize_power_supply()
-        self.keysight_monitor.start()
-        print("[DEFERRED-PS] Keysight background monitor started")
 
     def _update_connection_state(self, connected):
         """Update UI to reflect connection state"""
@@ -911,7 +849,6 @@ class MainWindow:
             self.frg_count_var.set(str(len(self.config['frg702_gauges'])))
 
             # Set up Mock Power Supply
-            self.ps_connection.disconnect()
             self.ps_controller = MockPowerSupplyController()
             self.ps_panel.set_controller(self.ps_controller)
             self.safety_monitor.set_power_supply(self.ps_controller)
@@ -930,10 +867,8 @@ class MainWindow:
             else:
                 self.status_var.set("Connected")
                 self._initialize_hardware_readers()
-                # Attempt to auto-detect real power supply
-                self.ps_connection.resource_string = None
-                if self.ps_connection.connect():
-                    self._initialize_power_supply()
+                # Re-initialize the analog PS controller with the live T8 handle
+                self._initialize_power_supply()
 
         self._rebuild_sensor_panel()
         self._update_plot_settings()
@@ -1486,9 +1421,6 @@ class MainWindow:
 
         self.data_buffer.clear()
 
-        # Stop background monitor to avoid VISA conflicts with DAQ thread
-        self.keysight_monitor.stop()
-
         self.daq = DataAcquisition(
             config=self.config,
             tc_reader=self.tc_reader,
@@ -1532,10 +1464,6 @@ class MainWindow:
 
         if self.daq:
             self.daq.stop_fast_acquisition()
-
-        # Restart background monitor now that DAQ is no longer using the instrument
-        if self.ps_connection.is_connected():
-            self.keysight_monitor.start()
 
         self.start_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
@@ -1652,14 +1580,16 @@ class MainWindow:
             self.indicators['XGS600'].config(bg=color)
 
         gui_profiler.start("keysight_reconnect")
-        # Auto-connect Power Supply (only after initial deferred init)
-        ps_connected = self.ps_connection.is_connected() or \
+        # PS is connected whenever the T8 is connected and the controller is initialised.
+        # If T8 just reconnected but the controller is missing, create it now.
+        ps_connected = (lj_connected and self.ps_controller is not None) or \
                        (self._practice_mode and self.ps_controller is not None)
 
-        if not ps_connected and not self._practice_mode and self._hardware_init_attempted and self.config.get('power_supply', {}).get('enabled', True):
-            if (now - self._last_ps_reconnect_time) >= self._reconnect_interval:
-                self._last_ps_reconnect_time = now
-                self._background_ps_reconnect()
+        if lj_connected and self.ps_controller is None and not self._practice_mode \
+                and self._hardware_init_attempted \
+                and self.config.get('power_supply', {}).get('enabled', True):
+            self._initialize_power_supply()
+            ps_connected = self.ps_controller is not None
 
         color = '#00FF00' if ps_connected else '#333333'
         if 'PowerSupply' in self.indicators:
@@ -1683,26 +1613,26 @@ class MainWindow:
                         'PS_Current': daq_data.get('PS_Current')
                     }
                     self.ps_panel.update(ps_readings)
-                    
+
                     # Output state is now included in DAQ data
                     output_state = daq_data.get('PS_Output_On')
                     if output_state is not None:
                         self.ps_panel.update_output_state(output_state)
-                    
+
                     voltage = daq_data.get('PS_Voltage') if daq_data.get('PS_Voltage') is not None else 0.0
                     current = daq_data.get('PS_Current') if daq_data.get('PS_Current') is not None else 0.0
                 else:
-                    # Use cached data from background monitor (instant, no VISA I/O)
-                    cached_data = self.keysight_monitor.get_latest_data()
+                    # Analog reads are fast (< 1 ms), so call the controller directly
+                    # from the GUI thread when idle — no background polling thread needed.
+                    readings = self.ps_controller.get_readings()
                     ps_readings = {
-                        'PS_Voltage': cached_data['voltage'],
-                        'PS_Current': cached_data['current']
+                        'PS_Voltage': readings['PS_Voltage'],
+                        'PS_Current': readings['PS_Current'],
                     }
                     self.ps_panel.update(ps_readings)
-                    if cached_data['output_state'] is not None:
-                        self.ps_panel.update_output_state(cached_data['output_state'])
-                    voltage = cached_data['voltage'] if cached_data['voltage'] is not None else 0.0
-                    current = cached_data['current'] if cached_data['current'] is not None else 0.0
+                    self.ps_panel.update_output_state(readings['PS_Output_On'])
+                    voltage = readings['PS_Voltage'] if readings['PS_Voltage'] is not None else 0.0
+                    current = readings['PS_Current'] if readings['PS_Current'] is not None else 0.0
 
             # Feed V/I data into ramp panel's embedded plot
             if self.is_running:
@@ -1822,27 +1752,29 @@ class MainWindow:
 
     def _initialize_power_supply(self):
         try:
-            instrument = self.ps_connection.get_instrument()
+            handle = self.connection.get_handle()
+            if handle is None:
+                return False
+
             ps_config = self.config.get('power_supply', {})
 
-            self.ps_controller = PowerSupplyController(
-                instrument,
+            self.ps_controller = KeysightAnalogController(
+                handle,
+                rated_max_volts=ps_config.get('rated_max_volts', 60.0),
+                rated_max_amps=ps_config.get('rated_max_amps', 25.0),
                 voltage_limit=ps_config.get('default_voltage_limit', 20.0),
-                current_limit=ps_config.get('default_current_limit', 50.0)
+                current_limit=ps_config.get('default_current_limit', 50.0),
             )
 
             self.safety_monitor.set_power_supply(self.ps_controller)
             self.ramp_executor.set_power_supply(self.ps_controller)
             self.ps_panel.set_controller(self.ps_controller)
-            
-            # Update resource display
-            resource = self.ps_connection.get_resource_string()
-            if resource:
-                self.ps_resource_var.set(resource)
+            self.ps_resource_var.set("Analog (T8 DAC0/DAC1)")
 
-            print("Power supply initialized successfully")
+            print("Analog power supply controller initialized successfully")
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Failed to initialize analog PS controller: {e}")
             return False
 
     def _on_close(self):
@@ -1863,13 +1795,6 @@ class MainWindow:
                 self.ps_controller.set_voltage(0)
             except Exception:
                 pass
-
-        # Stop background monitor thread before disconnecting
-        if hasattr(self, 'keysight_monitor'):
-            self.keysight_monitor.stop()
-
-        if self.ps_connection:
-            self.ps_connection.disconnect()
 
         if self.xgs600:
             self.xgs600.disconnect()

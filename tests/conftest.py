@@ -2,8 +2,8 @@
 Shared pytest fixtures and configuration for TDS-T8 unit tests.
 
 This conftest.py provides automatic mocking of hardware dependencies
-(labjack, pyvisa, serial, tkinter, matplotlib) so that tests can run
-in any environment -- even without the physical hardware or a display.
+(labjack, serial, tkinter, matplotlib) so that tests can run in any
+environment -- even without the physical hardware or a display.
 
 Usage:
     Simply run ``pytest`` from the project root.  The mocks below are
@@ -27,11 +27,6 @@ _mock_labjack = MagicMock()
 _mock_labjack.ljm = _mock_ljm
 sys.modules.setdefault("labjack", _mock_labjack)
 sys.modules.setdefault("labjack.ljm", _mock_ljm)
-
-# ---- PyVISA ----
-_mock_pyvisa = MagicMock()
-_mock_pyvisa.Error = type("VisaError", (Exception,), {})
-sys.modules.setdefault("pyvisa", _mock_pyvisa)
 
 # ---- PySerial (used by xgs600_controller) ----
 _mock_serial = MagicMock()

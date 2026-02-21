@@ -2,7 +2,5 @@ labjack-ljm>=1.23.0
 matplotlib>=3.5.0
 numpy>=1.21.0
 pyserial>=3.5
-pyvisa>=1.13.0
-pyvisa-py>=0.7.0
 psutil>=5.9.0
 zeroconf>=0.131.0
