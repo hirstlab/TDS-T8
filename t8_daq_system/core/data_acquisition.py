@@ -48,13 +48,20 @@ class DataAcquisition:
         Read all sensors in one pass and return timestamp + readings dict.
 
         Returns:
-            (timestamp, all_readings, frg702_details) tuple
+            (timestamp, all_readings, tc_readings, frg702_details, raw_voltages) tuple
+
+            raw_voltages is a dict keyed by '<tc_name>_rawV' containing the
+            raw differential voltage read directly from the AIN# register
+            before the T8 extended-feature (EF) temperature conversion.
+            This is used for logging and the live pinout display so the user
+            can verify the physical wiring and conversion chain.
         """
         timestamp = time.time()
         tc_readings = {}
         frg702_readings = {}
         frg702_detail_readings = {}
         ps_readings = {}
+        raw_voltages = {}
 
         if self.practice_mode:
             # Generate simulated thermocouple data
@@ -63,6 +70,12 @@ class DataAcquisition:
                     t = time.time()
                     val = 20.0 + 5.0 * math.sin(t / 10.0) + random.uniform(-0.5, 0.5)
                     tc_readings[tc['name']] = val
+                    # Simulate raw TC voltage: typical range ±0.1V (100mV)
+                    # Approximate back-calculation from temperature for Type K
+                    # Just a plausible simulated value for practice mode
+                    raw_voltages[f"{tc['name']}_rawV"] = round(
+                        (val - 20.0) * 4.1e-5 + random.uniform(-2e-6, 2e-6), 8
+                    )
 
             # Generate simulated FRG-702 data
             for gauge in self.config.get('frg702_gauges', []):
@@ -92,6 +105,12 @@ class DataAcquisition:
             # Read real hardware
             if self.tc_reader:
                 tc_readings = self.tc_reader.read_all()
+                # Also read raw input voltages for signal-chain verification
+                try:
+                    raw_voltages = self.tc_reader.read_raw_voltages()
+                except Exception as e:
+                    print(f"Raw voltage read skipped: {e}")
+                    raw_voltages = {}
 
             if self.frg702_reader:
                 frg702_readings = self.frg702_reader.read_all()
@@ -101,7 +120,7 @@ class DataAcquisition:
                 ps_readings = self.ps_controller.get_readings()
 
         all_readings = {**tc_readings, **frg702_readings, **ps_readings}
-        return timestamp, all_readings, tc_readings, frg702_detail_readings
+        return timestamp, all_readings, tc_readings, frg702_detail_readings, raw_voltages
 
     def start_fast_acquisition(self, callback=None):
         """
@@ -123,7 +142,8 @@ class DataAcquisition:
                 loop_start = time.time()
 
                 try:
-                    timestamp, all_readings, tc_readings, frg702_details = self.read_all_sensors()
+                    timestamp, all_readings, tc_readings, frg702_details, raw_voltages = \
+                        self.read_all_sensors()
 
                     # Safety check
                     if self.safety_monitor and tc_readings:
@@ -132,7 +152,8 @@ class DataAcquisition:
                             self._acquisition_running = False
                             if callback:
                                 callback(timestamp, all_readings, tc_readings,
-                                         frg702_details, safety_shutdown=True)
+                                         frg702_details, safety_shutdown=True,
+                                         raw_voltages=raw_voltages)
                             break
 
                     # Ramp executor voltage update
@@ -147,7 +168,8 @@ class DataAcquisition:
                     # Deliver data via callback
                     if callback and all_readings:
                         callback(timestamp, all_readings, tc_readings,
-                                 frg702_details, safety_shutdown=False)
+                                 frg702_details, safety_shutdown=False,
+                                 raw_voltages=raw_voltages)
 
                 except Exception as e:
                     print(f"Error in acquisition loop: {e}")
