@@ -8,13 +8,10 @@ import os
 
 # ============================================================================
 # ENVIRONMENT VARIABLES — MUST BE FIRST, BEFORE ANY OTHER IMPORTS
-# These suppress slow pyvisa network discovery and zeroconf scanning on every
-# launch regardless of frozen/script mode.  USB is kept enabled for LabJack.
+# pyvisa is no longer used; power supply is controlled via analog I/O on the
+# LabJack T8 (DAC0/DAC1 for programming, AIN4/AIN5 for monitoring).
 # ============================================================================
-os.environ['PYVISA_PY_SKIP_TCPIP'] = '1'
-os.environ['PYVISA_PY_SKIP_HISLIP'] = '1'
-os.environ['PYVISA_PY_SKIP_USB']  = '0'    # Keep USB so LabJack still works
-os.environ['ZEROCONF_DISABLE']    = '1'
+os.environ['ZEROCONF_DISABLE'] = '1'
 
 # ============================================================================
 # FROZEN EXE OPTIMIZATIONS
