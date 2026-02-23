@@ -1,4 +1,4 @@
-"""
+r"""
 app_settings.py
 PURPOSE: Persistent application settings stored in the Windows Registry.
 
@@ -47,6 +47,13 @@ _DEFAULTS = {
     "turbo_pump_min_restart_delay_s": ("int", 30),
     "ps_voltage_limit":   ("float", 20.0),
     "ps_current_limit":   ("float", 50.0),
+    "frg_interface":      ("str",   "XGS600"),
+    "frg_pins":           ("str",   "AIN2,AIN3"),
+    "ps_interface":       ("str",   "Analog"),
+    "ps_voltage_pin":     ("str",   "DAC0"),
+    "ps_current_pin":     ("str",   "DAC1"),
+    "ps_voltage_monitor_pin": ("str", "AIN4"),
+    "ps_current_monitor_pin": ("str", "AIN5"),
 }
 
 
@@ -95,6 +102,13 @@ class AppSettings:
         self.turbo_pump_min_restart_delay_s: int = 30
         self.ps_voltage_limit: float = 20.0
         self.ps_current_limit: float = 50.0
+        self.frg_interface: str      = "XGS600"
+        self.frg_pins: str           = "AIN2,AIN3"
+        self.ps_interface: str       = "Analog"
+        self.ps_voltage_pin: str     = "DAC0"
+        self.ps_current_pin: str     = "DAC1"
+        self.ps_voltage_monitor_pin: str = "AIN4"
+        self.ps_current_monitor_pin: str = "AIN5"
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
@@ -185,6 +199,20 @@ class AppSettings:
             parts = []
         while len(parts) < count:
             parts.append(self.tc_type)
+        return parts[:count]
+
+    def get_frg_pin_list(self, count: int) -> list:
+        """Return a list of AIN pins for FRG gauges.
+        
+        Parses the ``frg_pins`` comma-separated string (e.g. ``"AIN2,AIN3"``),
+        padding with default AIN values (starting from AIN2 to avoid TCs by default).
+        """
+        if self.frg_pins:
+            parts = [p.strip() for p in self.frg_pins.split(",") if p.strip()]
+        else:
+            parts = []
+        while len(parts) < count:
+            parts.append(f"AIN{len(parts) + 2}")
         return parts[:count]
 
     def __repr__(self):

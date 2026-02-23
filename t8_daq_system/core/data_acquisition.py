@@ -209,11 +209,13 @@ class DataAcquisition:
         return self._acquisition_running
 
     def update_readers(self, tc_reader=None, frg702_reader=None,
-                       ps_controller=None):
-        """Update hardware reader references (e.g. after reconnection)."""
+                       ps_controller=None, config=None):
+        """Update hardware reader references and optionally config."""
         if tc_reader is not None:
             self.tc_reader = tc_reader
         if frg702_reader is not None:
             self.frg702_reader = frg702_reader
         if ps_controller is not None:
             self.ps_controller = ps_controller
+        if config is not None:
+            self.config = config

@@ -3,52 +3,12 @@ settings_dialog.py
 PURPOSE: Settings dialog window for configuring persistent application settings.
 
 Opened via the Settings button in the main control panel.  Features a tabbed
-interface with presets, sensor configuration, hardware settings, and axis scales.
+interface with sensor configuration, hardware settings, and axis scales.
 All fields map directly to AppSettings attributes.
 """
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
-
-
-PRESETS = {
-    "Basic Setup": {
-        "tc_count": 1,
-        "tc_types": "C",
-        "tc_unit": "C",
-        "frg_count": 1,
-        "p_unit": "mbar",
-        "sample_rate_ms": 1000,
-        "display_rate_ms": 1000,
-    },
-    "High Frequency": {
-        "tc_count": 2,
-        "tc_types": "K,K",
-        "tc_unit": "C",
-        "frg_count": 1,
-        "p_unit": "Torr",
-        "sample_rate_ms": 100,
-        "display_rate_ms": 250,
-    },
-    "Multi-Sensor": {
-        "tc_count": 4,
-        "tc_types": "K,K,K,K",
-        "tc_unit": "C",
-        "frg_count": 2,
-        "p_unit": "mbar",
-        "sample_rate_ms": 500,
-        "display_rate_ms": 500,
-    },
-    "Lab Default": {
-        "tc_count": 1,
-        "tc_types": "C",
-        "tc_unit": "C",
-        "frg_count": 1,
-        "p_unit": "mbar",
-        "sample_rate_ms": 1000,
-        "display_rate_ms": 1000,
-    },
-}
 
 
 class SettingsDialog(tk.Toplevel):
@@ -68,8 +28,8 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, settings, on_save_callback=None):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("750x750")
-        self.minsize(600, 600)
+        self.geometry("500x800")
+        self.minsize(500, 600)
         self.resizable(True, True)
         self.grab_set()
         self.transient(parent)
@@ -96,126 +56,12 @@ class SettingsDialog(tk.Toplevel):
         notebook = ttk.Notebook(self)
         notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
 
-        self._build_presets_tab(notebook)
         self._build_sensor_tab(notebook)
         self._build_hardware_tab(notebook)
         self._build_scales_tab(notebook)
         self._build_paths_tab(notebook)
 
         self._build_button_frame()
-
-    def _build_presets_tab(self, notebook):
-        """Tab with preset configurations."""
-        tab = ttk.Frame(notebook, padding=15)
-        notebook.add(tab, text="Presets")
-
-        ttk.Label(tab, text="Quick Configuration Presets", 
-                 font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 10))
-
-        preset_frame = ttk.Frame(tab)
-        preset_frame.pack(fill=tk.X, pady=10)
-
-        ttk.Label(preset_frame, text="Load Preset:").pack(side=tk.LEFT, padx=5)
-        self._preset_var = tk.StringVar(value="Basic Setup")
-        preset_combo = ttk.Combobox(preset_frame, textvariable=self._preset_var,
-                                   values=list(PRESETS.keys()), state="readonly", width=20)
-        preset_combo.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(preset_frame, text="Apply", 
-                  command=self._apply_preset).pack(side=tk.LEFT, padx=5)
-
-        ttk.Separator(tab, orient='horizontal').pack(fill=tk.X, pady=10)
-
-        info_frame = ttk.LabelFrame(tab, text="Preset Information", padding=10)
-        info_frame.pack(fill=tk.BOTH, expand=True, pady=5)
-
-        self._preset_info = tk.Text(info_frame, height=12, width=50, 
-                                    state=tk.DISABLED, wrap=tk.WORD)
-        self._preset_info.pack(fill=tk.BOTH, expand=True)
-
-        self._update_preset_info()
-        preset_combo.bind("<<ComboboxSelected>>", lambda e: self._update_preset_info())
-
-        ttk.Separator(tab, orient='horizontal').pack(fill=tk.X, pady=10)
-
-        ttk.Label(tab, text="Create Custom Preset", 
-                 font=('Arial', 11, 'bold')).pack(anchor='w', pady=(10, 5))
-
-        save_frame = ttk.LabelFrame(tab, text="Save Current Settings as Preset", padding=10)
-        save_frame.pack(fill=tk.X, pady=5)
-
-        ttk.Label(save_frame, text="Preset Name:").pack(side=tk.LEFT, padx=5)
-        self._custom_preset_var = tk.StringVar()
-        ttk.Entry(save_frame, textvariable=self._custom_preset_var, width=25).pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-        ttk.Button(save_frame, text="Save as Preset", 
-                  command=self._save_custom_preset).pack(side=tk.LEFT, padx=5)
-
-    def _update_preset_info(self):
-        """Display current preset information."""
-        preset_name = self._preset_var.get()
-        preset = PRESETS.get(preset_name, {})
-        
-        info = f"Preset: {preset_name}\n\n"
-        if preset:
-            for key, value in preset.items():
-                label = key.replace('_', ' ').title()
-                info += f"  • {label}: {value}\n"
-        
-        self._preset_info.config(state=tk.NORMAL)
-        self._preset_info.delete(1.0, tk.END)
-        self._preset_info.insert(1.0, info)
-        self._preset_info.config(state=tk.DISABLED)
-
-    def _apply_preset(self):
-        """Apply selected preset to current settings."""
-        preset_name = self._preset_var.get()
-        preset = PRESETS.get(preset_name)
-        if not preset:
-            return
-
-        for key, value in preset.items():
-            if key == "tc_types":
-                # Special handling: rebuild per-TC type rows from CSV string
-                types = [t.strip() for t in str(value).split(",") if t.strip()]
-                # Update count var first so rows match
-                try:
-                    self._tc_count_var.set(str(preset.get("tc_count", len(types))))
-                except Exception:
-                    pass
-                self._rebuild_tc_type_rows(len(types))
-                for i, var in enumerate(self._tc_type_vars):
-                    if i < len(types):
-                        var.set(types[i])
-            elif hasattr(self, f'_{key}_var'):
-                var = getattr(self, f'_{key}_var')
-                var.set(str(value))
-
-        messagebox.showinfo("Preset Applied",
-                           f"Preset '{preset_name}' has been applied.", parent=self)
-
-    def _save_custom_preset(self):
-        """Save current settings as a new custom preset."""
-        preset_name = self._custom_preset_var.get().strip()
-        if not preset_name:
-            messagebox.showwarning("Empty Name", 
-                                  "Please enter a preset name.", parent=self)
-            return
-
-        preset_data = {
-            "tc_count": int(self._tc_count_var.get()),
-            "tc_types": ",".join(v.get() for v in self._tc_type_vars),
-            "tc_unit": self._tc_unit_var.get(),
-            "frg_count": int(self._frg_count_var.get()),
-            "p_unit": self._p_unit_var.get(),
-            "sample_rate_ms": int(self._sample_rate_ms_var.get()),
-            "display_rate_ms": int(self._display_rate_ms_var.get()),
-        }
-
-        PRESETS[preset_name] = preset_data
-        self._custom_preset_var.set("")
-
-        messagebox.showinfo("Preset Saved", 
-                           f"Preset '{preset_name}' has been saved.", parent=self)
 
     def _build_sensor_tab(self, notebook):
         """Tab for sensor configuration."""
@@ -250,6 +96,10 @@ class SettingsDialog(tk.Toplevel):
                                ["0", "1", "2"], row=0)
         self._create_option_row(frg_frame, "Pressure Unit:", "p_unit", 
                                ["mbar", "Torr", "Pa"], row=1)
+        self._create_option_row(frg_frame, "Interface:", "frg_interface",
+                               ["XGS600", "Analog"], row=2)
+        self._create_entry_row(frg_frame, "AIN Pins (CSV):", "frg_pins", 
+                               width=15, row=3)
 
     _TC_TYPE_VALUES = ["K", "J", "T", "E", "R", "S", "B", "N", "C"]
 
@@ -403,6 +253,23 @@ class SettingsDialog(tk.Toplevel):
         self._visa_var = tk.StringVar()
         ttk.Entry(hw_frame, textvariable=self._visa_var, width=45).pack(fill=tk.X, pady=5)
 
+        ttk.Label(tab, text="Power Supply Controller", 
+                 font=('Arial', 11, 'bold')).pack(anchor='w', pady=(15, 10))
+
+        ps_int_frame = ttk.LabelFrame(tab, text="Power Supply Interface", padding=10)
+        ps_int_frame.pack(fill=tk.X, pady=5)
+
+        self._create_option_row(ps_int_frame, "Interface Type:", "ps_interface",
+                               ["Analog", "VISA"], row=0)
+        self._create_entry_row(ps_int_frame, "Voltage Prog (DAC):", "ps_voltage_pin", 
+                               width=10, row=1)
+        self._create_entry_row(ps_int_frame, "Current Prog (DAC):", "ps_current_pin", 
+                               width=10, row=2)
+        self._create_entry_row(ps_int_frame, "Voltage Mon (AIN):", "ps_voltage_monitor_pin", 
+                               width=10, row=3)
+        self._create_entry_row(ps_int_frame, "Current Mon (AIN):", "ps_current_monitor_pin", 
+                               width=10, row=4)
+
         ttk.Label(tab, text="Logging", 
                  font=('Arial', 11, 'bold')).pack(anchor='w', pady=(15, 10))
 
@@ -454,14 +321,17 @@ class SettingsDialog(tk.Toplevel):
             row=row, column=0, columnspan=2, sticky='w', padx=5, pady=5)
 
     def _build_button_frame(self):
-        """Create Save/Cancel buttons at the bottom."""
+        """Create Save/Cancel/Apply buttons at the bottom."""
         btn_frame = ttk.Frame(self)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
 
-        ttk.Button(btn_frame, text="Save", command=self._on_save_click,
-                  width=15).pack(side=tk.LEFT, padx=5)
+        # Pack from right to left so they appear in the bottom right corner
         ttk.Button(btn_frame, text="Cancel", command=self.destroy,
-                  width=15).pack(side=tk.LEFT, padx=5)
+                  width=12).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Save", command=self._on_save_click,
+                  width=12).pack(side=tk.RIGHT, padx=5)
+        ttk.Button(btn_frame, text="Apply", command=self._on_apply_click,
+                  width=12).pack(side=tk.RIGHT, padx=5)
 
     def _load_values(self):
         """Populate widgets from AppSettings."""
@@ -499,9 +369,16 @@ class SettingsDialog(tk.Toplevel):
         self._ps_current_limit_var.set(str(s.ps_current_limit))
         self._visa_var.set(s.visa_resource)
         self._log_folder_var.set(s.log_folder)
+        self._frg_interface_var.set(s.frg_interface)
+        self._frg_pins_var.set(s.frg_pins)
+        self._ps_interface_var.set(s.ps_interface)
+        self._ps_voltage_pin_var.set(s.ps_voltage_pin)
+        self._ps_current_pin_var.set(s.ps_current_pin)
+        self._ps_voltage_monitor_pin_var.set(s.ps_voltage_monitor_pin)
+        self._ps_current_monitor_pin_var.set(s.ps_current_monitor_pin)
 
-    def _on_save_click(self):
-        """Validate and save all settings."""
+    def _save_settings_from_gui(self):
+        """Internal helper to read all GUI vars and write to AppSettings."""
         s = self._settings
         try:
             s.tc_count = int(self._tc_count_var.get())
@@ -533,10 +410,17 @@ class SettingsDialog(tk.Toplevel):
             s.ps_current_limit = float(self._ps_current_limit_var.get())
             s.visa_resource = self._visa_var.get().strip()
             s.log_folder = self._log_folder_var.get().strip()
+            s.frg_interface = self._frg_interface_var.get()
+            s.frg_pins = self._frg_pins_var.get().strip()
+            s.ps_interface = self._ps_interface_var.get()
+            s.ps_voltage_pin = self._ps_voltage_pin_var.get().strip()
+            s.ps_current_pin = self._ps_current_pin_var.get().strip()
+            s.ps_voltage_monitor_pin = self._ps_voltage_monitor_pin_var.get().strip()
+            s.ps_current_monitor_pin = self._ps_current_monitor_pin_var.get().strip()
         except ValueError as exc:
             messagebox.showerror("Invalid Value", 
                                 f"Please check your entries:\n{exc}", parent=self)
-            return
+            return False
 
         s.save()
         self._result_saved = True
@@ -544,10 +428,18 @@ class SettingsDialog(tk.Toplevel):
         if callable(self._on_save):
             try:
                 self._on_save()
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"Error in on_save_callback: {e}")
+        return True
 
-        self.destroy()
+    def _on_save_click(self):
+        """Validate and save all settings, then close."""
+        if self._save_settings_from_gui():
+            self.destroy()
+
+    def _on_apply_click(self):
+        """Validate and save settings without closing."""
+        self._save_settings_from_gui()
 
     def _browse_log_folder(self):
         """Open folder browser dialog."""

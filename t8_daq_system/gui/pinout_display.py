@@ -80,6 +80,7 @@ class PinoutDisplay(tk.Toplevel):
         # Latest readings supplied by main_window
         self._all_readings   = {}   # {sensor_name: value}
         self._raw_voltages   = {}   # {tc_name + '_rawV': volts}
+        self._latest_frg702_details = {} # {frg_name: detail_dict}
 
         # Widget references updated per rebuild (name -> dict of labels/dots)
         self._tc_rows   = {}   # tc_name -> {'dot': Canvas, 'temp': Label, 'raw': Label}
@@ -100,7 +101,8 @@ class PinoutDisplay(tk.Toplevel):
     # Public API
     # ──────────────────────────────────────────────────────────────────────────
 
-    def update_readings(self, all_readings: dict, raw_voltages: dict | None = None):
+    def update_readings(self, all_readings: dict, raw_voltages: dict | None = None,
+                        frg702_details: dict | None = None):
         """
         Store the latest sensor readings so the periodic refresh can display them.
 
@@ -111,10 +113,13 @@ class PinoutDisplay(tk.Toplevel):
         raw_voltages  : dict  {tc_name + '_rawV': volts}  optional raw TC
                               voltages read directly from AIN# registers before
                               the T8's extended-feature conversion.
+        frg702_details : dict {frg_name: {'pressure': val, 'status': s, 'mode': m, 'voltage': v}}
         """
         self._all_readings = all_readings or {}
         if raw_voltages is not None:
             self._raw_voltages = raw_voltages
+        if frg702_details is not None:
+            self._latest_frg702_details = frg702_details
 
     def refresh_config(self, config: dict, app_settings):
         """Rebuild the display after a config/settings change."""
@@ -348,27 +353,38 @@ class PinoutDisplay(tk.Toplevel):
     # ── XGS-600 / FRG-702 ────────────────────────────────────────────────────
 
     def _build_xgs_section(self):
-        self._section("XGS-600 Controller  —  RS-232  (FRG-702 Gauges)")
+        interface = self._config.get('frg_interface', 'XGS600')
+        if interface == 'Analog':
+            self._section("Leybold FRG-702 Gauges  —  Analog Input (LabJack T8)")
+        else:
+            self._section("XGS-600 Controller  —  RS-232  (FRG-702 Gauges)")
 
         s = self._settings
         f = ttk.Frame(self._content_frame)
         f.pack(fill=tk.X, padx=12, pady=2)
 
-        # Serial port info box
-        info = ttk.LabelFrame(f, text="Serial Port Config", padding=6)
-        info.pack(fill=tk.X, pady=(0, 6))
-        for label, value in [
-            ("COM Port:",  s.xgs600_port),
-            ("Baud Rate:", str(s.xgs600_baudrate)),
-            ("Timeout:",   f"{s.xgs600_timeout} s"),
-            ("Address:",   s.xgs600_address),
-        ]:
-            r = ttk.Frame(info)
-            r.pack(fill=tk.X, pady=1)
-            ttk.Label(r, text=label, width=14, anchor='w',
-                      font=_BOLD).pack(side=tk.LEFT, padx=2)
-            ttk.Label(r, text=value,  anchor='w',
-                      font=_MONO).pack(side=tk.LEFT)
+        if interface != 'Analog':
+            # Serial port info box
+            info = ttk.LabelFrame(f, text="Serial Port Config", padding=6)
+            info.pack(fill=tk.X, pady=(0, 6))
+            for label, value in [
+                ("COM Port:",  s.xgs600_port),
+                ("Baud Rate:", str(s.xgs600_baudrate)),
+                ("Timeout:",   f"{s.xgs600_timeout} s"),
+                ("Address:",   s.xgs600_address),
+            ]:
+                r = ttk.Frame(info)
+                r.pack(fill=tk.X, pady=1)
+                ttk.Label(r, text=label, width=14, anchor='w',
+                          font=_BOLD).pack(side=tk.LEFT, padx=2)
+                ttk.Label(r, text=value,  anchor='w',
+                          font=_MONO).pack(side=tk.LEFT)
+        else:
+            # Analog interface info
+            info = ttk.LabelFrame(f, text="Analog Interface (AIN)", padding=6)
+            info.pack(fill=tk.X, pady=(0, 6))
+            ttk.Label(info, text="Gauges are read directly as analog voltages via LabJack T8 pins.",
+                      font=('Arial', 8)).pack(anchor='w', padx=5, pady=2)
 
         gauges = self._config.get('frg702_gauges', [])
         if not gauges:
@@ -379,7 +395,10 @@ class PinoutDisplay(tk.Toplevel):
         # Gauge assignment table
         hdr_row = ttk.Frame(f)
         hdr_row.pack(fill=tk.X)
-        for txt, w in [('', 2), ('XGS-600 Code', 14), ('Name', 18),
+        
+        col1_hdr = 'T8 Pin' if interface == 'Analog' else 'XGS-600 Code'
+        
+        for txt, w in [('', 2), (col1_hdr, 14), ('Name', 18),
                        ('Units', 8), ('Live Pressure', 18)]:
             ttk.Label(hdr_row, text=txt, font=_BOLD,
                       width=w, anchor='w').pack(side=tk.LEFT, padx=2)
@@ -393,7 +412,10 @@ class PinoutDisplay(tk.Toplevel):
             row.pack(fill=tk.X, pady=1)
             dot  = _dot(row)
             dot.pack(side=tk.LEFT, padx=(2, 4))
-            for val, w in [(gauge['sensor_code'], 14), (name, 18),
+            
+            col1_val = gauge.get('pin', 'N/A') if interface == 'Analog' else gauge['sensor_code']
+            
+            for val, w in [(col1_val, 14), (name, 18),
                            (gauge.get('units', 'mbar'), 8)]:
                 ttk.Label(row, text=val, width=w, anchor='w',
                           font=_MONO).pack(side=tk.LEFT, padx=2)
@@ -405,7 +427,12 @@ class PinoutDisplay(tk.Toplevel):
     # ── Power Supply ──────────────────────────────────────────────────────────
 
     def _build_ps_section(self):
-        self._section("Keysight N5761A  —  VISA / Ethernet")
+        interface = self._config.get('power_supply', {}).get('interface', 'Analog')
+        
+        if interface == 'Analog':
+            self._section("Keysight N5700 Series  —  Analog Control (LabJack T8)")
+        else:
+            self._section("Keysight N5761A  —  VISA / Ethernet")
 
         s    = self._settings
         cfg  = self._config.get('power_supply', {})
@@ -417,13 +444,25 @@ class PinoutDisplay(tk.Toplevel):
         info = ttk.LabelFrame(f, text="Connection & Safety Limits", padding=6)
         info.pack(fill=tk.X, pady=2)
 
-        for label, value in [
-            ("VISA Resource:",  visa),
+        status_items = []
+        if interface == 'Analog':
+            status_items = [
+                ("Voltage Prog:",   s.ps_voltage_pin),
+                ("Current Prog:",   s.ps_current_pin),
+                ("Voltage Mon:",    s.ps_voltage_monitor_pin),
+                ("Current Mon:",    s.ps_current_monitor_pin),
+            ]
+        else:
+            status_items = [("VISA Resource:",  visa)]
+            
+        status_items += [
             ("Voltage Limit:",  f"{s.ps_voltage_limit} V"),
             ("Current Limit:",  f"{s.ps_current_limit} A"),
             ("V Range (plot):", f"{s.ps_v_range_min} – {s.ps_v_range_max} V"),
             ("I Range (plot):", f"{s.ps_i_range_min} – {s.ps_i_range_max} A"),
-        ]:
+        ]
+
+        for label, value in status_items:
             r = ttk.Frame(info)
             r.pack(fill=tk.X, pady=1)
             ttk.Label(r, text=label, width=18, anchor='w',
@@ -483,7 +522,11 @@ class PinoutDisplay(tk.Toplevel):
 
         # FRG-702 rows
         for name, widgets in self._frg_rows.items():
-            val = self._all_readings.get(name)
+            details = self._latest_frg702_details.get(name, {})
+            val = details.get('pressure')
+            mode = details.get('mode', 'Unknown')
+            voltage = details.get('voltage')
+            
             dot_color = '#00CC00' if val is not None else '#333333'
             try:
                 widgets['dot'].config(bg=dot_color)
@@ -491,8 +534,12 @@ class PinoutDisplay(tk.Toplevel):
                 continue
 
             if val is not None:
+                text = f"{val:.3e}"
+                if mode == 'Analog' and voltage is not None:
+                    text += f" ({voltage:.3f} V)"
+                
                 widgets['val'].config(
-                    text=f"{val:.3e}",
+                    text=text,
                     foreground='#1a5f7a'
                 )
             else:

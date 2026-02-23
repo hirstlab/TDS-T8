@@ -45,7 +45,9 @@ class KeysightAnalogController:
     _AIN_GND_REF = 199
 
     def __init__(self, handle, rated_max_volts=60.0, rated_max_amps=25.0,
-                 voltage_limit=None, current_limit=None):
+                 voltage_limit=None, current_limit=None,
+                 voltage_pin="DAC0", current_pin="DAC1",
+                 voltage_monitor_pin="AIN4", current_monitor_pin="AIN5"):
         """
         Initialize the analog power supply controller.
 
@@ -59,12 +61,22 @@ class KeysightAnalogController:
                              Defaults to rated_max_volts.
             current_limit:   Maximum allowed current setpoint (software guard).
                              Defaults to rated_max_amps.
+            voltage_pin:     LJM register for voltage programming (e.g. "DAC0")
+            current_pin:     LJM register for current programming (e.g. "DAC1")
+            voltage_monitor_pin: LJM register for voltage monitoring (e.g. "AIN4")
+            current_monitor_pin: LJM register for current monitoring (e.g. "AIN5")
         """
         self.handle = handle
         self.rated_max_volts = rated_max_volts
         self.rated_max_amps = rated_max_amps
         self.voltage_limit = voltage_limit if voltage_limit is not None else rated_max_volts
         self.current_limit = current_limit if current_limit is not None else rated_max_amps
+        
+        # Override class defaults with instance-specific pins
+        self._DAC_VOLTAGE = voltage_pin
+        self._DAC_CURRENT = current_pin
+        self._AIN_VOLTAGE = voltage_monitor_pin
+        self._AIN_CURRENT = current_monitor_pin
 
         if self.handle is not None:
             self._configure_ain_channels()
@@ -75,10 +87,10 @@ class KeysightAnalogController:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _configure_ain_channels(self):
-        """Configure AIN4 and AIN5 for single-ended (GND-referenced) mode."""
+        """Configure AIN channels for single-ended (GND-referenced) mode."""
         try:
-            ljm.eWriteName(self.handle, "AIN4_NEGATIVE_CH", self._AIN_GND_REF)
-            ljm.eWriteName(self.handle, "AIN5_NEGATIVE_CH", self._AIN_GND_REF)
+            ljm.eWriteName(self.handle, f"{self._AIN_VOLTAGE}_NEGATIVE_CH", self._AIN_GND_REF)
+            ljm.eWriteName(self.handle, f"{self._AIN_CURRENT}_NEGATIVE_CH", self._AIN_GND_REF)
         except Exception:
             pass  # Non-fatal; default config is usually single-ended anyway
 

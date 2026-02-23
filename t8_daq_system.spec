@@ -306,7 +306,7 @@ exe = EXE(
     [],          # Binaries go to COLLECT, not here
     exclude_binaries=True,  # Enable folder mode for faster startup
     name='T8_DAQ_System',
-    debug=False,
+    debug=True,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,   # Disable UPX - compression causes DLL decompression overhead

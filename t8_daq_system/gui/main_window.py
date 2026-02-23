@@ -85,7 +85,7 @@ gui_profiler = GUIProfiler()
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
 from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.xgs600_controller import XGS600Controller
-from t8_daq_system.hardware.frg702_reader import FRG702Reader
+from t8_daq_system.hardware.frg702_reader import FRG702Reader, FRG702AnalogReader
 from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 from t8_daq_system.control.ramp_executor import RampExecutor
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
@@ -358,10 +358,12 @@ class MainWindow:
 
         # Build FRG-702 list
         frg702_gauges = []
+        frg_pin_list = s.get_frg_pin_list(s.frg_count)
         for i in range(s.frg_count):
             frg702_gauges.append({
                 "name": f"FRG702_{i+1}",
                 "sensor_code": f"T{i+1}",
+                "pin": frg_pin_list[i],
                 "units": s.p_unit,
                 "enabled": True
             })
@@ -372,11 +374,26 @@ class MainWindow:
             "device": {"type": "T8", "connection": "USB", "identifier": "ANY"},
             "thermocouples": thermocouples,
             "frg702_gauges": frg702_gauges,
+            "xgs600": {
+                "enabled": s.frg_interface == "XGS600",
+                "port": s.xgs600_port,
+                "baudrate": s.xgs600_baudrate,
+                "timeout": s.xgs600_timeout,
+                "address": s.xgs600_address
+            },
+            "frg_interface": s.frg_interface,
             "power_supply": {
                 "enabled": True,
+                "interface": s.ps_interface,
                 "visa_resource": visa or None,
-                "default_voltage_limit": 20.0,
-                "default_current_limit": 50.0,
+                "voltage_pin": s.ps_voltage_pin,
+                "current_pin": s.ps_current_pin,
+                "voltage_monitor_pin": s.ps_voltage_monitor_pin,
+                "current_monitor_pin": s.ps_current_monitor_pin,
+                "rated_max_volts": 60.0,
+                "rated_max_amps": 25.0,
+                "default_voltage_limit": s.ps_voltage_limit,
+                "default_current_limit": s.ps_current_limit,
                 "safety": {
                     "max_temperature": 2300,
                     "watchdog_sensor": "TC_1" if s.tc_count > 0 else None,
@@ -1091,44 +1108,26 @@ class MainWindow:
             self.status_var.set("Disconnected")
 
     def _on_config_change(self):
-        new_tc_count = int(self.tc_count_var.get())
-        new_tc_unit = self.t_unit_var.get()
-        new_frg_count = int(self.frg_count_var.get())
+        """
+        Rebuild internal config dictionary from AppSettings and refresh hardware
+        readers.  This ensures that the Settings dialog is the ultimate source
+        of truth and that all configuration flows through a single path.
+        """
+        # Re-build the entire config dict from settings
+        self.config = self._build_config_from_settings(self._app_settings)
 
-        if new_tc_count > 7:
-            messagebox.showwarning("Config Limit", "Maximum total sensors allowed is 7.\nAdjusting counts to fit limit.")
-            new_tc_count = 7
-            self.tc_count_var.set(str(new_tc_count))
-
-        # Use per-TC types stored in settings (falls back to tc_type default)
-        tc_type_list = self._app_settings.get_tc_type_list(new_tc_count)
-
-        old_tcs = {tc['name']: tc for tc in self.config['thermocouples']}
-        self.config['thermocouples'] = []
-        for i in range(new_tc_count):
-            name = f"TC_{i+1}"
-            self.config['thermocouples'].append({
-                "name": name,
-                "channel": i,
-                "type": tc_type_list[i],
-                "units": new_tc_unit,
-                "enabled": True
-            })
-
-        # Update FRG config
-        old_frgs = {g['name']: g for g in self.config.get('frg702_gauges', [])}
-        self.config['frg702_gauges'] = []
-        for i in range(new_frg_count):
-            name = f"FRG702_{i+1}"
-            self.config['frg702_gauges'].append({
-                "name": name,
-                "sensor_code": f"T{i+1}",
-                "units": self.p_unit_var.get(),
-                "enabled": True
-            })
+        # Sync GUI vars (for historical reasons / other panels that watch them)
+        self.tc_count_var.set(str(len(self.config['thermocouples'])))
+        self.frg_count_var.set(str(len(self.config.get('frg702_gauges', []))))
 
         if self.connection and self.connection.is_connected():
             self._initialize_hardware_readers()
+            # Also re-initialize PS controller if it's using the T8 handles
+            if self.config.get('power_supply', {}).get('interface') == "Analog":
+                self._initialize_power_supply()
+        elif self.daq:
+            # If not connected but daq exists (e.g. practice mode), update config
+            self.daq.update_readers(config=self.config)
 
         self._configure_safety_monitor()
         self._rebuild_sensor_panel()
@@ -1407,7 +1406,11 @@ class MainWindow:
             if hasattr(self, '_pinout_window') and self._pinout_window is not None:
                 try:
                     if self._pinout_window.winfo_exists():
-                        self._pinout_window.update_readings(all_readings, raw_voltages)
+                        self._pinout_window.update_readings(
+                            all_readings=all_readings,
+                            raw_voltages=raw_voltages,
+                            frg702_details=frg702_details
+                        )
                 except tk.TclError:
                     self._pinout_window = None
 
@@ -1709,9 +1712,25 @@ class MainWindow:
             handle = self.connection.get_handle()
             self.tc_reader = ThermocoupleReader(handle, self.config['thermocouples'])
 
+            # Handle FRG702 Analog transition
+            if self.config.get('frg_interface') == "Analog":
+                frg702_config = self.config.get('frg702_gauges', [])
+                if frg702_config:
+                    self.frg702_reader = FRG702AnalogReader(handle, frg702_config)
+                    print("Analog FRG-702 reader initialized via LabJack AIN")
+
+            # Update live DAQ engine if running
+            if self.daq:
+                self.daq.update_readers(
+                    tc_reader=self.tc_reader,
+                    frg702_reader=self.frg702_reader,
+                    config=self.config
+                )
+
             self._check_connections()
             return True
-        except Exception:
+        except Exception as e:
+            print(f"Error initializing hardware readers: {e}")
             return False
 
     def _connect_xgs600(self):
@@ -1734,6 +1753,10 @@ class MainWindow:
             if frg702_config:
                 self.frg702_reader = FRG702Reader(self.xgs600, frg702_config)
 
+            # Update live DAQ engine if running
+            if self.daq:
+                self.daq.update_readers(frg702_reader=self.frg702_reader)
+
             print("XGS-600 controller connected, FRG-702 reader initialized")
             return True
         except Exception:
@@ -1754,12 +1777,23 @@ class MainWindow:
                 rated_max_amps=ps_config.get('rated_max_amps', 25.0),
                 voltage_limit=ps_config.get('default_voltage_limit', 20.0),
                 current_limit=ps_config.get('default_current_limit', 50.0),
+                voltage_pin=ps_config.get('voltage_pin', "DAC0"),
+                current_pin=ps_config.get('current_pin', "DAC1"),
+                voltage_monitor_pin=ps_config.get('voltage_monitor_pin', "AIN4"),
+                current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5")
             )
+
+            # Update live DAQ engine if running
+            if self.daq:
+                self.daq.update_readers(ps_controller=self.ps_controller)
 
             self.safety_monitor.set_power_supply(self.ps_controller)
             self.ramp_executor.set_power_supply(self.ps_controller)
             self.ps_panel.set_controller(self.ps_controller)
-            self.ps_resource_var.set("Analog (T8 DAC0/DAC1)")
+            
+            v_pin = ps_config.get('voltage_pin', 'DAC0')
+            i_pin = ps_config.get('current_pin', 'DAC1')
+            self.ps_resource_var.set(f"Analog ({v_pin}/{i_pin})")
 
             print("Analog power supply controller initialized successfully")
             return True

@@ -26,6 +26,8 @@ MODE_COMBINED = 'Combined'
 MODE_UNKNOWN = 'Unknown'
 
 
+from labjack import ljm
+
 class FRG702Reader:
     def __init__(self, xgs600_controller, frg702_config_list):
         """
@@ -193,3 +195,62 @@ class FRG702Reader:
     def get_enabled_channels(self):
         """Get list of enabled FRG-702 gauge names."""
         return [g['name'] for g in self.gauges if g['enabled']]
+
+
+class FRG702AnalogReader:
+    """Read Leybold FRG-702 gauges via LabJack T8 analog inputs."""
+    
+    def __init__(self, handle, frg702_config_list):
+        """
+        Initialize FRG-702 analog reader.
+        
+        Args:
+            handle: LJM device handle
+            frg702_config_list: List of gauge configs (must include 'pin' key)
+        """
+        self.handle = handle
+        self.gauges = frg702_config_list
+
+    def read_all(self):
+        """Read all enabled gauges. Returns {name: pressure_mbar}."""
+        readings = {}
+        for gauge in self.gauges:
+            if not gauge.get('enabled', True):
+                continue
+            
+            try:
+                voltage = ljm.eReadName(self.handle, gauge['pin'])
+                pressure, _ = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                readings[gauge['name']] = pressure
+            except Exception as e:
+                print(f"Error reading analog gauge {gauge['name']}: {e}")
+                readings[gauge['name']] = None
+        return readings
+
+    def read_all_with_status(self):
+        """Read all enabled gauges with status and voltage."""
+        readings = {}
+        for gauge in self.gauges:
+            if not gauge.get('enabled', True):
+                continue
+            
+            try:
+                voltage = ljm.eReadName(self.handle, gauge['pin'])
+                pressure, status = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                readings[gauge['name']] = {
+                    'pressure': pressure,
+                    'status': status,
+                    'mode': 'Analog',
+                    'voltage': voltage
+                }
+            except Exception as e:
+                readings[gauge['name']] = {
+                    'pressure': None,
+                    'status': 'error',
+                    'mode': 'Analog',
+                    'voltage': None
+                }
+        return readings
+
+    def get_enabled_channels(self):
+        return [g['name'] for g in self.gauges if g.get('enabled', True)]
