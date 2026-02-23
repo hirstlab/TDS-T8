@@ -100,6 +100,7 @@ from t8_daq_system.gui.power_supply_panel import PowerSupplyPanel
 from t8_daq_system.gui.ramp_panel import RampPanel
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog, AxisScaleDialog
 from t8_daq_system.gui.settings_dialog import SettingsDialog
+from t8_daq_system.gui.pinout_display import PinoutDisplay
 from t8_daq_system.core.data_acquisition import DataAcquisition
 from t8_daq_system.detailed_profiler import mainwindow_profiler as profiler
 from t8_daq_system.settings.app_settings import AppSettings
@@ -406,31 +407,11 @@ class MainWindow:
             }
         }
 
-    def _save_quick_config_to_settings(self):
-        """
-        Persist the current Quick Config dropdown values to the registry.
-        Called whenever any Quick Config widget changes.
-        """
-        s = self._app_settings
-        s.tc_count        = int(self.tc_count_var.get())
-        s.tc_unit         = self.t_unit_var.get()
-        s.frg_count       = int(self.frg_count_var.get())
-        s.p_unit          = self.p_unit_var.get()
-        # Parse "1000ms" → 1000
-        try:
-            s.sample_rate_ms  = int(self.sample_rate_var.get().replace('ms', ''))
-        except ValueError:
-            pass
-        try:
-            s.display_rate_ms = int(self.display_rate_var.get().replace('ms', ''))
-        except ValueError:
-            pass
-        s.save()
-
     def _apply_settings_to_gui(self):
         """
         Apply a freshly-saved AppSettings to the live GUI.
         Called from SettingsDialog's on_save callback.
+        All configuration now flows exclusively through the Settings dialog.
         """
         s = self._app_settings
 
@@ -441,9 +422,8 @@ class MainWindow:
         self._ps_v_range  = s.ps_v_range
         self._ps_i_range  = s.ps_i_range
 
-        # Update Quick Config dropdowns (without triggering _on_config_change)
+        # Sync internal StringVars used by the rest of the GUI
         self.tc_count_var.set(str(s.tc_count))
-        self.tc_type_var.set(s.tc_type)
         self.t_unit_var.set(s.tc_unit)
         self.frg_count_var.set(str(s.frg_count))
         self.p_unit_var.set(s.p_unit)
@@ -458,10 +438,30 @@ class MainWindow:
         # Rebuild sensor config and refresh
         self._on_config_change()
 
+        # Refresh pinout display if open
+        if hasattr(self, '_pinout_window') and self._pinout_window is not None:
+            try:
+                if self._pinout_window.winfo_exists():
+                    self._pinout_window.refresh_config(self.config, self._app_settings)
+            except tk.TclError:
+                self._pinout_window = None
+
     def _open_settings_dialog(self):
         """Open the persistent Settings dialog."""
         SettingsDialog(self.root, self._app_settings,
                        on_save_callback=self._apply_settings_to_gui)
+
+    def _open_pinout_display(self):
+        """Open (or bring to front) the live pinout display window."""
+        if hasattr(self, '_pinout_window') and self._pinout_window is not None:
+            try:
+                if self._pinout_window.winfo_exists():
+                    self._pinout_window.lift()
+                    self._pinout_window.focus_set()
+                    return
+            except tk.TclError:
+                pass
+        self._pinout_window = PinoutDisplay(self.root, self.config, self._app_settings)
 
     def _background_ps_reconnect(self):
         """Try to reconnect Keysight power supply in background thread."""
@@ -594,82 +594,24 @@ class MainWindow:
         self.root.config(menu=menubar)
         profiler.checkpoint("Menu bar created")
 
+        # ── Internal StringVars (no GUI widgets — settings come from Settings dialog only)
+        # These are synced by _apply_settings_to_gui() after every Settings save.
+        s = self._app_settings
+        t_unit  = self.config['thermocouples'][0]['units'] if self.config['thermocouples'] else s.tc_unit
+        p_unit  = self.config['frg702_gauges'][0].get('units', s.p_unit) if self.config.get('frg702_gauges') else s.p_unit
+        self.tc_count_var    = tk.StringVar(value=str(len(self.config['thermocouples'])))
+        self.t_unit_var      = tk.StringVar(value=t_unit)
+        self.frg_count_var   = tk.StringVar(value=str(len(self.config.get('frg702_gauges', []))))
+        self.p_unit_var      = tk.StringVar(value=p_unit)
+        self.sample_rate_var = tk.StringVar(value=f"{self.config['logging']['interval_ms']}ms")
+        self.display_rate_var = tk.StringVar(value=f"{self.config['display']['update_rate_ms']}ms")
+
+        # Pinout window reference (created lazily)
+        self._pinout_window = None
+
         # Top frame - Control buttons
         control_frame = ttk.Frame(self.root)
         control_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        # Configuration Area
-        config_area = ttk.LabelFrame(control_frame, text="Quick Config")
-        config_area.pack(side=tk.LEFT, padx=5)
-
-        # TC count
-        ttk.Label(config_area, text="TCs:").pack(side=tk.LEFT, padx=2)
-        self.tc_count_var = tk.StringVar(value=str(len(self.config['thermocouples'])))
-        self.tc_count_combo = ttk.Combobox(
-            config_area, textvariable=self.tc_count_var,
-            values=["0", "1", "2", "3", "4", "5", "6", "7"], width=3
-        )
-        self.tc_count_combo.pack(side=tk.LEFT, padx=2)
-        self.tc_count_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_config_change(), self._save_quick_config_to_settings()))
-
-        # Units Selection
-        ttk.Label(config_area, text="T-Unit:").pack(side=tk.LEFT, padx=2)
-        t_unit = "C"
-        if self.config['thermocouples']:
-            t_unit = self.config['thermocouples'][0]['units']
-        self.t_unit_var = tk.StringVar(value=t_unit)
-        self.t_unit_combo = ttk.Combobox(
-            config_area, textvariable=self.t_unit_var,
-            values=["C", "F", "K"], width=3
-        )
-        self.t_unit_combo.pack(side=tk.LEFT, padx=2)
-        self.t_unit_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_config_change(), self._save_quick_config_to_settings()))
-
-        # Pressure Units Selection
-        ttk.Label(config_area, text="FRGs:").pack(side=tk.LEFT, padx=2)
-        frg_count = len(self.config.get('frg702_gauges', []))
-        self.frg_count_var = tk.StringVar(value=str(frg_count))
-        self.frg_count_combo = ttk.Combobox(
-            config_area, textvariable=self.frg_count_var,
-            values=["0", "1", "2"], width=2
-        )
-        self.frg_count_combo.pack(side=tk.LEFT, padx=2)
-        self.frg_count_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_config_change(), self._save_quick_config_to_settings()))
-
-        ttk.Label(config_area, text="P-Unit:").pack(side=tk.LEFT, padx=2)
-        p_unit = "mbar"
-        if self.config.get('frg702_gauges'):
-            p_unit = self.config['frg702_gauges'][0].get('units', 'mbar')
-        self.p_unit_var = tk.StringVar(value=p_unit)
-        self.p_unit_combo = ttk.Combobox(
-            config_area, textvariable=self.p_unit_var,
-            values=["mbar", "Torr", "Pa"], width=5
-        )
-        self.p_unit_combo.pack(side=tk.LEFT, padx=2)
-        self.p_unit_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_pressure_unit_change(), self._save_quick_config_to_settings()))
-
-        # Sampling rate dropdown
-        ttk.Label(config_area, text="Rate:").pack(side=tk.LEFT, padx=2)
-        current_rate = self.config['logging']['interval_ms']
-        self.sample_rate_var = tk.StringVar(value=f"{current_rate}ms")
-        rate_values = [f"{r}ms" for r in self.SAMPLE_RATES]
-        self.sample_rate_combo = ttk.Combobox(
-            config_area, textvariable=self.sample_rate_var,
-            values=rate_values, width=8
-        )
-        self.sample_rate_combo.pack(side=tk.LEFT, padx=2)
-        self.sample_rate_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_sample_rate_change(), self._save_quick_config_to_settings()))
-
-        # Display rate dropdown
-        ttk.Label(config_area, text="Display:").pack(side=tk.LEFT, padx=2)
-        display_rate = self.config['display']['update_rate_ms']
-        self.display_rate_var = tk.StringVar(value=f"{display_rate}ms")
-        self.display_rate_combo = ttk.Combobox(
-            config_area, textvariable=self.display_rate_var,
-            values=["100ms", "250ms", "500ms", "1000ms"], width=8
-        )
-        self.display_rate_combo.pack(side=tk.LEFT, padx=2)
-        self.display_rate_combo.bind("<<ComboboxSelected>>", lambda e: (self._on_display_rate_change(), self._save_quick_config_to_settings()))
 
         # Control buttons
         self.start_btn = ttk.Button(
@@ -713,6 +655,11 @@ class MainWindow:
             style='Settings.TButton'
         )
         self.settings_btn.pack(side=tk.LEFT, padx=5)
+
+        self.pinout_btn = ttk.Button(
+            control_frame, text="Pinout", command=self._open_pinout_display
+        )
+        self.pinout_btn.pack(side=tk.LEFT, padx=5)
 
         # Separator
         ttk.Separator(control_frame, orient='vertical').pack(
@@ -1105,12 +1052,12 @@ class MainWindow:
                     'temp': metadata.get('tc_unit', 'C'),
                     'press': metadata.get('p_unit', 'PSI')
                 }
+                # Sync internal vars for display-unit conversions; settings are not
+                # modified so the live config is preserved after returning to live view.
                 if 'tc_count' in metadata:
                     self.tc_count_var.set(str(metadata['tc_count']))
                 if 'frg702_count' in metadata:
                     self.frg_count_var.set(str(metadata['frg702_count']))
-                if 'tc_type' in metadata:
-                    self.tc_type_var.set(metadata['tc_type'])
                 if 'tc_unit' in metadata:
                     self.t_unit_var.set(metadata['tc_unit'])
                 if 'sample_rate_ms' in metadata:
@@ -1488,12 +1435,20 @@ class MainWindow:
         )
 
         def on_new_data(timestamp, all_readings, tc_readings, frg702_details,
-                        safety_shutdown=False):
+                        safety_shutdown=False, raw_voltages=None):
             self.data_buffer.add_reading(all_readings)
 
             self._latest_readings = (timestamp, all_readings)
             self._latest_tc_readings = tc_readings
             self._latest_frg702_details = frg702_details
+
+            # Feed live pinout display if open
+            if hasattr(self, '_pinout_window') and self._pinout_window is not None:
+                try:
+                    if self._pinout_window.winfo_exists():
+                        self._pinout_window.update_readings(all_readings, raw_voltages)
+                except tk.TclError:
+                    self._pinout_window = None
 
             if self.is_logging:
                 log_readings = {}
@@ -1506,6 +1461,11 @@ class MainWindow:
                         log_readings[name] = convert_temperature(value, 'C', t_unit)
                     else:
                         log_readings[name] = value
+                # Include raw voltages (and differential voltages — same value,
+                # labelled _rawV) so the log shows the full conversion chain:
+                #   physical TC wire → raw mV input → EF temperature conversion
+                if raw_voltages:
+                    log_readings.update(raw_voltages)
                 self.logger.log_reading(log_readings)
 
             if safety_shutdown:
@@ -1562,13 +1522,23 @@ class MainWindow:
                 notes=notes or ""
             )
 
-            sensor_names = [tc['name'] for tc in self.config['thermocouples']
-                          if tc.get('enabled', True)]
+            enabled_tcs = [tc for tc in self.config['thermocouples']
+                           if tc.get('enabled', True)]
+            sensor_names = [tc['name'] for tc in enabled_tcs]
             sensor_names += [g['name'] for g in self.config.get('frg702_gauges', [])
                             if g.get('enabled', True)]
 
             if self.ps_controller:
                 sensor_names += ['PS_Voltage', 'PS_Current']
+
+            # Append raw-voltage columns right after the temperature columns so the
+            # log shows the full conversion chain for each thermocouple:
+            #   <TC_N>  = converted temperature
+            #   <TC_N>_rawV = raw differential input voltage (V) before EF conversion
+            # Both columns carry identical physical information; having both lets the
+            # user verify that the T8's internal millivolt→temperature lookup is correct.
+            for tc in enabled_tcs:
+                sensor_names.append(f"{tc['name']}_rawV")
 
             filepath = self.logger.start_logging(sensor_names, custom_name, metadata)
             self.is_logging = True

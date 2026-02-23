@@ -95,6 +95,46 @@ class ThermocoupleReader:
 
         return readings
 
+    def read_raw_voltages(self):
+        """
+        Read the raw differential input voltage for each enabled thermocouple
+        channel by reading the AIN# register directly (before EF conversion).
+
+        The T8 extended-feature (EF) thermocouple mode converts the millivolt
+        TC signal to temperature internally.  Reading AIN{channel} returns the
+        actual differential voltage seen at the input pins so the user can
+        verify the physical wiring and unit-conversion chain:
+
+            physical wire → AIN# raw voltage → EF conversion → temperature
+
+        Returns
+        -------
+        dict
+            Keys are ``"<tc_name>_rawV"`` (e.g. ``"TC_1_rawV"``), values are
+            voltages in Volts (typically in the ±100 mV range for thermocouples).
+            Returns ``None`` for a channel that fails to read.
+        """
+        enabled_tcs = [tc for tc in self.thermocouples if tc.get('enabled', True)]
+        if not enabled_tcs:
+            return {}
+
+        # Read AIN# (raw voltage) alongside AIN#_EF_READ_A (temperature)
+        raw_names = [f"AIN{tc['channel']}" for tc in enabled_tcs]
+
+        try:
+            results = ljm.eReadNames(self.handle, len(raw_names), raw_names)
+        except ljm.LJMError as e:
+            print(f"Batch raw voltage read error: {e}")
+            return {f"{tc['name']}_rawV": None for tc in enabled_tcs}
+
+        raw_voltages = {}
+        for i, tc in enumerate(enabled_tcs):
+            v = results[i]
+            # Clamp obviously-bad values (open circuit on ±100 mV range reads ~±0.1)
+            raw_voltages[f"{tc['name']}_rawV"] = round(v, 8) if v is not None else None
+
+        return raw_voltages
+
     def _read_all_sequential(self):
         """
         Fallback: read thermocouples one at a time if batch read fails.
