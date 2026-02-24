@@ -166,7 +166,21 @@ class SettingsDialog(tk.Toplevel):
         self._create_option_row(acq_frame, "Display Rate (ms):", "display_rate_ms",
                                ["100", "250", "500", "1000"], row=1)
 
-        ttk.Label(tab, text="XGS600 Controller", 
+        ttk.Label(tab, text="Hardware Enable",
+                 font=('Arial', 11, 'bold')).pack(anchor='w', pady=(15, 10))
+
+        enable_frame = ttk.LabelFrame(tab, text="Device Enable/Disable", padding=10)
+        enable_frame.pack(fill=tk.X, pady=5)
+
+        self._ps_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(enable_frame, text="Enable Keysight Power Supply",
+                        variable=self._ps_enabled_var).pack(anchor='w', padx=5, pady=4)
+
+        self._xgs_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(enable_frame, text="Enable XGS-600 Gauge Controller",
+                        variable=self._xgs_enabled_var).pack(anchor='w', padx=5, pady=4)
+
+        ttk.Label(tab, text="XGS600 Controller",
                  font=('Arial', 11, 'bold')).pack(anchor='w', pady=(15, 10))
 
         xgs_frame = ttk.LabelFrame(tab, text="XGS600 Settings", padding=10)
@@ -402,6 +416,8 @@ class SettingsDialog(tk.Toplevel):
         self._ps_voltage_monitor_pin_var.set(s.ps_voltage_monitor_pin)
         self._ps_current_monitor_pin_var.set(s.ps_current_monitor_pin)
         self._skip_preflight_check_var.set(s.skip_preflight_check)
+        self._ps_enabled_var.set(s.ps_enabled)
+        self._xgs_enabled_var.set(s.xgs_enabled)
 
     def _save_settings_from_gui(self):
         """Internal helper to read all GUI vars and write to AppSettings."""
@@ -444,6 +460,8 @@ class SettingsDialog(tk.Toplevel):
             s.ps_voltage_monitor_pin = self._ps_voltage_monitor_pin_var.get().strip()
             s.ps_current_monitor_pin = self._ps_current_monitor_pin_var.get().strip()
             s.skip_preflight_check = self._skip_preflight_check_var.get()
+            s.ps_enabled = self._ps_enabled_var.get()
+            s.xgs_enabled = self._xgs_enabled_var.get()
         except ValueError as exc:
             messagebox.showerror("Invalid Value",
                                 f"Please check your entries:\n{exc}", parent=self)

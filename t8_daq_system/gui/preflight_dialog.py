@@ -160,7 +160,8 @@ class PreflightDialog(tk.Toplevel):
             ch      = tc['channel']
             name    = tc['name']
             items.append(
-                f"{name} (Type {tc_type})  →  T8 AIN{ch} screw terminal  (+) and (−)"
+                f"{name} (Type {tc_type})  →  T8 AIN{ch}+  and  AIN{ch}−  "
+                f"(differential — both wires to AIN{ch} screw pair, NOT to GND)"
             )
 
         # Keysight connections

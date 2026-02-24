@@ -371,6 +371,11 @@ class MainWindow:
             import tkinter.messagebox as _mb
             _mb.showerror("Pin Conflict", "\n\n".join(conflict_errors))
 
+        # Warn if TC count exceeds available non-PS AIN channels
+        if s.tc_count > 4 and s.ps_enabled:
+            print("[CONFIG WARNING] tc_count > 4 with PS enabled: AIN4 and AIN5 are reserved "
+                  "for Keysight monitoring. Reduce TC count or disable PS.")
+
         for i in range(s.tc_count):
             thermocouples.append({
                 "name": f"TC_{i+1}",
@@ -383,6 +388,12 @@ class MainWindow:
         # Build FRG-702 list
         frg702_gauges = []
         frg_pin_list = s.get_frg_pin_list(s.frg_count)
+
+        # Warn if any FRG pin conflicts with an assigned TC channel
+        tc_channels_used = {f"AIN{i}" for i in range(s.tc_count)}
+        for pin in frg_pin_list:
+            if pin in tc_channels_used:
+                print(f"[CONFIG WARNING] FRG pin {pin} conflicts with a TC channel!")
         for i in range(s.frg_count):
             frg702_gauges.append({
                 "name": f"FRG702_{i+1}",
@@ -397,7 +408,7 @@ class MainWindow:
             "thermocouples": thermocouples,
             "frg702_gauges": frg702_gauges,
             "xgs600": {
-                "enabled": s.frg_interface == "XGS600",
+                "enabled": s.xgs_enabled and s.frg_interface == "XGS600",
                 "port": s.xgs600_port,
                 "baudrate": s.xgs600_baudrate,
                 "timeout": s.xgs600_timeout,
@@ -405,7 +416,7 @@ class MainWindow:
             },
             "frg_interface": s.frg_interface,
             "power_supply": {
-                "enabled": True,
+                "enabled": s.ps_enabled,
                 "interface": "Analog",
                 "voltage_pin": s.ps_voltage_pin,
                 "current_pin": s.ps_current_pin,
