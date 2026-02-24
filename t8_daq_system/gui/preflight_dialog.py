@@ -165,39 +165,48 @@ class PreflightDialog(tk.Toplevel):
             )
 
         # Keysight connections
-        v_prog = s.ps_voltage_pin   # e.g. "DAC0"
-        i_prog = s.ps_current_pin   # e.g. "DAC1"
-        v_mon  = s.ps_voltage_monitor_pin  # e.g. "AIN4"
-        i_mon  = s.ps_current_monitor_pin  # e.g. "AIN5"
+        if s.ps_enabled:
+            v_prog = s.ps_voltage_pin   # e.g. "DAC0"
+            i_prog = s.ps_current_pin   # e.g. "DAC1"
+            v_mon  = s.ps_voltage_monitor_pin  # e.g. "AIN4"
+            i_mon  = s.ps_current_monitor_pin  # e.g. "AIN5"
 
-        v_prog_j1 = _DAC_TO_J1.get(v_prog, (v_prog, 'Voltage Program'))
-        i_prog_j1 = _DAC_TO_J1.get(i_prog, (i_prog, 'Current Program'))
+            v_prog_j1 = _DAC_TO_J1.get(v_prog, (v_prog, 'Voltage Program'))
+            i_prog_j1 = _DAC_TO_J1.get(i_prog, (i_prog, 'Current Program'))
 
-        # Map AIN pin name to number for display
-        v_mon_num = v_mon.replace('AIN', '') if v_mon.startswith('AIN') else v_mon
-        i_mon_num = i_mon.replace('AIN', '') if i_mon.startswith('AIN') else i_mon
-
-        items.append(
-            f"Keysight {v_prog_j1[0]}  →  T8 {v_prog}  ({v_prog_j1[1]})"
-        )
-        items.append(
-            f"Keysight {i_prog_j1[0]}  →  T8 {i_prog}  ({i_prog_j1[1]})"
-        )
-        items.append(
-            f"Keysight J1 Pin 11  →  T8 {v_mon}  (Voltage Monitor)"
-        )
-        items.append(
-            f"Keysight J1 Pin 24  →  T8 {i_mon}  (Current Monitor)"
-        )
-        items.append(
-            "Keysight J1 Pins 12, 22, 23  →  T8 GND only — NOT to any voltage"
-        )
+            items.append(
+                f"Keysight {v_prog_j1[0]}  →  T8 {v_prog}  ({v_prog_j1[1]})"
+            )
+            items.append(
+                f"Keysight {i_prog_j1[0]}  →  T8 {i_prog}  ({i_prog_j1[1]})"
+            )
+            items.append(
+                f"Keysight J1 Pin 11  →  T8 {v_mon}  (Voltage Monitor)"
+            )
+            items.append(
+                f"Keysight J1 Pin 24  →  T8 {i_mon}  (Current Monitor)"
+            )
+            items.append(
+                "Keysight J1 Pins 12, 22, 23  →  T8 GND only — NOT to any voltage"
+            )
 
         # XGS-600 connection
-        port = getattr(s, 'xgs600_port', 'COM3')
-        items.append(
-            f"XGS-600 SER.COMM  →  DB9 male-male adapter  →  FTDI USB cable  →  USB port ({port})"
-        )
+        if s.xgs_enabled:
+            port = getattr(s, 'xgs600_port', 'COM3')
+            items.append(
+                f"XGS-600 SER.COMM  →  DB9 male-male adapter  →  FTDI USB cable  →  USB port ({port})"
+            )
+
+        # FRG702 Gauge (PG)
+        if s.frg_count > 0:
+            if s.frg_interface == "Analog":
+                frg_pins = s.get_frg_pin_list(s.frg_count)
+                for i, pin in enumerate(frg_pins):
+                    items.append(f"FRG702_{i+1} Signal (Pin 2)  →  T8 {pin}  (Analog Input)")
+                    items.append(f"FRG702_{i+1} GND (Pin 3)     →  T8 GND")
+            else:
+                for i in range(s.frg_count):
+                    items.append(f"FRG702_{i+1}  →  XGS-600 Controller (Back Panel)")
 
         return items
 

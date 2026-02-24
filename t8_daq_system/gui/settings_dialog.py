@@ -28,8 +28,8 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, settings, on_save_callback=None):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("500x800")
-        self.minsize(500, 600)
+        self.geometry("500x900")
+        self.minsize(500, 900)
         self.resizable(True, True)
         self.grab_set()
         self.transient(parent)

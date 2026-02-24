@@ -96,7 +96,7 @@ from t8_daq_system.gui.sensor_panel import SensorPanel
 from t8_daq_system.utils.helpers import convert_temperature
 from t8_daq_system.gui.power_supply_panel import PowerSupplyPanel
 from t8_daq_system.gui.ramp_panel import RampPanel
-from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog, AxisScaleDialog
+from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
 from t8_daq_system.gui.settings_dialog import SettingsDialog
 from t8_daq_system.gui.pinout_display import PinoutDisplay
 from t8_daq_system.core.data_acquisition import DataAcquisition
@@ -348,6 +348,9 @@ class MainWindow:
         thermocouples = []
         tc_type_list = s.get_tc_type_list(s.tc_count)
         tc_pin_list  = s.get_tc_pin_list(s.tc_count)
+
+        print(f"[DEBUG] _build_config_from_settings: tc_count={s.tc_count}, tc_pins={tc_pin_list}")
+        print(f"[DEBUG] _build_config_from_settings: ps_enabled={s.ps_enabled}, ps_v_mon={s.ps_voltage_monitor_pin}, ps_i_mon={s.ps_current_monitor_pin}")
 
         # Conflict detection: check TC pins against Keysight monitor pins
         keysight_v_pin_str = s.ps_voltage_monitor_pin  # e.g. "AIN4"
@@ -622,16 +625,6 @@ class MainWindow:
         )
         self.load_csv_btn.pack(side=tk.LEFT, padx=5)
 
-        self.scale_btn = ttk.Button(
-            control_frame, text="Axis Scales", command=self._on_axis_scales
-        )
-        self.scale_btn.pack(side=tk.LEFT, padx=5)
-
-        self.dual_btn = ttk.Button(
-            control_frame, text="Dual Display", command=self._toggle_dual_display
-        )
-        self.dual_btn.pack(side=tk.LEFT, padx=5)
-
         self.practice_btn = ttk.Button(
             control_frame, text="Practice Mode: OFF", command=self._toggle_practice_mode
         )
@@ -782,11 +775,6 @@ class MainWindow:
         self.ramp_panel.on_ramp_stop(self._on_ramp_stop)
         profiler.checkpoint("RampPanel created")
 
-        # Dual window tracking
-        profiler.checkpoint("Initializing dual window tracking...")
-        self.dual_window = None
-        profiler.checkpoint("Dual window tracking initialized")
-
     def _build_plots(self, parent):
         """Create the live plots in the specified parent widget."""
         profiler.checkpoint("_build_plots() entered - creating plot paned window")
@@ -883,15 +871,22 @@ class MainWindow:
 
     def _update_plot_settings(self):
         """Update plot settings based on current config."""
+        # Reset skip counter to force immediate redraw on next update loop
+        self._plot_skip_counter = 0
+
         t_unit = self.t_unit_var.get() if hasattr(self, 't_unit_var') else 'C'
 
         temp_symbols = {'C': '\u00b0C', 'F': '\u00b0F', 'K': 'K'}
         temp_unit_display = temp_symbols.get(t_unit, '\u00b0C')
 
         if not hasattr(self, '_temp_range'):
-            t_min_display = convert_temperature(0, 'C', t_unit)
-            t_max_display = convert_temperature(300, 'C', t_unit)
-            self._temp_range = (t_min_display, t_max_display)
+            self._temp_range = (0.0, 300.0)
+
+        # Convert temperature range from storage (Celsius) to current display units
+        t_min, t_max = self._temp_range
+        t_min_disp = convert_temperature(t_min, 'C', t_unit)
+        t_max_disp = convert_temperature(t_max, 'C', t_unit)
+        display_temp_range = (t_min_disp, t_max_disp)
 
         press_unit = self.p_unit_var.get()
 
@@ -899,12 +894,12 @@ class MainWindow:
             self.full_plot.set_units(temp_unit_display, press_unit)
             self.full_plot.set_absolute_scales(
                 self._use_absolute_scales,
-                self._temp_range,
+                display_temp_range,
                 self._press_range,
                 self._ps_v_range,
                 self._ps_i_range
             )
-            # Issue 2 fix: force immediate axis relim + redraw after scale mode change
+            # Force immediate axis relim + redraw after scale mode change
             self.full_plot.ax.relim()
             self.full_plot.ax.autoscale_view()
             if self.full_plot.ax_frg702 is not None:
@@ -916,12 +911,12 @@ class MainWindow:
             self.recent_plot.set_units(temp_unit_display, press_unit)
             self.recent_plot.set_absolute_scales(
                 self._use_absolute_scales,
-                self._temp_range,
+                display_temp_range,
                 self._press_range,
                 self._ps_v_range,
                 self._ps_i_range
             )
-            # Issue 2 fix: force immediate axis relim + redraw after scale mode change
+            # Force immediate axis relim + redraw after scale mode change
             self.recent_plot.ax.relim()
             self.recent_plot.ax.autoscale_view()
             if self.recent_plot.ax_frg702 is not None:
@@ -964,55 +959,6 @@ class MainWindow:
                 self.full_plot.update(sensor_names, [])
             if hasattr(self, 'recent_plot'):
                 self.recent_plot.update(sensor_names, [], window_seconds=60)
-
-    def _toggle_dual_display(self):
-        if self.dual_window is None or not self.dual_window.winfo_exists():
-            self.dual_window = tk.Toplevel(self.root)
-            self.dual_window.title("T8 DAQ System - Live Plots")
-            self.dual_window.geometry("800x600")
-            self.dual_window.protocol("WM_DELETE_WINDOW", self._toggle_dual_display)
-
-            for widget in self.plot_container_main.winfo_children():
-                widget.destroy()
-
-            self._build_plots(self.dual_window)
-            self.dual_btn.config(text="Single Display")
-        else:
-            self.dual_window.destroy()
-            self.dual_window = None
-
-            for widget in self.plot_container_main.winfo_children():
-                widget.destroy()
-
-            self._build_plots(self.plot_container_main)
-            self.dual_btn.config(text="Dual Display")
-
-    def _on_axis_scales(self):
-        dialog = AxisScaleDialog(
-            self.root,
-            self._temp_range,
-            self._press_range,
-            self._ps_v_range,
-            self._ps_i_range,
-            self._use_absolute_scales
-        )
-        self.root.wait_window(dialog)
-
-        if dialog.result:
-            self._use_absolute_scales = dialog.result['use_absolute']
-            self._temp_range = dialog.result['temp_range']
-            self._press_range = dialog.result['press_range']
-            self._ps_v_range = dialog.result['ps_v_range']
-            self._ps_i_range = dialog.result['ps_i_range']
-            # Persist axis scale changes to registry
-            s = self._app_settings
-            s.use_absolute_scales = self._use_absolute_scales
-            s.temp_range_min,  s.temp_range_max  = self._temp_range
-            s.press_range_min, s.press_range_max = self._press_range
-            s.ps_v_range_min,  s.ps_v_range_max  = self._ps_v_range
-            s.ps_i_range_min,  s.ps_i_range_max  = self._ps_i_range
-            s.save()
-            self._update_plot_settings()
 
     def _on_load_csv(self):
         dialog = LoadCSVDialog(self.root, self.log_folder)
@@ -1118,6 +1064,7 @@ class MainWindow:
         """
         # Re-build the entire config dict from settings
         self.config = self._build_config_from_settings(self._app_settings)
+        print(f"[DEBUG] _on_config_change: New config built. PS enabled: {self.config.get('power_supply', {}).get('enabled')}")
 
         # Sync GUI vars (for historical reasons / other panels that watch them)
         self.tc_count_var.set(str(len(self.config['thermocouples'])))
@@ -1125,9 +1072,8 @@ class MainWindow:
 
         if self.connection and self.connection.is_connected():
             self._initialize_hardware_readers()
-            # Also re-initialize PS controller if it's using the T8 handles
-            if self.config.get('power_supply', {}).get('interface') == "Analog":
-                self._initialize_power_supply()
+            # Always call _initialize_power_supply; it now handles its own enabled check
+            self._initialize_power_supply()
         elif self.daq:
             # If not connected but daq exists (e.g. practice mode), update config
             self.daq.update_readers(config=self.config)
@@ -1777,10 +1723,23 @@ class MainWindow:
     def _initialize_power_supply(self):
         try:
             handle = self.connection.get_handle()
-            if handle is None:
-                return False
-
             ps_config = self.config.get('power_supply', {})
+            enabled = ps_config.get('enabled', False)
+
+            print(f"[DEBUG] _initialize_power_supply: enabled={enabled}, handle_is_none={handle is None}")
+
+            if not enabled:
+                print("[DEBUG] Power supply is disabled in config. Setting ps_controller to None.")
+                self.ps_controller = None
+                self.ps_panel.set_controller(None)
+                self.safety_monitor.set_power_supply(None)
+                self.ramp_executor.set_power_supply(None)
+                self.ps_resource_var.set("None")
+                return True
+
+            if handle is None:
+                print("[DEBUG] Cannot initialize power supply: LabJack handle is None")
+                return False
 
             self.ps_controller = KeysightAnalogController(
                 handle,

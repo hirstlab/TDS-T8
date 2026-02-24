@@ -78,9 +78,14 @@ class KeysightAnalogController:
         self._AIN_VOLTAGE = voltage_monitor_pin
         self._AIN_CURRENT = current_monitor_pin
 
+        print(f"[DEBUG] KeysightAnalogController init: V_PIN={self._DAC_VOLTAGE}, I_PIN={self._DAC_CURRENT}, V_MON={self._AIN_VOLTAGE}, I_MON={self._AIN_CURRENT}")
+
         if self.handle is not None:
+            print(f"[DEBUG] KeysightAnalogController: Handle is valid, configuring hardware...")
             self._configure_ain_channels()
             self._enable_analog_mode()
+        else:
+            print(f"[DEBUG] KeysightAnalogController: Handle is None, skipping hardware config")
 
     # ──────────────────────────────────────────────────────────────────────────
     # One-time hardware configuration
@@ -89,9 +94,11 @@ class KeysightAnalogController:
     def _configure_ain_channels(self):
         """Configure AIN channels for single-ended (GND-referenced) mode."""
         try:
+            print(f"[DEBUG] Keysight: Configuring {self._AIN_VOLTAGE} and {self._AIN_CURRENT} for single-ended mode")
             ljm.eWriteName(self.handle, f"{self._AIN_VOLTAGE}_NEGATIVE_CH", self._AIN_GND_REF)
             ljm.eWriteName(self.handle, f"{self._AIN_CURRENT}_NEGATIVE_CH", self._AIN_GND_REF)
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Keysight: Non-fatal error configuring AIN: {e}")
             pass  # Non-fatal; default config is usually single-ended anyway
 
     def _enable_analog_mode(self):
@@ -100,8 +107,10 @@ class KeysightAnalogController:
         analog programming mode.  Must be called once at startup.
         """
         try:
+            print(f"[DEBUG] Keysight: Pulling {self._DIO_ANALOG_EN} LOW to enable analog mode")
             ljm.eWriteName(self.handle, self._DIO_ANALOG_EN, 0)
-        except Exception:
+        except Exception as e:
+            print(f"[DEBUG] Keysight: Error enabling analog mode: {e}")
             pass
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -225,9 +234,10 @@ class KeysightAnalogController:
         """
         try:
             raw_v = ljm.eReadName(self.handle, self._AIN_VOLTAGE)
+            # print(f"[DEBUG] Keysight reading voltage from {self._AIN_VOLTAGE}: {raw_v}V")
             return self._dac_to_volts(raw_v, self.rated_max_volts)
         except Exception as e:
-            print(f"Failed to measure voltage: {e}")
+            print(f"Failed to measure voltage on {self._AIN_VOLTAGE}: {e}")
             return None
 
     def get_current(self):
@@ -241,9 +251,10 @@ class KeysightAnalogController:
         """
         try:
             raw_v = ljm.eReadName(self.handle, self._AIN_CURRENT)
+            # print(f"[DEBUG] Keysight reading current from {self._AIN_CURRENT}: {raw_v}V")
             return self._dac_to_volts(raw_v, self.rated_max_amps)
         except Exception as e:
-            print(f"Failed to measure current: {e}")
+            print(f"Failed to measure current on {self._AIN_CURRENT}: {e}")
             return None
 
     # ──────────────────────────────────────────────────────────────────────────

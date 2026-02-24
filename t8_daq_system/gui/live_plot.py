@@ -113,13 +113,34 @@ class LivePlot:
         self._ps_v_range = ps_v_range if ps_v_range else self.DEFAULT_PS_V_RANGE
         self._ps_i_range = ps_i_range if ps_i_range else self.DEFAULT_PS_I_RANGE
 
-        # Issue 2 fix: when switching to relative mode, reset axis bounds immediately
+        # When switching to relative mode, re-enable autoscaling and reset axis bounds immediately
         if not enabled:
+            self.ax.set_autoscalex_on(True)
+            self.ax.set_autoscaley_on(True)
             self.ax.relim()
             self.ax.autoscale_view()
+            if self.ax2 is not None:
+                self.ax2.set_autoscaley_on(True)
+                self.ax2.relim()
+                self.ax2.autoscale_view()
+            if self.ax3 is not None:
+                self.ax3.set_autoscaley_on(True)
+                self.ax3.relim()
+                self.ax3.autoscale_view()
             if self.ax_frg702 is not None:
+                self.ax_frg702.set_autoscalex_on(True)
+                self.ax_frg702.set_autoscaley_on(True)
                 self.ax_frg702.relim()
                 self.ax_frg702.autoscale_view()
+        else:
+            # When absolute scales are enabled, disable Y autoscaling to prevent jumping
+            self.ax.set_autoscaley_on(False)
+            if self.ax2 is not None:
+                self.ax2.set_autoscaley_on(False)
+            if self.ax3 is not None:
+                self.ax3.set_autoscaley_on(False)
+            if self.ax_frg702 is not None:
+                self.ax_frg702.set_autoscaley_on(False)
 
     def set_units(self, temp_unit="°C", press_unit="mbar"):
         """Set the unit labels for the axes."""
@@ -348,15 +369,22 @@ class LivePlot:
             self.lines[key].remove()
             del self.lines[key]
 
-        # Update autoscaling if not using absolute scales
-        if not self._use_absolute_scales:
-            self.ax.relim()
+        # Update autoscaling: always relim() to update data bounds
+        self.ax.relim()
+        if self._use_absolute_scales:
+            # When absolute scales are on, only autoscale the X axis (Time)
+            self.ax.autoscale_view(scaley=False)
+        else:
+            # In relative mode, autoscale both X and Y
             self.ax.autoscale_view()
-            if self.ax2 is not None and has_ps:
-                self.ax2.relim()
+
+        if self.ax2 is not None and has_ps:
+            self.ax2.relim()
+            if not self._use_absolute_scales:
                 self.ax2.autoscale_view()
-            if self.ax3 is not None and has_ps:
-                self.ax3.relim()
+        if self.ax3 is not None and has_ps:
+            self.ax3.relim()
+            if not self._use_absolute_scales:
                 self.ax3.autoscale_view()
 
         # Update legend
@@ -410,8 +438,11 @@ class LivePlot:
                 self.lines[key].remove()
                 del self.lines[key]
 
-            if not self._use_absolute_scales:
-                self.ax_frg702.relim()
+            # Update FRG autoscaling: always relim() to update data bounds
+            self.ax_frg702.relim()
+            if self._use_absolute_scales:
+                self.ax_frg702.autoscale_view(scaley=False)
+            else:
                 self.ax_frg702.autoscale_view()
 
             # Update FRG legend

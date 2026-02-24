@@ -141,7 +141,10 @@ class AppSettings:
             for field, (kind, default) in _DEFAULTS.items():
                 try:
                     raw_value, _ = winreg.QueryValueEx(key, field)
-                    setattr(self, field, _coerce(raw_value, kind, default))
+                    val = _coerce(raw_value, kind, default)
+                    setattr(self, field, val)
+                    if "ps_" in field or "tc_pins" in field:
+                        print(f"[DEBUG] AppSettings.load: {field} = {val}")
                 except (FileNotFoundError, OSError):
                     # Individual value missing — keep default
                     pass
