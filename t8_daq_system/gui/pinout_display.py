@@ -277,8 +277,8 @@ class PinoutDisplay(tk.Toplevel):
             dot = _dot(row)
             dot.pack(side=tk.LEFT, padx=(2, 4))
 
-            pin_str  = f"AIN{ch}"
-            pair_str = f"+/GND"
+            pin_str  = f"AIN{ch}+"
+            pair_str = f"+/−"
 
             for val, w, anchor in [
                 (pin_str,    9,  'w'),
@@ -490,215 +490,259 @@ class PinoutDisplay(tk.Toplevel):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _build_wiring_diagram(self):
-        """Draw the visual wiring diagram on self._wiring_canvas."""
+        """Draw the visual wiring diagram on self._wiring_canvas.
+
+        T8 physical layout:
+          Left screw block:  DAC1, DAC0, GND, EIO0
+          Right screw block: AIN0+/− through AIN7+/− (differential pairs)
+
+        Thermocouples (differential) connect to AIN0+/− through AINn+/−
+        on the RIGHT side.  Keysight V/I program wires connect to DAC0/DAC1
+        on the LEFT side.  Keysight V/I monitor wires connect to AIN4/AIN5
+        on the RIGHT side, routed below the T8 box.
+        """
         c = self._wiring_canvas
         if c is None:
             return
         c.delete('all')
 
-        s   = self._config.get('power_supply', {})
         tcs = [tc for tc in self._config.get('thermocouples', []) if tc.get('enabled', True)]
 
-        v_mon_pin = self._settings.ps_voltage_monitor_pin  # e.g. "AIN4"
-        i_mon_pin = self._settings.ps_current_monitor_pin  # e.g. "AIN5"
-        v_mon_ain = int(v_mon_pin.replace("AIN", "")) if v_mon_pin.startswith("AIN") else 4
-        i_mon_ain = int(i_mon_pin.replace("AIN", "")) if i_mon_pin.startswith("AIN") else 5
-        v_prog_pin = self._settings.ps_voltage_pin  # e.g. "DAC0"
-        i_prog_pin = self._settings.ps_current_pin  # e.g. "DAC1"
+        v_mon_pin  = self._settings.ps_voltage_monitor_pin  # e.g. "AIN4"
+        i_mon_pin  = self._settings.ps_current_monitor_pin  # e.g. "AIN5"
+        v_mon_ain  = int(v_mon_pin.replace("AIN", "")) if v_mon_pin.startswith("AIN") else 4
+        i_mon_ain  = int(i_mon_pin.replace("AIN", "")) if i_mon_pin.startswith("AIN") else 5
+        v_prog_pin = self._settings.ps_voltage_pin   # e.g. "DAC0"
+        i_prog_pin = self._settings.ps_current_pin   # e.g. "DAC1"
 
-        # Detect conflicts
-        tc_pin_set = {tc['channel'] for tc in tcs}
-        conflicts = set()
-        for tc in tcs:
-            if tc['channel'] in (v_mon_ain, i_mon_ain):
-                conflicts.add(tc['channel'])
+        # Detect TC/PS monitor pin conflicts
+        conflicts = {tc['channel'] for tc in tcs
+                     if tc['channel'] in (v_mon_ain, i_mon_ain)}
 
         # ── Layout constants ──────────────────────────────────────────────────
-        T8_X      = 380   # left edge of T8 rectangle
-        T8_Y      = 60    # top edge
-        T8_W      = 160   # width
-        ROW_H     = 28    # height per terminal row
-        PAD       = 10    # inner text padding
+        T8_X  = 340   # left edge of T8 rectangle
+        T8_Y  = 80    # top edge
+        T8_W  = 190   # width
+        ROW_H = 28    # height per terminal row
+        PAD   = 10    # inner text padding
 
-        # T8 terminals (left side = AIN + others)
-        t8_terminals = (
-            ['AIN0', 'AIN1', 'AIN2', 'AIN3', 'AIN4', 'AIN5', 'AIN6', 'AIN7',
-             'DAC0', 'DAC1', 'EIO0', 'EIO1', 'GND']
-        )
-        T8_H = ROW_H * len(t8_terminals) + 20
+        # Physical terminal groups
+        left_terminals  = ['DAC1', 'DAC0', 'GND', 'EIO0']
+        right_terminals = ['AIN0', 'AIN1', 'AIN2', 'AIN3',
+                           'AIN4', 'AIN5', 'AIN6', 'AIN7']
+        T8_H = ROW_H * max(len(left_terminals), len(right_terminals)) + 20
 
         # ── Draw T8 box ───────────────────────────────────────────────────────
         c.create_rectangle(T8_X, T8_Y, T8_X + T8_W, T8_Y + T8_H,
                            fill='#e8f0fe', outline='#3a5fd9', width=2)
         c.create_text(T8_X + T8_W // 2, T8_Y + 8,
                       text="LabJack T8", font=('Arial', 10, 'bold'), fill='#1a3399')
+        c.create_text(T8_X + PAD, T8_Y + T8_H - 6,
+                      text="LEFT side", font=('Arial', 7, 'italic'), anchor='w',
+                      fill='#555555')
+        c.create_text(T8_X + T8_W - PAD, T8_Y + T8_H - 6,
+                      text="RIGHT side", font=('Arial', 7, 'italic'), anchor='e',
+                      fill='#555555')
 
-        # Draw terminal labels and record their y-centres
-        term_y = {}
-        for idx, term in enumerate(t8_terminals):
+        # LEFT terminals (DAC/GND/EIO) — tick marks on left edge
+        left_term_y = {}
+        for idx, term in enumerate(left_terminals):
             y = T8_Y + 20 + idx * ROW_H + ROW_H // 2
-            term_y[term] = y
+            left_term_y[term] = y
             c.create_text(T8_X + PAD, y, text=term, anchor='w',
                           font=('Courier', 9), fill='#222222')
-            # tick mark on left edge
             c.create_line(T8_X - 6, y, T8_X, y, fill='#555555', width=1)
 
-        # ── Left side: Thermocouples ──────────────────────────────────────────
-        BOX_W  = 120
-        BOX_H  = 36
-        LEFT_X = T8_X - 200   # right edge of TC boxes
-        GAP    = 14
+        # RIGHT terminals (AIN differential pairs) — tick marks on right edge
+        right_term_y = {}
+        for idx, term in enumerate(right_terminals):
+            y = T8_Y + 20 + idx * ROW_H + ROW_H // 2
+            right_term_y[term] = y
+            c.create_text(T8_X + T8_W - PAD, y,
+                          text=f"{term}+/−", anchor='e',
+                          font=('Courier', 9), fill='#222222')
+            c.create_line(T8_X + T8_W, y, T8_X + T8_W + 6, y,
+                          fill='#555555', width=1)
 
-        tc_boxes_y = {}
-        total_tc_h = len(tcs) * (BOX_H + GAP) - GAP if tcs else 0
-        # Centre TC boxes vertically around AIN0..AIN(n-1) region
-        first_ain_y = term_y.get('AIN0', T8_Y + 30)
-        last_ain_y  = term_y.get(f'AIN{max(tc["channel"] for tc in tcs)}', first_ain_y) if tcs else first_ain_y
-        tc_region_mid = (first_ain_y + last_ain_y) // 2
-        tc_start_y = tc_region_mid - total_tc_h // 2
+        # ── Helper: 4-point horizontal-exit bezier curve ──────────────────────
+        def _bezier(x1, y1, x2, y2, **kw):
+            cx1 = x1 + (x2 - x1) * 0.4
+            cx2 = x2 - (x2 - x1) * 0.4
+            c.create_line(x1, y1, cx1, y1, cx2, y2, x2, y2,
+                          smooth=True, **kw)
 
-        for idx, tc in enumerate(tcs):
-            bx = LEFT_X - BOX_W
-            by = tc_start_y + idx * (BOX_H + GAP)
-            tc_boxes_y[tc['name']] = (bx, by, BOX_W, BOX_H)
-            # Conflict highlight
-            fill = '#ffe0e0' if tc['channel'] in conflicts else '#e8f8e8'
+        # ── Right side: TC boxes (aligned with their AIN terminal rows) ───────
+        TC_BOX_W = 140
+        TC_BOX_H = 36
+        TC_LEFT  = T8_X + T8_W + 60   # left edge of TC boxes
+
+        for tc in tcs:
+            ain_key = f'AIN{tc["channel"]}'
+            aim_y   = right_term_y.get(ain_key, T8_Y + 40)
+            bx = TC_LEFT
+            by = aim_y - TC_BOX_H // 2
+            fill    = '#ffe0e0' if tc['channel'] in conflicts else '#e8f8e8'
             outline = '#cc0000' if tc['channel'] in conflicts else '#2a8a2a'
-            c.create_rectangle(bx, by, bx + BOX_W, by + BOX_H,
+            c.create_rectangle(bx, by, bx + TC_BOX_W, by + TC_BOX_H,
                                fill=fill, outline=outline, width=2)
-            c.create_text(bx + BOX_W // 2, by + BOX_H // 2 - 7,
+            c.create_text(bx + TC_BOX_W // 2, by + TC_BOX_H // 2 - 7,
                           text=tc['name'], font=('Arial', 9, 'bold'), fill='#1a3a1a')
-            c.create_text(bx + BOX_W // 2, by + BOX_H // 2 + 7,
-                          text=f"Type {tc.get('type','K')} → AIN{tc['channel']}",
+            c.create_text(bx + TC_BOX_W // 2, by + TC_BOX_H // 2 + 7,
+                          text=f"Type {tc.get('type', 'K')}  →  {ain_key}+/−",
                           font=('Courier', 8), fill='#444444')
 
-            # Draw wiring line TC box → T8 AIN pin
-            ain_key = f'AIN{tc["channel"]}'
-            ty = term_y.get(ain_key, T8_Y + 40)
-            bx_right = bx + BOX_W
-            by_mid   = by + BOX_H // 2
+            # Wire: TC box left edge → T8 right-edge tick (bezier)
             line_color = '#cc0000' if tc['channel'] in conflicts else '#1a5fc8'
-            c.create_line(bx_right, by_mid, T8_X - 6, ty,
-                          fill=line_color, width=2, smooth=True)
-            mid_x = (bx_right + T8_X - 6) // 2
-            mid_y = (by_mid + ty) // 2
-            c.create_text(mid_x, mid_y - 6, text="TC+", font=('Arial', 7),
-                          fill=line_color)
+            _bezier(bx, aim_y, T8_X + T8_W + 6, aim_y, fill=line_color, width=2)
+            mid_x = (bx + T8_X + T8_W + 6) // 2
+            c.create_text(mid_x, aim_y - 7, text="TC+/−",
+                          font=('Arial', 7), fill=line_color)
             if tc['channel'] in conflicts:
-                c.create_text(mid_x, mid_y + 8,
+                c.create_text(mid_x, aim_y + 8,
                               text="⚠ CONFLICT", font=('Arial', 7, 'bold'),
                               fill='#cc0000')
 
         # ── Left side: Keysight box ───────────────────────────────────────────
-        KS_BOX_W = 140
-        KS_BOX_H = 110
-        KS_X = LEFT_X - KS_BOX_W - 20 if tcs else T8_X - 200 - KS_BOX_W - 20
-        # Place it below TC boxes
-        KS_Y = (tc_start_y + total_tc_h + 30) if tcs else T8_Y + 30
+        KS_BOX_W = 158
+        KS_BOX_H = 132
+        KS_X     = 12
+        # Centre vertically on the DAC/GND left-terminal region
+        left_mid_y = (left_term_y.get('DAC1', T8_Y + 34) +
+                      left_term_y.get('GND',  T8_Y + 90)) // 2
+        KS_Y = left_mid_y - KS_BOX_H // 2
 
         c.create_rectangle(KS_X, KS_Y, KS_X + KS_BOX_W, KS_Y + KS_BOX_H,
                            fill='#fff3e0', outline='#c77a00', width=2)
         c.create_text(KS_X + KS_BOX_W // 2, KS_Y + 12,
                       text="Keysight N5700", font=('Arial', 9, 'bold'), fill='#7a3d00')
-        c.create_text(KS_X + KS_BOX_W // 2, KS_Y + 27,
+        c.create_text(KS_X + KS_BOX_W // 2, KS_Y + 26,
                       text="J1 DB25 → Phoenix", font=('Arial', 7), fill='#555555')
-        c.create_text(KS_X + KS_BOX_W // 2, KS_Y + 40,
+        c.create_text(KS_X + KS_BOX_W // 2, KS_Y + 38,
                       text="Contact breakout", font=('Arial', 7), fill='#555555')
 
-        ks_lines = [
-            (f"V.Mon → {v_mon_pin}", v_mon_pin,  '#e07820', 55),
-            (f"I.Mon → {i_mon_pin}", i_mon_pin,  '#e07820', 68),
-            (f"V.Prog → {v_prog_pin}", v_prog_pin, '#1a7a1a', 81),
-            (f"I.Prog → {i_prog_pin}", i_prog_pin, '#1a7a1a', 94),
+        # Signal labels inside the Keysight box
+        ks_signal_rows = [
+            (f"V.Mon (J1 P11) → {v_mon_pin}",   '#e07820', 52),
+            (f"I.Mon (J1 P24) → {i_mon_pin}",   '#e07820', 65),
+            (f"V.Prog (J1 P9) → {v_prog_pin}",  '#1a7a1a', 78),
+            (f"I.Prog (J1 P10) → {i_prog_pin}", '#1a7a1a', 91),
+            ("GND (J1 12/22/23) → GND",          '#222222', 104),
+            ("LOCAL (J1 P14) → EIO0",             '#888888', 117),
         ]
-        for label, pin, col, y_off in ks_lines:
-            c.create_text(KS_X + 6, KS_Y + y_off, text=label, anchor='w',
-                          font=('Courier', 7), fill=col)
+        for label, col, y_off in ks_signal_rows:
+            c.create_text(KS_X + 5, KS_Y + y_off, text=label, anchor='w',
+                          font=('Courier', 6), fill=col)
 
-        # Draw wiring lines from Keysight to T8
-        ks_connections = [
-            (v_mon_pin,  '#e07820', 'V_MON'),
-            (i_mon_pin,  '#e07820', 'I_MON'),
-            (v_prog_pin, '#1a7a1a', 'V_PROG'),
-            (i_prog_pin, '#1a7a1a', 'I_PROG'),
+        ks_right = KS_X + KS_BOX_W
+
+        # DAC program connections: Keysight right → T8 left-edge tick (bezier)
+        dac_prog = [
+            (v_prog_pin, '#1a7a1a', 'V_PROG', KS_Y + 78),
+            (i_prog_pin, '#1a7a1a', 'I_PROG', KS_Y + 91),
         ]
-        ks_mid_x = KS_X + KS_BOX_W
-        for pin, col, lbl in ks_connections:
-            ty = term_y.get(pin)
+        for pin, col, lbl, ks_wy in dac_prog:
+            ty = left_term_y.get(pin)
             if ty is None:
                 continue
-            ks_wire_y = KS_Y + KS_BOX_H // 2
-            c.create_line(ks_mid_x, ks_wire_y, T8_X - 6, ty,
-                          fill=col, width=2, smooth=True)
-            mid_x = (ks_mid_x + T8_X - 6) // 2
-            mid_y = (ks_wire_y + ty) // 2
-            c.create_text(mid_x, mid_y - 6, text=lbl, font=('Arial', 7), fill=col)
+            _bezier(ks_right, ks_wy, T8_X - 6, ty, fill=col, width=2)
+            mid_x = (ks_right + T8_X - 6) // 2
+            c.create_text(mid_x, (ks_wy + ty) // 2 - 7,
+                          text=lbl, font=('Arial', 7), fill=col)
 
-        # GND line
-        gnd_y = term_y.get('GND', T8_Y + T8_H - 10)
-        c.create_line(ks_mid_x, KS_Y + KS_BOX_H - 10, T8_X - 6, gnd_y,
-                      fill='#222222', width=2, dash=(4, 2))
-        mid_x = (ks_mid_x + T8_X - 6) // 2
-        c.create_text(mid_x, (KS_Y + KS_BOX_H - 10 + gnd_y) // 2 - 6,
-                      text="GND", font=('Arial', 7), fill='#222222')
+        # GND: Keysight right → T8 left-edge GND tick (bezier, dashed)
+        gnd_ty = left_term_y.get('GND')
+        if gnd_ty is not None:
+            ks_gnd_y = KS_Y + 104
+            _bezier(ks_right, ks_gnd_y, T8_X - 6, gnd_ty,
+                    fill='#222222', width=2, dash=(4, 2))
+            mid_x = (ks_right + T8_X - 6) // 2
+            c.create_text(mid_x, (ks_gnd_y + gnd_ty) // 2 - 7,
+                          text="GND", font=('Arial', 7), fill='#222222')
 
-        # EIO0 line (Local/Analog enable)
-        eio0_y = term_y.get('EIO0')
-        if eio0_y is not None:
-            c.create_line(ks_mid_x, KS_Y + KS_BOX_H - 25, T8_X - 6, eio0_y,
-                          fill='#888888', width=2, dash=(3, 3))
-            mid_x = (ks_mid_x + T8_X - 6) // 2
-            c.create_text(mid_x, (KS_Y + KS_BOX_H - 25 + eio0_y) // 2 - 6,
+        # LOCAL/ANALOG ENABLE: Keysight right → T8 left-edge EIO0 (bezier, dashed)
+        eio0_ty = left_term_y.get('EIO0')
+        if eio0_ty is not None:
+            ks_eio_y = KS_Y + 117
+            _bezier(ks_right, ks_eio_y, T8_X - 6, eio0_ty,
+                    fill='#888888', width=2, dash=(3, 3))
+            mid_x = (ks_right + T8_X - 6) // 2
+            c.create_text(mid_x, (ks_eio_y + eio0_ty) // 2 - 7,
                           text="LOCAL", font=('Arial', 7), fill='#888888')
 
-        # ── Right side: XGS-600 ───────────────────────────────────────────────
-        XGS_X = T8_X + T8_W + 40
-        XGS_Y = T8_Y + 20
-        XGS_W = 130
-        XGS_H = 60
+        # Monitor connections: Keysight left side → T8 RIGHT-edge AIN ticks.
+        # Route below the T8 box to avoid visual crossing.
+        mon_connections = [
+            (v_mon_pin, '#e07820', 'V_MON', KS_Y + 52, 25),
+            (i_mon_pin, '#e07820', 'I_MON', KS_Y + 65, 42),
+        ]
+        for pin, col, lbl, ks_wy, bot_off in mon_connections:
+            ty = right_term_y.get(pin)
+            if ty is None:
+                continue
+            below_y = T8_Y + T8_H + bot_off
+            left_x  = T8_X - 20
+            right_x = T8_X + T8_W + 20
+            tick_x  = T8_X + T8_W + 6
+            c.create_line(
+                ks_right, ks_wy,
+                left_x,   ks_wy,
+                left_x,   below_y,
+                right_x,  below_y,
+                right_x,  ty,
+                tick_x,   ty,
+                smooth=True, fill=col, width=2
+            )
+            lbl_x = T8_X + T8_W // 2
+            c.create_text(lbl_x, below_y + 7, text=lbl,
+                          font=('Arial', 7), fill=col)
+
+        # ── XGS-600 box (upper right, above TC boxes) ─────────────────────────
+        XGS_X = TC_LEFT
+        XGS_Y = max(10, T8_Y - 65)
+        XGS_W = 140
+        XGS_H = 52
         c.create_rectangle(XGS_X, XGS_Y, XGS_X + XGS_W, XGS_Y + XGS_H,
                            fill='#f0f0ff', outline='#444499', width=2)
-        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 14,
+        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 13,
                       text="XGS-600", font=('Arial', 9, 'bold'), fill='#1a1a66')
         port = getattr(self._settings, 'xgs600_port', 'COM3')
-        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 32,
-                      text=f"SER.COMM DB9", font=('Courier', 7), fill='#333333')
-        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 46,
+        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 28,
+                      text="SER.COMM DB9", font=('Courier', 7), fill='#333333')
+        c.create_text(XGS_X + XGS_W // 2, XGS_Y + 40,
                       text=f"→ FTDI USB ({port})", font=('Courier', 7), fill='#333333')
-
-        # Arrow going right off-screen labeled "→ COM3 USB"
         arrow_y = XGS_Y + XGS_H // 2
-        c.create_line(XGS_X + XGS_W, arrow_y, XGS_X + XGS_W + 80, arrow_y,
+        c.create_line(XGS_X + XGS_W, arrow_y, XGS_X + XGS_W + 70, arrow_y,
                       fill='#444499', width=2, arrow=tk.LAST)
-        c.create_text(XGS_X + XGS_W + 42, arrow_y - 10,
-                      text=f"→ {port} USB", font=('Arial', 8, 'bold'), fill='#444499')
-
-        # XGS not connected to T8 — draw "No T8 connection" note
-        c.create_text(XGS_X + XGS_W // 2, XGS_Y + XGS_H + 14,
+        c.create_text(XGS_X + XGS_W + 36, arrow_y - 10,
+                      text=f"→ {port}", font=('Arial', 8, 'bold'), fill='#444499')
+        c.create_text(XGS_X + XGS_W // 2, XGS_Y + XGS_H + 12,
                       text="(direct to PC only)", font=('Arial', 7, 'italic'),
                       fill='#888888')
 
         # ── Legend ────────────────────────────────────────────────────────────
-        legend_y = T8_Y + T8_H + 30
+        legend_y = T8_Y + T8_H + 80
         legend_items = [
-            ('#1a5fc8', "Thermocouple AIN wiring"),
-            ('#e07820', "Keysight monitor (AIN)"),
-            ('#1a7a1a', "Keysight program (DAC)"),
-            ('#888888', "Keysight local/analog (EIO)"),
+            ('#1a5fc8', "Thermocouple AIN+/− wiring"),
+            ('#e07820', "Keysight monitor (right-side AIN)"),
+            ('#1a7a1a', "Keysight program (left-side DAC)"),
+            ('#888888', "Keysight local/analog enable (EIO)"),
             ('#222222', "Ground connections"),
             ('#cc0000', "Pin CONFLICT — reassign in Settings"),
         ]
-        lx = T8_X
-        for col, text in legend_items:
-            c.create_line(lx, legend_y + 6, lx + 22, legend_y + 6,
-                          fill=col, width=3)
-            c.create_text(lx + 26, legend_y + 6, text=text, anchor='w',
+        lx = max(20, T8_X - 160)
+        ly = legend_y
+        for i, (col, text) in enumerate(legend_items):
+            if i > 0 and i % 3 == 0:
+                ly += 18
+                lx = max(20, T8_X - 160)
+            c.create_line(lx, ly + 6, lx + 22, ly + 6, fill=col, width=3)
+            c.create_text(lx + 26, ly + 6, text=text, anchor='w',
                           font=('Arial', 8), fill='#333333')
-            lx += 200
+            lx += 240
 
-        # Update scroll region to fit all content
+        # Update scroll region
         total_w = XGS_X + XGS_W + 120
-        total_h = legend_y + 30
+        total_h = ly + 40
         c.configure(scrollregion=(0, 0, total_w, total_h))
 
     # ──────────────────────────────────────────────────────────────────────────

@@ -48,13 +48,15 @@ _DEFAULTS = {
     "ps_voltage_limit":   ("float", 20.0),
     "ps_current_limit":   ("float", 50.0),
     "frg_interface":      ("str",   "XGS600"),
-    "frg_pins":           ("str",   "AIN2,AIN3"),
+    "frg_pins":           ("str",   "AIN6,AIN7"),
     "ps_interface":       ("str",   "Analog"),
     "ps_voltage_pin":     ("str",   "DAC0"),
     "ps_current_pin":     ("str",   "DAC1"),
     "ps_voltage_monitor_pin": ("str", "AIN4"),
     "ps_current_monitor_pin": ("str", "AIN5"),
     "skip_preflight_check": ("bool", False),
+    "ps_enabled":           ("bool", False),
+    "xgs_enabled":          ("bool", False),
 }
 
 
@@ -104,13 +106,15 @@ class AppSettings:
         self.ps_voltage_limit: float = 20.0
         self.ps_current_limit: float = 50.0
         self.frg_interface: str      = "XGS600"
-        self.frg_pins: str           = "AIN2,AIN3"
+        self.frg_pins: str           = "AIN6,AIN7"
         self.ps_interface: str       = "Analog"
         self.ps_voltage_pin: str     = "DAC0"
         self.ps_current_pin: str     = "DAC1"
         self.ps_voltage_monitor_pin: str = "AIN4"
         self.ps_current_monitor_pin: str = "AIN5"
         self.skip_preflight_check: bool = False
+        self.ps_enabled: bool        = False
+        self.xgs_enabled: bool       = False
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API
