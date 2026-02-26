@@ -49,6 +49,11 @@ class TestHardware(unittest.TestCase):
         self.assertEqual(conn.get_handle(), self.mock_handle)
         self.assertTrue(conn.is_connected())
 
+        # Test AIN single-ended configuration for T8 (should use channel index)
+        mock_ljm.eReadName.return_value = 4.0
+        self.assertTrue(conn.configure_ain_single_ended([4]))
+        mock_ljm.eWriteName.assert_any_call(self.mock_handle, "AIN4_NEGATIVE_CH", 4)
+
         info = conn.get_device_info()
         self.assertEqual(info['serial_number'], 12345)
 

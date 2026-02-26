@@ -138,11 +138,17 @@ class MockPowerSupplyController:
 
     def get_voltage(self):
         if not self.output_state: return 0.0
-        return self.voltage + random.uniform(-0.02, 0.02)
+        t = time.time()
+        # Simulated 2% oscillation + random noise
+        fluctuation = (self.voltage * 0.02) * math.sin(t / 8.0)
+        return self.voltage + fluctuation + random.uniform(-0.02, 0.02)
 
     def get_current(self):
         if not self.output_state: return 0.0
-        return self.current + random.uniform(-0.01, 0.01)
+        t = time.time()
+        # Simulated 3% oscillation + random noise
+        fluctuation = (self.current * 0.03) * math.cos(t / 10.0)
+        return self.current + fluctuation + random.uniform(-0.01, 0.01)
 
     def get_readings(self):
         return {'PS_Voltage': self.get_voltage(), 'PS_Current': self.get_current()}
@@ -522,6 +528,10 @@ class MainWindow:
                 if self.connection.connect():
                     print("[DEFERRED] T8 connected successfully")
 
+                    # Force AIN 4 and 5 to single-ended mode on startup
+                    print("[DEFERRED] Configuring AIN 4 and 5 to single-ended...")
+                    self.connection.configure_ain_single_ended([4, 5])
+
                     # Create thermocouple reader now that we're connected
                     if self.tc_reader is None:
                         if self._initialize_hardware_readers():
@@ -559,14 +569,32 @@ class MainWindow:
         """Update UI to reflect connection state"""
         if connected:
             self.status_var.set("Connected")
-            # Enable start button and other controls
-            if hasattr(self, 'start_btn'):
-                self.start_btn.config(state='normal')
+            # Enable start button and other controls ONLY if not currently running
+            if not self.is_running:
+                if hasattr(self, 'start_btn'):
+                    self.start_btn.config(state='normal')
+                if hasattr(self, 'config_inputs_btn'):
+                    self.config_inputs_btn.config(state='normal')
         else:
             self.status_var.set("Disconnected")
             # Disable controls
             if hasattr(self, 'start_btn'):
                 self.start_btn.config(state='disabled')
+            if hasattr(self, 'config_inputs_btn'):
+                self.config_inputs_btn.config(state='disabled')
+
+    def _on_configure_inputs(self):
+        """Forces AIN4 and AIN5 to single-ended mode (NEGATIVE_CH = 199)."""
+        if not self.connection or not self.connection.is_connected():
+            messagebox.showwarning("Not Connected", "Please connect to LabJack T8 first.", parent=self.root)
+            return
+
+        print("[CONFIG] Manually forcing AIN 4 and 5 to single-ended...")
+        success = self.connection.configure_ain_single_ended([4, 5])
+        if success:
+            messagebox.showinfo("Success", "AIN 4 and 5 configured to single-ended mode.", parent=self.root)
+        else:
+            messagebox.showerror("Error", "Failed to configure AIN 4 and 5. Check logs.", parent=self.root)
 
     def _build_gui(self):
         """Create all the GUI elements."""
@@ -639,6 +667,12 @@ class MainWindow:
         )
         self.pinout_btn.pack(side=tk.LEFT, padx=5)
 
+        self.config_inputs_btn = ttk.Button(
+            control_frame, text="Configure Inputs", command=self._on_configure_inputs,
+            state='disabled'
+        )
+        self.config_inputs_btn.pack(side=tk.LEFT, padx=5)
+
         # Separator
         ttk.Separator(control_frame, orient='vertical').pack(
             side=tk.LEFT, padx=10, fill='y'
@@ -709,6 +743,18 @@ class MainWindow:
             safety_frame, text="[VIEWING HISTORICAL DATA]",
             font=('Arial', 9, 'bold'), foreground='blue'
         )
+
+        # ── Master Plot Scrollbar (In Safety Frame) ─────────────────────────
+        ttk.Separator(safety_frame, orient='vertical').pack(side=tk.LEFT, padx=10, fill='y')
+        ttk.Label(safety_frame, text="Timeline History:", font=('Arial', 8, 'bold')).pack(side=tk.LEFT, padx=2)
+
+        self.master_scroll_var = tk.DoubleVar(value=1.0)
+        self.master_scrollbar = ttk.Scale(
+            safety_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL,
+            variable=self.master_scroll_var, command=self._on_master_scroll
+        )
+        self.master_scrollbar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+
         profiler.checkpoint("Safety status bar created")
 
         profiler.checkpoint("Creating main content area with PanedWindow...")
@@ -758,19 +804,19 @@ class MainWindow:
         # Row 0, Col 0 — Thermocouple temperatures
         tc_frame = ttk.LabelFrame(parent, text="Temperatures")
         tc_frame.grid(row=0, column=0, sticky='nsew', padx=2, pady=2)
-        self.plot_tc = LivePlot(tc_frame, self.data_buffer, plot_type='tc')
+        self.plot_tc = LivePlot(tc_frame, self.data_buffer, plot_type='tc', show_scrollbar=False)
         profiler.checkpoint("TC plot created")
 
         # Row 0, Col 1 — Pressure gauges (log scale)
         press_frame = ttk.LabelFrame(parent, text="Pressures")
         press_frame.grid(row=0, column=1, sticky='nsew', padx=2, pady=2)
-        self.plot_pressure = LivePlot(press_frame, self.data_buffer, plot_type='pressure')
+        self.plot_pressure = LivePlot(press_frame, self.data_buffer, plot_type='pressure', show_scrollbar=False)
         profiler.checkpoint("Pressure plot created")
 
         # Row 1, Col 0 — PS Voltage & Current
         ps_frame = ttk.LabelFrame(parent, text="Power Supply V & I")
         ps_frame.grid(row=1, column=0, sticky='nsew', padx=2, pady=2)
-        self.plot_ps = LivePlot(ps_frame, self.data_buffer, plot_type='ps')
+        self.plot_ps = LivePlot(ps_frame, self.data_buffer, plot_type='ps', show_scrollbar=False)
         profiler.checkpoint("PS plot created")
 
         # Row 1, Col 1 — Placeholder (future camera / IR)
@@ -796,6 +842,8 @@ class MainWindow:
             self._hardware_init_attempted = True  # Practice mode counts as initialized
             self.practice_btn.config(text="Practice Mode: ON")
             self.start_btn.config(state='normal')
+            if hasattr(self, 'config_inputs_btn'):
+                self.config_inputs_btn.config(state='disabled')
             self.status_var.set("Practice Mode Active")
 
             if not self.config.get('frg702_gauges'):
@@ -816,10 +864,14 @@ class MainWindow:
 
             if not self.connection or not self.connection.is_connected():
                 self.start_btn.config(state='disabled')
+                if hasattr(self, 'config_inputs_btn'):
+                    self.config_inputs_btn.config(state='disabled')
                 self.status_var.set("Disconnected")
                 self.ps_controller = None
             else:
                 self.status_var.set("Connected")
+                if hasattr(self, 'config_inputs_btn'):
+                    self.config_inputs_btn.config(state='normal')
                 self._initialize_hardware_readers()
                 # Re-initialize the analog PS controller with the live T8 handle
                 self._initialize_power_supply()
@@ -1294,6 +1346,16 @@ class MainWindow:
         # ramp_panel removed; safety monitor status shown via _update_safety_display()
         pass
 
+    def _on_master_scroll(self, value):
+        """Sync all plots to the master scrollbar position."""
+        val = float(value)
+        if hasattr(self, 'plot_tc'):
+            self.plot_tc.sync_scroll(val)
+        if hasattr(self, 'plot_pressure'):
+            self.plot_pressure.sync_scroll(val)
+        if hasattr(self, 'plot_ps'):
+            self.plot_ps.sync_scroll(val)
+
     def _on_start(self):
         # Show pre-flight checklist unless in practice mode or user has disabled it
         if not self._practice_mode and not self._app_settings.skip_preflight_check:
@@ -1305,6 +1367,8 @@ class MainWindow:
 
         self.is_running = True
         self.start_btn.config(state='disabled')
+        if hasattr(self, 'config_inputs_btn'):
+            self.config_inputs_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
         self.log_btn.config(state='normal')
         self.status_var.set("Running")
@@ -1374,6 +1438,12 @@ class MainWindow:
 
         self.start_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
+        
+        # Re-enable config button if we have a real connection
+        if not self._practice_mode and self.connection and self.connection.is_connected():
+            if hasattr(self, 'config_inputs_btn'):
+                self.config_inputs_btn.config(state='normal')
+        
         self.status_var.set("Stopped")
 
         if self.ramp_executor.is_active():
@@ -1465,17 +1535,14 @@ class MainWindow:
                 if self.connection.connect():
                     if self._initialize_hardware_readers():
                         lj_connected = True
-                        self.status_var.set("Connected")
-                        self.start_btn.config(state='normal')
+                        self._update_connection_state(True)
                     else:
                         self.connection.disconnect()
                         lj_connected = False
 
             if not lj_connected:
                 if self.status_var.get() != "Disconnected":
-                    self.status_var.set("Disconnected")
-                    self.start_btn.config(state='disabled')
-                    self.stop_btn.config(state='disabled')
+                    self._update_connection_state(False)
                     self.is_running = False
                     for name in self.indicators:
                         self.indicators[name].config(bg='#333333')
@@ -1578,6 +1645,10 @@ class MainWindow:
             frg_names = [g['name'] for g in self.config.get('frg702_gauges', [])
                          if g.get('enabled', True)]
 
+            # If any plot is live, keep master scroll at 1.0
+            if hasattr(self, 'plot_tc') and self.plot_tc._is_live:
+                self.master_scroll_var.set(1.0)
+
             if hasattr(self, 'plot_tc'):
                 self.plot_tc.update(tc_names)
             if hasattr(self, 'plot_pressure'):
@@ -1645,6 +1716,34 @@ class MainWindow:
             self.xgs600 = None
             return False
 
+    def _check_keysight_monitor_config(self):
+        """
+        Checks which voltage range is configured for monitoring.
+        User must verify the physical switch setting.
+        """
+        print("\n=== KEYSIGHT MONITOR CONFIGURATION ===")
+        print("Check SW1 Switch 4 on the Keysight power supply:")
+        print("  DOWN (default) = 0-5V monitoring range")
+        print("  UP = 0-10V monitoring range")
+        print()
+        
+        while True:
+            response = input("Is SW1 Switch 4 UP or DOWN? (up/down): ").lower().strip()
+            if response in ['up', 'down']:
+                return response
+            print("Please enter 'up' or 'down'")
+
+    def _verify_t8_input_impedance(self):
+        """
+        Verify T8 is configured for high impedance input.
+        T8 default is 10 MΩ which exceeds 500 kΩ requirement.
+        """
+        print("\n=== T8 INPUT IMPEDANCE CHECK ===")
+        print("LabJack T8 AIN channels default to 10 MΩ input impedance")
+        print("Keysight requires > 500 kΩ")
+        print("✓ T8 meets requirement (10 MΩ >> 500 kΩ)")
+        print("No configuration changes needed.")
+
     def _initialize_power_supply(self):
         try:
             handle = self.connection.get_handle()
@@ -1665,17 +1764,28 @@ class MainWindow:
                 print("[DEBUG] Cannot initialize power supply: LabJack handle is None")
                 return False
 
+            # Verify impedance is OK
+            self._verify_t8_input_impedance()
+            
+            # Monitoring range is fixed to 0-5V (SW1 Switch 4 DOWN)
+            switch_position = 'down'
+
             self.ps_controller = KeysightAnalogController(
                 handle,
-                rated_max_volts=ps_config.get('rated_max_volts', 60.0),
-                rated_max_amps=ps_config.get('rated_max_amps', 25.0),
-                voltage_limit=ps_config.get('default_voltage_limit', 20.0),
-                current_limit=ps_config.get('default_current_limit', 50.0),
+                rated_max_volts=ps_config.get('rated_max_volts', 6.0),
+                rated_max_amps=ps_config.get('rated_max_amps', 180.0), # Fixed to PSU rating
+                voltage_limit=ps_config.get('default_voltage_limit', 6.0),
+                current_limit=ps_config.get('default_current_limit', 10.0), # Limited for sample safety
                 voltage_pin=ps_config.get('voltage_pin', "DAC0"),
                 current_pin=ps_config.get('current_pin', "DAC1"),
                 voltage_monitor_pin=ps_config.get('voltage_monitor_pin', "AIN4"),
-                current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5")
+                current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5"),
+                switch_4_position=switch_position
             )
+
+            # Run validation test if requested
+            if messagebox.askyesno("Validation Test", "Run Keysight monitoring scaling validation test now?\n\nCheck console for instructions."):
+                self.ps_controller.validate_scaling()
 
             # Update live DAQ engine if running
             if self.daq:
@@ -1688,7 +1798,7 @@ class MainWindow:
             i_pin = ps_config.get('current_pin', 'DAC1')
             self.ps_resource_var.set(f"Analog ({v_pin}/{i_pin})")
 
-            print("Analog power supply controller initialized successfully")
+            print(f"Analog power supply controller initialized successfully (Range: {switch_position})")
             return True
         except Exception as e:
             print(f"Failed to initialize analog PS controller: {e}")

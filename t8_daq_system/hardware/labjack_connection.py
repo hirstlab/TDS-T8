@@ -108,3 +108,39 @@ class LabJackConnection:
                 'max_bytes_per_mb': self.device_info[5]
             }
         return None
+
+    def configure_ain_single_ended(self, channels):
+        """
+        Forces specified AIN channels to single-ended mode.
+        On T8, this means NEGATIVE_CH = channel number itself.
+        Verifies the write succeeded.
+
+        Args:
+            channels: List of channel numbers, e.g. [4, 5]
+
+        Returns:
+            True if all writes succeeded, False otherwise
+        """
+        if not self.handle:
+            print("Cannot configure AIN: Device not connected")
+            return False
+
+        success = True
+        for ch in channels:
+            reg = f"AIN{ch}_NEGATIVE_CH"
+            # T8 specific: single-ended is channel number itself.
+            # (On T7 it would be 199).
+            val_to_write = ch 
+            try:
+                ljm.eWriteName(self.handle, reg, val_to_write)
+                # Verify write
+                val = ljm.eReadName(self.handle, reg)
+                if int(val) != val_to_write:
+                    print(f"Verification failed for {reg}: wrote {val_to_write}, read {val}")
+                    success = False
+                else:
+                    print(f"Successfully configured {reg} to single-ended ({val_to_write})")
+            except ljm.LJMError as e:
+                print(f"Error configuring {reg}: {e}")
+                success = False
+        return success

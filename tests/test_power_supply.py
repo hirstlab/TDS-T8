@@ -17,23 +17,16 @@ class TestKeysightAnalogController(unittest.TestCase):
         self.handle = 42  # Dummy LJM handle
 
         # Create controller with known ratings so scaling maths is easy to verify
+        # Now using the new 6V/180A range as default
         self.controller = KeysightAnalogController(
             self.handle,
-            rated_max_volts=60.0,
-            rated_max_amps=25.0,
-            voltage_limit=20.0,
-            current_limit=10.0,
+            rated_max_volts=6.0,
+            rated_max_amps=180.0,
+            voltage_limit=5.0,
+            current_limit=100.0,
         )
 
     # ── Initialisation ────────────────────────────────────────────────────────
-
-    def test_init_configures_ain_negative_channels(self):
-        """AIN4 and AIN5 must be set to GND reference (199) on init."""
-        ain_calls = [c for c in mock_ljm.eWriteName.call_args_list
-                     if 'NEGATIVE_CH' in str(c)]
-        channels = {c[0][1]: c[0][2] for c in ain_calls}
-        self.assertEqual(channels.get('AIN4_NEGATIVE_CH'), 199)
-        self.assertEqual(channels.get('AIN5_NEGATIVE_CH'), 199)
 
     def test_init_enables_analog_mode(self):
         """EIO0 must be pulled LOW (0) on init to select analog programming mode."""
@@ -45,88 +38,95 @@ class TestKeysightAnalogController(unittest.TestCase):
     def test_init_with_none_handle_skips_configuration(self):
         """Passing handle=None must not call any LJM functions."""
         mock_ljm.reset_mock()
-        KeysightAnalogController(None, rated_max_volts=60.0, rated_max_amps=25.0)
+        KeysightAnalogController(None, rated_max_volts=6.0, rated_max_amps=180.0)
         mock_ljm.eWriteName.assert_not_called()
 
     # ── Voltage scaling ───────────────────────────────────────────────────────
 
     def test_set_voltage_scales_to_dac(self):
-        """12 V on a 60 V supply should write exactly 2.0 V to DAC0."""
-        # voltage_limit=20 V, so 12 V is within limit; scale = 12/60*10 = 2.0 V
-        self.controller.set_voltage(12.0)
-        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC0', 2.0)
+        """3.0 V on a 6.0 V supply should write exactly 2.5 V to DAC0."""
+        # voltage_limit=5.0 V, so 3.0 V is within limit; scale = 3/6*5 = 2.5 V
+        self.controller.set_voltage(3.0)
+        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC0', 2.5)
 
     def test_set_voltage_full_scale(self):
-        """60 V (full scale) should write 10 V to DAC0 — but only if limit allows."""
-        ctrl = KeysightAnalogController(self.handle, rated_max_volts=60.0,
-                                        rated_max_amps=25.0, voltage_limit=60.0)
+        """6.0 V (full scale) should write 5.0 V to DAC0 — but only if limit allows."""
+        ctrl = KeysightAnalogController(self.handle, rated_max_volts=6.0,
+                                        rated_max_amps=180.0, voltage_limit=6.0)
         mock_ljm.reset_mock()
-        ctrl.set_voltage(60.0)
-        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC0', 10.0)
+        # Mock readback to satisfy the new print/read logic in set_voltage
+        mock_ljm.eReadName.return_value = 5.0
+        ctrl.set_voltage(6.0)
+        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC0', 5.0)
 
     def test_set_voltage_zero(self):
         """0 V should write 0 V to DAC0."""
+        # Mock readback
+        mock_ljm.eReadName.return_value = 0.0
         self.controller.set_voltage(0.0)
         mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC0', 0.0)
 
     def test_set_voltage_validates_limit(self):
-        """Values above voltage_limit (20 V) must raise ValueError."""
-        with self.assertRaises(ValueError) as ctx:
-            self.controller.set_voltage(25.0)
-        self.assertIn("exceeds limit", str(ctx.exception))
+        """Values above voltage_limit (5.0 V) must return False."""
+        result = self.controller.set_voltage(5.5)
+        self.assertFalse(result)
 
     def test_set_voltage_rejects_negative(self):
-        """Negative voltages must raise ValueError."""
-        with self.assertRaises(ValueError) as ctx:
-            self.controller.set_voltage(-1.0)
-        self.assertIn("cannot be negative", str(ctx.exception))
+        """Negative voltages must return False."""
+        result = self.controller.set_voltage(-1.0)
+        self.assertFalse(result)
 
     def test_set_voltage_returns_true_on_success(self):
-        result = self.controller.set_voltage(10.0)
+        # Mock readback
+        mock_ljm.eReadName.return_value = 2.5
+        result = self.controller.set_voltage(3.0)
         self.assertTrue(result)
 
     def test_set_voltage_returns_false_on_ljm_error(self):
         mock_ljm.eWriteName.side_effect = Exception("LJM timeout")
-        result = self.controller.set_voltage(10.0)
+        result = self.controller.set_voltage(3.0)
         self.assertFalse(result)
         mock_ljm.eWriteName.side_effect = None
 
     # ── Current scaling ───────────────────────────────────────────────────────
 
     def test_set_current_scales_to_dac(self):
-        """5 A on a 25 A supply should write 2.0 V to DAC1."""
-        self.controller.set_current(5.0)
-        # 5 A / 25 A * 10 V = 2.0 V
-        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC1', 2.0)
+        """90 A on a 180 A supply should write 2.5 V to DAC1."""
+        # Mock readback
+        mock_ljm.eReadName.return_value = 2.5
+        self.controller.set_current(90.0)
+        # 90 A / 180 A * 5 V = 2.5 V
+        mock_ljm.eWriteName.assert_any_call(self.handle, 'DAC1', 2.5)
 
     def test_set_current_validates_limit(self):
-        """Values above current_limit (10 A) must raise ValueError."""
-        with self.assertRaises(ValueError) as ctx:
-            self.controller.set_current(15.0)
-        self.assertIn("exceeds limit", str(ctx.exception))
+        """Values above current_limit (100 A) must return False."""
+        result = self.controller.set_current(110.0)
+        self.assertFalse(result)
 
     def test_set_current_rejects_negative(self):
-        with self.assertRaises(ValueError):
-            self.controller.set_current(-0.5)
+        result = self.controller.set_current(-0.5)
+        self.assertFalse(result)
 
     def test_set_current_returns_true_on_success(self):
-        result = self.controller.set_current(5.0)
+        # Mock readback
+        mock_ljm.eReadName.return_value = 2.5
+        result = self.controller.set_current(90.0)
         self.assertTrue(result)
 
     # ── Setpoint readback ─────────────────────────────────────────────────────
 
     def test_get_voltage_setpoint_scales_dac_readback(self):
-        """DAC0 returning 5 V should give 30 V setpoint on a 60 V supply."""
-        mock_ljm.eReadName.return_value = 5.0
+        """DAC0 returning 2.5 V should give 3.0 V setpoint on a 6.0 V supply."""
+        mock_ljm.eReadName.return_value = 2.5
         result = self.controller.get_voltage_setpoint()
-        self.assertAlmostEqual(result, 30.0)
+        self.assertAlmostEqual(result, 3.0)
         mock_ljm.eReadName.assert_called_with(self.handle, 'DAC0')
 
     def test_get_current_setpoint_scales_dac_readback(self):
-        """DAC1 returning 4 V should give 10 A setpoint on a 25 A supply."""
-        mock_ljm.eReadName.return_value = 4.0
+        """DAC1 returning 2.5 V should give 90.0 A setpoint on a 180.0 A supply."""
+        mock_ljm.eReadName.return_value = 2.5
         result = self.controller.get_current_setpoint()
-        self.assertAlmostEqual(result, 10.0)
+        self.assertAlmostEqual(result, 90.0)
         mock_ljm.eReadName.assert_called_with(self.handle, 'DAC1')
 
     def test_get_voltage_setpoint_returns_none_on_error(self):
@@ -138,18 +138,44 @@ class TestKeysightAnalogController(unittest.TestCase):
     # ── Monitor readings ──────────────────────────────────────────────────────
 
     def test_get_voltage_scales_ain_reading(self):
-        """AIN4 returning 2.5 V should report 30 V on a 60 V supply (5V monitor range)."""
+        """AIN4 returning 2.5 V should report 3.0 V on a 6.0 V supply (5V monitor range)."""
         mock_ljm.eReadName.return_value = 2.5
         result = self.controller.get_voltage()
-        self.assertAlmostEqual(result, 30.0)
+        self.assertAlmostEqual(result, 3.0)
         mock_ljm.eReadName.assert_called_with(self.handle, 'AIN4')
 
     def test_get_current_scales_ain_reading(self):
-        """AIN5 returning 4.0 V should report 20 A on a 25 A supply (5V monitor range)."""
-        mock_ljm.eReadName.return_value = 4.0
+        """AIN5 returning 2.5 V should report 90.0 A on a 180.0 A supply (5V monitor range)."""
+        mock_ljm.eReadName.return_value = 2.5
         result = self.controller.get_current()
-        self.assertAlmostEqual(result, 20.0)
+        self.assertAlmostEqual(result, 90.0)
         mock_ljm.eReadName.assert_called_with(self.handle, 'AIN5')
+
+    def test_get_voltage_scales_ain_reading_switch_up(self):
+        """AIN4 returning 5.0 V should report 3.0 V on a 6.0 V supply when switch 4 is UP (10V range)."""
+        ctrl_up = KeysightAnalogController(
+            self.handle,
+            rated_max_volts=6.0,
+            rated_max_amps=180.0,
+            switch_4_position='up'
+        )
+        mock_ljm.eReadName.return_value = 5.0
+        # 5V / 10V * 6V = 3V
+        result = ctrl_up.get_voltage()
+        self.assertAlmostEqual(result, 3.0)
+
+    def test_get_current_scales_ain_reading_switch_up(self):
+        """AIN5 returning 5.0 V should report 90.0 A on a 180.0 A supply when switch 4 is UP (10V range)."""
+        ctrl_up = KeysightAnalogController(
+            self.handle,
+            rated_max_volts=6.0,
+            rated_max_amps=180.0,
+            switch_4_position='up'
+        )
+        mock_ljm.eReadName.return_value = 5.0
+        # 5V / 10V * 180A = 90A
+        result = ctrl_up.get_current()
+        self.assertAlmostEqual(result, 90.0)
 
     def test_get_voltage_returns_none_on_error(self):
         mock_ljm.eReadName.side_effect = Exception("AIN read failed")
@@ -246,10 +272,10 @@ class TestKeysightAnalogController(unittest.TestCase):
         self.assertIn('PS_Output_On', readings)
 
     def test_get_readings_voltage_value(self):
-        """AIN4=5 V on 60 V supply → PS_Voltage=60 V (5V monitor range, full scale)."""
+        """AIN4=5 V on 6.0 V supply → PS_Voltage=6.0 V (5V monitor range, full scale)."""
         mock_ljm.eReadName.return_value = 5.0
         readings = self.controller.get_readings()
-        self.assertAlmostEqual(readings['PS_Voltage'], 60.0)
+        self.assertAlmostEqual(readings['PS_Voltage'], 6.0)
 
     def test_get_status_contains_required_keys(self):
         mock_ljm.eReadName.return_value = 0.0
@@ -269,20 +295,24 @@ class TestKeysightAnalogController(unittest.TestCase):
     # ── Limit management ─────────────────────────────────────────────────────
 
     def test_set_voltage_limit_updates_limit(self):
-        self.controller.set_voltage_limit(15.0)
-        self.assertEqual(self.controller.voltage_limit, 15.0)
-        result = self.controller.set_voltage(14.0)
+        self.controller.set_voltage_limit(5.5)
+        self.assertEqual(self.controller.voltage_limit, 5.5)
+        # Mock readback to satisfy the new print/read logic in set_voltage
+        mock_ljm.eReadName.return_value = 4.583333333
+        result = self.controller.set_voltage(5.5)
         self.assertTrue(result)
 
     def test_set_current_limit_updates_limit(self):
-        self.controller.set_current_limit(8.0)
-        self.assertEqual(self.controller.current_limit, 8.0)
-        result = self.controller.set_current(7.5)
+        self.controller.set_current_limit(80.0)
+        self.assertEqual(self.controller.current_limit, 80.0)
+        # Mock readback
+        mock_ljm.eReadName.return_value = 2.0
+        result = self.controller.set_current(72.0)
         self.assertTrue(result)
 
     def test_set_voltage_limit_ignores_zero_or_negative(self):
         self.controller.set_voltage_limit(0)
-        self.assertEqual(self.controller.voltage_limit, 20.0)  # unchanged
+        self.assertEqual(self.controller.voltage_limit, 5.0)  # unchanged (limit set in setUp)
 
 
 class TestKeysightAnalogControllerDefaultRatings(unittest.TestCase):
@@ -293,17 +323,17 @@ class TestKeysightAnalogControllerDefaultRatings(unittest.TestCase):
         self.handle = 1
 
     def test_default_limits_equal_rated_max(self):
-        ctrl = KeysightAnalogController(self.handle, rated_max_volts=60.0,
-                                        rated_max_amps=25.0)
-        self.assertEqual(ctrl.voltage_limit, 60.0)
-        self.assertEqual(ctrl.current_limit, 25.0)
+        ctrl = KeysightAnalogController(self.handle, rated_max_volts=6.0,
+                                        rated_max_amps=180.0)
+        self.assertEqual(ctrl.voltage_limit, 6.0)
+        self.assertEqual(ctrl.current_limit, 180.0)
 
     def test_explicit_limits_override_rated_max(self):
-        ctrl = KeysightAnalogController(self.handle, rated_max_volts=60.0,
-                                        rated_max_amps=25.0,
-                                        voltage_limit=20.0, current_limit=10.0)
-        self.assertEqual(ctrl.voltage_limit, 20.0)
-        self.assertEqual(ctrl.current_limit, 10.0)
+        ctrl = KeysightAnalogController(self.handle, rated_max_volts=6.0,
+                                        rated_max_amps=180.0,
+                                        voltage_limit=5.0, current_limit=100.0)
+        self.assertEqual(ctrl.voltage_limit, 5.0)
+        self.assertEqual(ctrl.current_limit, 100.0)
 
 
 if __name__ == '__main__':

@@ -97,9 +97,10 @@ class DataAcquisition:
             if self.ps_controller:
                 ps_readings = self.ps_controller.get_readings()
             elif self.config.get('power_supply', {}).get('enabled', True):
+                t = time.time()
                 ps_readings = {
-                    'PS_Voltage': 12.0 + random.uniform(-0.1, 0.1),
-                    'PS_Current': 2.0 + random.uniform(-0.05, 0.05)
+                    'PS_Voltage': 12.0 + 2.0 * math.sin(t / 15.0) + random.uniform(-0.1, 0.1),
+                    'PS_Current': 2.0 + 0.5 * math.cos(t / 12.0) + random.uniform(-0.05, 0.05)
                 }
         else:
             # Read real hardware

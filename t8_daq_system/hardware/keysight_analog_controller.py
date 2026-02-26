@@ -2,16 +2,17 @@
 keysight_analog_controller.py
 PURPOSE: Control the Keysight N5700 DC Power Supply via analog signals through the
          LabJack T8's DAC/AIN channels (J1 DB25 connector wired to T8 screw terminals).
-FLOW: Scale target voltage/current to 0-10V DAC output -> Write to DAC0/DAC1
+FLOW: Scale target voltage/current to 0-5V DAC output -> Write to DAC0/DAC1
       Read AIN4/AIN5 monitor voltages -> Scale back to engineering units
 WIRING:
-    J1 Pin 9  -> DAC0         (Voltage Program, 0-10V = 0-rated_max_volts)
+    J1 Pin 9  -> DAC0         (Voltage Program, 0-5V = 0-6V PSU output)
     J1 Pin 22 -> DAC GND      (Voltage Prog. Return)
-    J1 Pin 10 -> DAC1         (Current Program, 0-10V = 0-rated_max_amps)
+    J1 Pin 10 -> DAC1         (Current Program, 0-5V = 0-180A PSU output)
     J1 Pin 23 -> DAC GND      (Current Prog. Return)
     J1 Pin 11 -> AIN4         (Voltage Monitor, SW1 Switch 4 DOWN = 0–5V monitor range)
     J1 Pin 24 -> AIN5         (Current Monitor, SW1 Switch 4 DOWN = 0–5V monitor range)
-    J1 Pin 12 -> GND          (Signal Common for monitors)
+    J1 Pin 12 -> AIN4-        (Signal Common / -S, also jumpered to AIN5-)
+                              No connection to T8 GND - avoids ground loop
     J1 Pin 8  -> EIO0         (Local/Analog select - pull LOW for analog mode)
     J1 Pin 15 -> EIO1         (Shut Off - pull HIGH to kill output)
 """
@@ -28,9 +29,8 @@ class KeysightAnalogController:
     get_readings, emergency_shutdown, etc.) but uses LJM DAC/AIN calls instead
     of SCPI strings over VISA.
 
-    Scaling convention: the J1 connector accepts 0-10 V to represent 0-100% of the
-    supply's rated output.  DAC0 and DAC1 on the T8 both output 0-10 V natively,
-    so no external circuitry is needed.
+    Scaling convention: the J1 connector accepts 0-5 V to represent 0-100% of the
+    supply's rated output.  DAC0 and DAC1 on the T8 both output 0-5 V for full scale.
     """
 
     # T8 register names for each signal
@@ -41,23 +41,24 @@ class KeysightAnalogController:
     _DIO_ANALOG_EN = "EIO0" # J1 Pin 8  – pull LOW to enable analog mode
     _DIO_SHUTOFF  = "EIO1"  # J1 Pin 15 – pull HIGH to kill output
 
-    # LJM constant: 199 = single-ended (GND reference) for AIN negative channel
-    _AIN_GND_REF = 199
+    # Keysight SW1 switch 4 DOWN = 0-5V monitor range
+    # 0V = 0% of rated output, 5V = 100% of rated output
+    _MONITOR_RANGE_V = 5.0
 
-    def __init__(self, handle, rated_max_volts=60.0, rated_max_amps=25.0,
+    def __init__(self, handle, rated_max_volts=6.0, rated_max_amps=180.0,
                  voltage_limit=None, current_limit=None,
                  voltage_pin="DAC0", current_pin="DAC1",
                  voltage_monitor_pin="AIN4", current_monitor_pin="AIN5",
-                 monitor_range_volts=5.0):
+                 switch_4_position='down'):
         """
         Initialize the analog power supply controller.
 
         Args:
             handle: LJM device handle from LabJackConnection.get_handle()
-            rated_max_volts: Physical voltage rating of the supply (default 60 V for N5761A).
-                             10 V on DAC0 programs this full-scale output.
-            rated_max_amps:  Physical current rating of the supply (default 25 A for N5761A).
-                             10 V on DAC1 programs this full-scale output.
+            rated_max_volts: Physical voltage rating of the supply (default 6.0 V).
+                             5 V on DAC0 programs this full-scale output.
+            rated_max_amps:  Physical current rating of the supply (default 180.0 A).
+                             5 V on DAC1 programs this full-scale output.
             voltage_limit:   Maximum allowed voltage setpoint (software guard).
                              Defaults to rated_max_volts.
             current_limit:   Maximum allowed current setpoint (software guard).
@@ -66,15 +67,21 @@ class KeysightAnalogController:
             current_pin:     LJM register for current programming (e.g. "DAC1")
             voltage_monitor_pin: LJM register for voltage monitoring (e.g. "AIN4")
             current_monitor_pin: LJM register for current monitoring (e.g. "AIN5")
-            monitor_range_volts: Full-scale voltage of the analog monitor outputs.
-                             SW1 Switch 4 DOWN = 0–5V monitor range (default 5.0 V).
+            switch_4_position: 'down' for 0-5V monitor range (default), 'up' for 0-10V
         """
         self.handle = handle
         self.rated_max_volts = rated_max_volts
         self.rated_max_amps = rated_max_amps
         self.voltage_limit = voltage_limit if voltage_limit is not None else rated_max_volts
         self.current_limit = current_limit if current_limit is not None else rated_max_amps
-        self.monitor_range_volts = monitor_range_volts
+        self.switch_4_position = switch_4_position.lower().strip()
+        
+        if self.switch_4_position not in ['up', 'down']:
+            print(f"Warning: Invalid switch_4_position '{self.switch_4_position}', defaulting to 'down'")
+            self.switch_4_position = 'down'
+
+        # Keysight SW1 switch 4 determines monitor range
+        self._MONITOR_RANGE_V = 10.0 if self.switch_4_position == 'up' else 5.0
         
         # Override class defaults with instance-specific pins
         self._DAC_VOLTAGE = voltage_pin
@@ -96,14 +103,29 @@ class KeysightAnalogController:
     # ──────────────────────────────────────────────────────────────────────────
 
     def _configure_ain_channels(self):
-        """Configure AIN channels for single-ended (GND-referenced) mode."""
+        """
+        Configure AIN4 and AIN5 for hardware differential measurement.
+
+        WIRING: Keysight J1 Pin 12 (Signal Common / -S) is physically wired to
+        both AIN4- and AIN5- on the T8 breakout board. This makes the measurement
+        a true differential pair with Pin 12 as the reference - no software
+        NEGATIVE_CH configuration is needed or written.
+
+        The Keysight SW1 switch 4 is DOWN (default), so monitor outputs are
+        0-5V range (0V = 0% output, 5V = 100% output). The T8 AIN range is
+        set to +-10V which safely covers the 0-5V signal with headroom.
+
+        DO NOT write AIN_NEGATIVE_CH here. The T8 thermocouple EF firmware
+        on AIN0-AIN3 overrides that register, and attempting to write 199
+        (GND reference) to AIN4/AIN5 caused conflicts in prior versions.
+        The hardware wiring makes this unnecessary.
+        """
         try:
-            print(f"[DEBUG] Keysight: Configuring {self._AIN_VOLTAGE} and {self._AIN_CURRENT} for single-ended mode")
-            ljm.eWriteName(self.handle, f"{self._AIN_VOLTAGE}_NEGATIVE_CH", self._AIN_GND_REF)
-            ljm.eWriteName(self.handle, f"{self._AIN_CURRENT}_NEGATIVE_CH", self._AIN_GND_REF)
+            # Set range to +-10V to safely cover the 0-5V Keysight monitor output
+            ljm.eWriteName(self.handle, f"{self._AIN_VOLTAGE}_RANGE", 10.0)
+            ljm.eWriteName(self.handle, f"{self._AIN_CURRENT}_RANGE", 10.0)
         except Exception as e:
-            print(f"[DEBUG] Keysight: Non-fatal error configuring AIN: {e}")
-            pass  # Non-fatal; default config is usually single-ended anyway
+            print(f"Warning: Could not configure AIN ranges for Keysight monitors: {e}")
 
     def _enable_analog_mode(self):
         """
@@ -136,12 +158,12 @@ class KeysightAnalogController:
         return True
 
     def _volts_to_dac(self, value, rated_max):
-        """Scale an engineering value to the 0-10 V DAC range."""
-        return (value / rated_max) * 10.0
+        """Scale an engineering value to the 0-5 V DAC range."""
+        return (value / rated_max) * 5.0
 
     def _dac_to_volts(self, dac_v, rated_max):
-        """Scale a DAC readback (0-10 V) back to engineering units."""
-        return (dac_v / 10.0) * rated_max
+        """Scale a DAC readback (0-5 V) back to engineering units."""
+        return (dac_v / 5.0) * rated_max
 
     # ──────────────────────────────────────────────────────────────────────────
     # Setpoint commands (write to DAC)
@@ -156,14 +178,30 @@ class KeysightAnalogController:
 
         Returns:
             True if successful, False if failed
-
-        Raises:
-            ValueError: If voltage exceeds configured limit
         """
-        self._validate_voltage(volts)
+        # STEP 1: Safety checks
+        if volts < 0 or volts > self.voltage_limit:
+            print(f"ERROR: Voltage {volts}V is out of range (0-{self.voltage_limit}V)")
+            return False
+
         try:
-            dac_v = self._volts_to_dac(volts, self.rated_max_volts)
+            # STEP 2: Calculate DAC values with correct scaling
+            dac_v = (volts / self.rated_max_volts) * 5.0
+            
+            # STEP 3: Debug output (Before write)
+            print(f"=== KEYSIGHT VOLTAGE COMMAND DEBUG ===")
+            print(f"Requested Output: {volts}V")
+            print(f"Calculated DAC Voltage: {dac_v:.3f}V")
+            print(f"Expected PSU Output: {volts}V")
+            
+            # STEP 4: Send to T8
             ljm.eWriteName(self.handle, self._DAC_VOLTAGE, dac_v)
+            
+            # STEP 5: Readback Verification
+            actual_dac_v = ljm.eReadName(self.handle, self._DAC_VOLTAGE)
+            print(f"DAC Readback - V channel: {actual_dac_v:.3f}V")
+            print(f"=======================================")
+            
             return True
         except Exception as e:
             print(f"Failed to set voltage: {e}")
@@ -178,14 +216,30 @@ class KeysightAnalogController:
 
         Returns:
             True if successful, False if failed
-
-        Raises:
-            ValueError: If current exceeds configured limit
         """
-        self._validate_current(amps)
+        # STEP 1: Safety checks
+        if amps < 0 or amps > self.current_limit:
+            print(f"ERROR: Current {amps}A is out of range (0-{self.current_limit}A)")
+            return False
+
         try:
-            dac_v = self._volts_to_dac(amps, self.rated_max_amps)
-            ljm.eWriteName(self.handle, self._DAC_CURRENT, dac_v)
+            # STEP 2: Calculate DAC values with correct scaling
+            dac_i = (amps / self.rated_max_amps) * 5.0
+            
+            # STEP 3: Debug output (Before write)
+            print(f"=== KEYSIGHT CURRENT COMMAND DEBUG ===")
+            print(f"Requested Output: {amps}A")
+            print(f"Calculated DAC Current: {dac_i:.3f}V")
+            print(f"Expected PSU Output: {amps}A")
+            
+            # STEP 4: Send to T8
+            ljm.eWriteName(self.handle, self._DAC_CURRENT, dac_i)
+            
+            # STEP 5: Readback Verification
+            actual_dac_i = ljm.eReadName(self.handle, self._DAC_CURRENT)
+            print(f"DAC Readback - I channel: {actual_dac_i:.3f}V")
+            print(f"=======================================")
+            
             return True
         except Exception as e:
             print(f"Failed to set current: {e}")
@@ -231,35 +285,80 @@ class KeysightAnalogController:
         """
         Read the actual output voltage from the analog monitor (AIN4).
 
-        The supply outputs 0–5V on Pin 11 proportional to 0–rated_max_volts.
-        (SW1 Switch 4 DOWN = 0–5V monitor range.)
+        Keysight J1 Pin 11 outputs 0-5V proportional to 0-rated_max_volts
+        (SW1 switch 4 DOWN = 0-5V monitor range).
 
         Returns:
             float: Measured voltage in volts, or None on error
         """
         try:
             raw_v = ljm.eReadName(self.handle, self._AIN_VOLTAGE)
-            return (raw_v / self.monitor_range_volts) * self.rated_max_volts
+            return (raw_v / self._MONITOR_RANGE_V) * self.rated_max_volts
         except Exception as e:
-            print(f"Failed to measure voltage on {self._AIN_VOLTAGE}: {e}")
+            print(f"Failed to measure voltage: {e}")
             return None
 
     def get_current(self):
         """
         Read the actual output current from the analog monitor (AIN5).
 
-        The supply outputs 0–5V on Pin 24 proportional to 0–rated_max_amps.
-        (SW1 Switch 4 DOWN = 0–5V monitor range.)
+        Keysight J1 Pin 24 outputs 0-5V proportional to 0-rated_max_amps
+        (SW1 switch 4 DOWN = 0-5V monitor range).
 
         Returns:
             float: Measured current in amperes, or None on error
         """
         try:
             raw_v = ljm.eReadName(self.handle, self._AIN_CURRENT)
-            return (raw_v / self.monitor_range_volts) * self.rated_max_amps
+            return (raw_v / self._MONITOR_RANGE_V) * self.rated_max_amps
         except Exception as e:
-            print(f"Failed to measure current on {self._AIN_CURRENT}: {e}")
+            print(f"Failed to measure current: {e}")
             return None
+
+    def validate_scaling(self):
+        """
+        Test the scaling with known power supply outputs.
+        User should set power supply to known values and verify readings match.
+        """
+        print("\n=== SCALING VALIDATION TEST ===")
+        print("Manually set the Keysight to these values and verify readings:")
+        print()
+        
+        test_points = [
+            (0.0, 0.0, "Zero output"),
+            (self.rated_max_volts / 2.0, self.rated_max_amps / 2.0, "Half scale (50%)"),
+            (self.rated_max_volts, self.rated_max_amps, "Full scale (100%)")
+        ]
+        
+        for expected_v, expected_a, description in test_points:
+            print(f"\n--- {description} ---")
+            print(f"Set Keysight to: {expected_v:.2f}V, {expected_a:.2f}A")
+            input("Press Enter when Keysight is set...")
+            
+            actual_v = self.get_voltage()
+            actual_a = self.get_current()
+            
+            if actual_v is None or actual_a is None:
+                print("✗ ERROR: Could not read from Keysight monitors")
+                continue
+
+            v_error = abs(actual_v - expected_v)
+            a_error = abs(actual_a - expected_a)
+            
+            print(f"Expected: {expected_v:.2f}V, {expected_a:.2f}A")
+            print(f"Read:     {actual_v:.3f}V, {actual_a:.2f}A")
+            print(f"Error:    {v_error:.3f}V, {a_error:.2f}A")
+            
+            # Check if within reasonable tolerance (2% of max)
+            v_tol = self.rated_max_volts * 0.02
+            a_tol = self.rated_max_amps * 0.02
+            
+            if v_error < v_tol and a_error < a_tol:
+                print(f"✓ PASS - Within tolerance ({v_tol:.3f}V, {a_tol:.2f}A)")
+            else:
+                print("✗ FAIL - Outside tolerance")
+                print("  Check: Is SW1-4 switch position correct?")
+                print("  Check: Are AIN channels wired to correct J1 pins?")
 
     # ──────────────────────────────────────────────────────────────────────────
     # Output enable / disable
@@ -410,23 +509,23 @@ class KeysightAnalogController:
 
     def set_voltage_limit(self, volts):
         """
-        Update the software voltage limit (does not affect the rated_max_volts scale).
+        Update the software voltage limit (capped at rated_max_volts).
 
         Args:
             volts: New maximum voltage limit
         """
         if volts > 0:
-            self.voltage_limit = volts
+            self.voltage_limit = min(volts, self.rated_max_volts)
 
     def set_current_limit(self, amps):
         """
-        Update the software current limit (does not affect the rated_max_amps scale).
+        Update the software current limit (capped at rated_max_amps).
 
         Args:
             amps: New maximum current limit
         """
         if amps > 0:
-            self.current_limit = amps
+            self.current_limit = min(amps, self.rated_max_amps)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Data acquisition interface

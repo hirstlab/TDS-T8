@@ -36,7 +36,7 @@ class LivePlot:
     # Fixed 2-minute rolling window for all plots
     WINDOW_SECONDS = 120
 
-    def __init__(self, parent_frame, data_buffer, plot_type='tc'):
+    def __init__(self, parent_frame, data_buffer, plot_type='tc', show_scrollbar=True):
         """
         Initialize a dedicated single-subject live plot.
 
@@ -44,6 +44,7 @@ class LivePlot:
             parent_frame: tkinter frame to embed the plot in
             data_buffer:  DataBuffer object to read data from
             plot_type:    'tc' | 'pressure' | 'ps'
+            show_scrollbar: If False, this plot is controlled externally
         """
         self.data_buffer = data_buffer
         self.parent = parent_frame
@@ -105,13 +106,9 @@ class LivePlot:
         self.ax.grid(True, alpha=0.3)
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
 
-        # ── Embed canvas ──────────────────────────────────────────────────
-        self.canvas = FigureCanvasTkAgg(self.fig, master=parent_frame)
-        self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-
         # ── Scrollbar + mode label (Change 5) ─────────────────────────────
         scroll_frame = ttk.Frame(parent_frame)
-        scroll_frame.pack(fill=tk.X, padx=2, pady=(0, 2))
+        scroll_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=2, pady=(0, 2))
 
         self._mode_label = ttk.Label(
             scroll_frame, text="● LIVE", foreground='green', font=('Arial', 7)
@@ -119,11 +116,18 @@ class LivePlot:
         self._mode_label.pack(side=tk.LEFT, padx=3)
 
         self._scroll_var = tk.DoubleVar(value=1.0)
-        self._scrollbar = ttk.Scale(
-            scroll_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL,
-            variable=self._scroll_var, command=self._on_scroll
-        )
-        self._scrollbar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        if show_scrollbar:
+            self._scrollbar = ttk.Scale(
+                scroll_frame, from_=0.0, to=1.0, orient=tk.HORIZONTAL,
+                variable=self._scroll_var, command=self.sync_scroll
+            )
+            self._scrollbar.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        else:
+            self._scrollbar = None
+
+        # ── Embed canvas ──────────────────────────────────────────────────
+        self.canvas = FigureCanvasTkAgg(self.fig, master=parent_frame)
+        self.canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         # Live / frozen state
         self._is_live = True
@@ -133,9 +137,10 @@ class LivePlot:
     # Scrollbar callback  (Change 5)
     # ──────────────────────────────────────────────────────────────────────
 
-    def _on_scroll(self, value):
-        """Handle scrollbar movement."""
+    def sync_scroll(self, value):
+        """Handle scrollbar movement (can be called externally)."""
         val = float(value)
+        self._scroll_var.set(val)
         if val > 0.98:
             # Transition (back) to live mode
             if not self._is_live:
@@ -203,15 +208,16 @@ class LivePlot:
         Refresh the plot with current live data.
 
         In live mode: advances the 2-min window to now and redraws.
-        In frozen mode: no-op (only the scrollbar callback triggers redraws).
+        In frozen mode: no-op (only sync_scroll triggers redraws).
 
         Args:
             sensor_names: List of sensor names this plot should render.
         """
         if not self._is_live:
-            return  # Frozen — only _on_scroll triggers redraws
+            return  # Frozen — only sync_scroll triggers redraws
         # Keep scrollbar pinned to right edge while live
-        self._scroll_var.set(1.0)
+        if self._scrollbar is not None:
+            self._scroll_var.set(1.0)
         self._do_update_live(sensor_names)
 
     def update_from_loaded_data(self, loaded_data, sensor_names=None,

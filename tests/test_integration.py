@@ -19,11 +19,8 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
-    @patch('t8_daq_system.gui.main_window.RampPanel')
-    @patch('t8_daq_system.gui.main_window.PowerSupplyPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_main_window_init(self, mock_settings_cls, mock_ps_panel, mock_ramp_panel,
-                               mock_panel, mock_plot, mock_tk):
+    def test_main_window_init(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
         """Test that MainWindow can be instantiated with all GUI components mocked."""
         # Mock AppSettings to return a default-initialized object
         mock_settings = mock_settings_cls.return_value
