@@ -36,6 +36,14 @@ class StartupProfiler:
         self.checkpoints.append((safe_event, elapsed))
         self._safe_print(f"[{elapsed:7.1f}ms] {safe_event}")
 
+    def section(self, name):
+        """Mark the beginning of a major initialization section."""
+        self.log(f"--- SECTION: {name} ---")
+
+    def checkpoint(self, name):
+        """Mark a specific point in the initialization process."""
+        self.log(f"  > {name}")
+
     def summary(self):
         if not self.enabled or not self.checkpoints:
             return

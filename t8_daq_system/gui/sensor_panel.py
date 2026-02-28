@@ -275,6 +275,9 @@ class SensorPanel:
                 if value is None:
                     self.displays[name].config(text="--- V", foreground='gray')
                     self.status_labels[name].config(text="DISCONNECTED", foreground='red')
+                elif value < 0:
+                    self.displays[name].config(text=f"{value:.2f} V", foreground='black')
+                    self.status_labels[name].config(text="Output is turned off", foreground='red')
                 else:
                     self.displays[name].config(text=f"{value:.2f} V", foreground='black')
                     self.status_labels[name].config(text="CONNECTED", foreground='green')
@@ -283,8 +286,14 @@ class SensorPanel:
                     self.displays[name].config(text="--- A", foreground='gray')
                     self.status_labels[name].config(text="DISCONNECTED", foreground='red')
                 else:
-                    self.displays[name].config(text=f"{value:.2f} A", foreground='black')
-                    self.status_labels[name].config(text="CONNECTED", foreground='green')
+                    # Check if PS_Voltage is negative to display same status
+                    v_val = readings.get('PS_Voltage')
+                    if v_val is not None and v_val < 0:
+                        self.displays[name].config(text=f"{value:.2f} A", foreground='black')
+                        self.status_labels[name].config(text="Output is turned off", foreground='red')
+                    else:
+                        self.displays[name].config(text=f"{value:.2f} A", foreground='black')
+                        self.status_labels[name].config(text="CONNECTED", foreground='green')
             elif name in self.frg702_mode_labels:
                 # FRG-702 display: use scientific notation
                 self._update_frg702_display(name, value)

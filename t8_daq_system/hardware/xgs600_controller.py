@@ -18,7 +18,7 @@ class XGS600Controller:
     DEFAULT_ADDRESS = "00"
 
     def __init__(self, port, baudrate=DEFAULT_BAUDRATE, timeout=DEFAULT_TIMEOUT,
-                 address=DEFAULT_ADDRESS):
+                 address=DEFAULT_ADDRESS, debug=True):
         """
         Initialize XGS-600 controller connection parameters.
 
@@ -27,11 +27,13 @@ class XGS600Controller:
             baudrate: Baud rate (9600 or 19200)
             timeout: Read timeout in seconds
             address: Controller address ('00' for RS-232)
+            debug: Enable verbose serial logging
         """
         self.port = port
         self.baudrate = baudrate
         self.timeout = timeout
         self.address = address
+        self.debug = debug
         self._serial = None
 
     def connect(self, silent=False):
@@ -44,6 +46,9 @@ class XGS600Controller:
         Returns:
             True if connection successful, False otherwise
         """
+        if self.debug:
+            print(f"XGS-600: Attempting connection on {self.port} at {self.baudrate} baud...")
+            
         try:
             self._serial = serial.Serial(
                 port=self.port,
@@ -57,11 +62,17 @@ class XGS600Controller:
                 dsrdtr=False,
             )
 
+            if self.debug:
+                print(f"XGS-600: Serial port {self.port} opened successfully.")
+
             # Flush any stale data
             self._serial.reset_input_buffer()
             self._serial.reset_output_buffer()
 
             # Verify connection by requesting software version
+            if self.debug:
+                print("XGS-600: Sending software version query (#0005) for verification...")
+                
             response = self.send_command("05")
             if response is None:
                 if not silent:
@@ -84,6 +95,8 @@ class XGS600Controller:
     def disconnect(self):
         """Close serial port."""
         if self._serial and self._serial.is_open:
+            if self.debug:
+                print(f"XGS-600: Closing serial port {self.port}.")
             try:
                 self._serial.close()
             except serial.SerialException:
@@ -103,6 +116,8 @@ class XGS600Controller:
             or None if error/timeout
         """
         if not self._serial or not self._serial.is_open:
+            if self.debug:
+                print("XGS-600: Cannot send command - serial port not open.")
             return None
 
         # Build full command: #{address}{command}\r
@@ -112,16 +127,33 @@ class XGS600Controller:
             # Clear input buffer before sending
             self._serial.reset_input_buffer()
 
+            if self.debug:
+                print(f"XGS-600 TX: {repr(full_command)} (hex: {full_command.encode('ascii').hex()})")
+
             # Send command
             self._serial.write(full_command.encode('ascii'))
 
+            # Small delay to allow controller to process and respond
+            time.sleep(0.05)
+
             # Read response until \r
+            # Note: read_until will wait up to self.timeout
             response = self._serial.read_until(b'\r', size=256)
 
             if not response:
+                if self.debug:
+                    print("XGS-600 RX: <TIMEOUT> (no data received)")
                 return None
 
-            response_str = response.decode('ascii').strip('\r\n')
+            if self.debug:
+                print(f"XGS-600 RX: {repr(response)} (hex: {response.hex()})")
+
+            try:
+                response_str = response.decode('ascii').strip('\r\n')
+            except UnicodeDecodeError:
+                if self.debug:
+                    print(f"XGS-600: Failed to decode response as ASCII: {response}")
+                return None
 
             # Check for error response
             if response_str.startswith('?'):

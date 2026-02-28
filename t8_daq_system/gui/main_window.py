@@ -20,6 +20,8 @@ import sys
 import random
 import math
 
+from t8_daq_system.startup_profiler import profiler
+
 
 class GUIProfiler:
     """Lightweight continuous profiler for the GUI update loop."""
@@ -98,7 +100,6 @@ from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
 from t8_daq_system.gui.settings_dialog import SettingsDialog
 from t8_daq_system.gui.pinout_display import PinoutDisplay
 from t8_daq_system.core.data_acquisition import DataAcquisition
-from t8_daq_system.detailed_profiler import mainwindow_profiler as profiler
 from t8_daq_system.settings.app_settings import AppSettings
 
 
@@ -429,8 +430,8 @@ class MainWindow:
                 "current_pin": s.ps_current_pin,
                 "voltage_monitor_pin": s.ps_voltage_monitor_pin,
                 "current_monitor_pin": s.ps_current_monitor_pin,
-                "rated_max_volts": 60.0,
-                "rated_max_amps": 25.0,
+                "rated_max_volts": 6,
+                "rated_max_amps": 180,
                 "default_voltage_limit": s.ps_voltage_limit,
                 "default_current_limit": s.ps_current_limit,
                 "safety": {
@@ -573,28 +574,11 @@ class MainWindow:
             if not self.is_running:
                 if hasattr(self, 'start_btn'):
                     self.start_btn.config(state='normal')
-                if hasattr(self, 'config_inputs_btn'):
-                    self.config_inputs_btn.config(state='normal')
         else:
             self.status_var.set("Disconnected")
             # Disable controls
             if hasattr(self, 'start_btn'):
                 self.start_btn.config(state='disabled')
-            if hasattr(self, 'config_inputs_btn'):
-                self.config_inputs_btn.config(state='disabled')
-
-    def _on_configure_inputs(self):
-        """Forces AIN4 and AIN5 to single-ended mode (NEGATIVE_CH = 199)."""
-        if not self.connection or not self.connection.is_connected():
-            messagebox.showwarning("Not Connected", "Please connect to LabJack T8 first.", parent=self.root)
-            return
-
-        print("[CONFIG] Manually forcing AIN 4 and 5 to single-ended...")
-        success = self.connection.configure_ain_single_ended([4, 5])
-        if success:
-            messagebox.showinfo("Success", "AIN 4 and 5 configured to single-ended mode.", parent=self.root)
-        else:
-            messagebox.showerror("Error", "Failed to configure AIN 4 and 5. Check logs.", parent=self.root)
 
     def _build_gui(self):
         """Create all the GUI elements."""
@@ -666,12 +650,6 @@ class MainWindow:
             control_frame, text="Pinout", command=self._open_pinout_display
         )
         self.pinout_btn.pack(side=tk.LEFT, padx=5)
-
-        self.config_inputs_btn = ttk.Button(
-            control_frame, text="Configure Inputs", command=self._on_configure_inputs,
-            state='disabled'
-        )
-        self.config_inputs_btn.pack(side=tk.LEFT, padx=5)
 
         # Separator
         ttk.Separator(control_frame, orient='vertical').pack(
@@ -842,8 +820,6 @@ class MainWindow:
             self._hardware_init_attempted = True  # Practice mode counts as initialized
             self.practice_btn.config(text="Practice Mode: ON")
             self.start_btn.config(state='normal')
-            if hasattr(self, 'config_inputs_btn'):
-                self.config_inputs_btn.config(state='disabled')
             self.status_var.set("Practice Mode Active")
 
             if not self.config.get('frg702_gauges'):
@@ -864,14 +840,10 @@ class MainWindow:
 
             if not self.connection or not self.connection.is_connected():
                 self.start_btn.config(state='disabled')
-                if hasattr(self, 'config_inputs_btn'):
-                    self.config_inputs_btn.config(state='disabled')
                 self.status_var.set("Disconnected")
                 self.ps_controller = None
             else:
                 self.status_var.set("Connected")
-                if hasattr(self, 'config_inputs_btn'):
-                    self.config_inputs_btn.config(state='normal')
                 self._initialize_hardware_readers()
                 # Re-initialize the analog PS controller with the live T8 handle
                 self._initialize_power_supply()
@@ -1357,18 +1329,8 @@ class MainWindow:
             self.plot_ps.sync_scroll(val)
 
     def _on_start(self):
-        # Show pre-flight checklist unless in practice mode or user has disabled it
-        if not self._practice_mode and not self._app_settings.skip_preflight_check:
-            from t8_daq_system.gui.preflight_dialog import PreflightDialog
-            dlg = PreflightDialog(self.root, self.config, self._app_settings)
-            self.root.wait_window(dlg)
-            if not dlg.confirmed:
-                return  # User cancelled or closed without confirming
-
         self.is_running = True
         self.start_btn.config(state='disabled')
-        if hasattr(self, 'config_inputs_btn'):
-            self.config_inputs_btn.config(state='disabled')
         self.stop_btn.config(state='normal')
         self.log_btn.config(state='normal')
         self.status_var.set("Running")
@@ -1438,12 +1400,7 @@ class MainWindow:
 
         self.start_btn.config(state='normal')
         self.stop_btn.config(state='disabled')
-        
-        # Re-enable config button if we have a real connection
-        if not self._practice_mode and self.connection and self.connection.is_connected():
-            if hasattr(self, 'config_inputs_btn'):
-                self.config_inputs_btn.config(state='normal')
-        
+
         self.status_var.set("Stopped")
 
         if self.ramp_executor.is_active():
@@ -1697,6 +1654,7 @@ class MainWindow:
                 baudrate=xgs_config.get('baudrate', 9600),
                 timeout=xgs_config.get('timeout', 1.0),
                 address=xgs_config.get('address', '00'),
+                debug=True # Enable verbose serial logging for debugging
             )
             if not self.xgs600.connect(silent=True):
                 self.xgs600 = None
@@ -1780,12 +1738,9 @@ class MainWindow:
                 current_pin=ps_config.get('current_pin', "DAC1"),
                 voltage_monitor_pin=ps_config.get('voltage_monitor_pin', "AIN4"),
                 current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5"),
-                switch_4_position=switch_position
+                switch_4_position=switch_position,
+                debug=False # Disable verbose calculation debug prints
             )
-
-            # Run validation test if requested
-            if messagebox.askyesno("Validation Test", "Run Keysight monitoring scaling validation test now?\n\nCheck console for instructions."):
-                self.ps_controller.validate_scaling()
 
             # Update live DAQ engine if running
             if self.daq:

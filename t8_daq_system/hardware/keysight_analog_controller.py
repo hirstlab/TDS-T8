@@ -49,7 +49,7 @@ class KeysightAnalogController:
                  voltage_limit=None, current_limit=None,
                  voltage_pin="DAC0", current_pin="DAC1",
                  voltage_monitor_pin="AIN4", current_monitor_pin="AIN5",
-                 switch_4_position='down'):
+                 switch_4_position='down', debug=False):
         """
         Initialize the analog power supply controller.
 
@@ -68,6 +68,7 @@ class KeysightAnalogController:
             voltage_monitor_pin: LJM register for voltage monitoring (e.g. "AIN4")
             current_monitor_pin: LJM register for current monitoring (e.g. "AIN5")
             switch_4_position: 'down' for 0-5V monitor range (default), 'up' for 0-10V
+            debug: Set to True to enable verbose calculation debug output (default False)
         """
         self.handle = handle
         self.rated_max_volts = rated_max_volts
@@ -75,6 +76,7 @@ class KeysightAnalogController:
         self.voltage_limit = voltage_limit if voltage_limit is not None else rated_max_volts
         self.current_limit = current_limit if current_limit is not None else rated_max_amps
         self.switch_4_position = switch_4_position.lower().strip()
+        self.debug = debug
         
         if self.switch_4_position not in ['up', 'down']:
             print(f"Warning: Invalid switch_4_position '{self.switch_4_position}', defaulting to 'down'")
@@ -89,14 +91,17 @@ class KeysightAnalogController:
         self._AIN_VOLTAGE = voltage_monitor_pin
         self._AIN_CURRENT = current_monitor_pin
 
-        print(f"[DEBUG] KeysightAnalogController init: V_PIN={self._DAC_VOLTAGE}, I_PIN={self._DAC_CURRENT}, V_MON={self._AIN_VOLTAGE}, I_MON={self._AIN_CURRENT}")
+        if self.debug:
+            print(f"[DEBUG] KeysightAnalogController init: V_PIN={self._DAC_VOLTAGE}, I_PIN={self._DAC_CURRENT}, V_MON={self._AIN_VOLTAGE}, I_MON={self._AIN_CURRENT}")
 
         if self.handle is not None:
-            print(f"[DEBUG] KeysightAnalogController: Handle is valid, configuring hardware...")
+            if self.debug:
+                print(f"[DEBUG] KeysightAnalogController: Handle is valid, configuring hardware...")
             self._configure_ain_channels()
             self._enable_analog_mode()
         else:
-            print(f"[DEBUG] KeysightAnalogController: Handle is None, skipping hardware config")
+            if self.debug:
+                print(f"[DEBUG] KeysightAnalogController: Handle is None, skipping hardware config")
 
     # ──────────────────────────────────────────────────────────────────────────
     # One-time hardware configuration
@@ -189,18 +194,20 @@ class KeysightAnalogController:
             dac_v = (volts / self.rated_max_volts) * 5.0
             
             # STEP 3: Debug output (Before write)
-            print(f"=== KEYSIGHT VOLTAGE COMMAND DEBUG ===")
-            print(f"Requested Output: {volts}V")
-            print(f"Calculated DAC Voltage: {dac_v:.3f}V")
-            print(f"Expected PSU Output: {volts}V")
+            if self.debug:
+                print(f"=== KEYSIGHT VOLTAGE COMMAND DEBUG ===")
+                print(f"Requested Output: {volts}V")
+                print(f"Calculated DAC Voltage: {dac_v:.3f}V")
+                print(f"Expected PSU Output: {volts}V")
             
             # STEP 4: Send to T8
             ljm.eWriteName(self.handle, self._DAC_VOLTAGE, dac_v)
             
             # STEP 5: Readback Verification
             actual_dac_v = ljm.eReadName(self.handle, self._DAC_VOLTAGE)
-            print(f"DAC Readback - V channel: {actual_dac_v:.3f}V")
-            print(f"=======================================")
+            if self.debug:
+                print(f"DAC Readback - V channel: {actual_dac_v:.3f}V")
+                print(f"=======================================")
             
             return True
         except Exception as e:
@@ -227,18 +234,20 @@ class KeysightAnalogController:
             dac_i = (amps / self.rated_max_amps) * 5.0
             
             # STEP 3: Debug output (Before write)
-            print(f"=== KEYSIGHT CURRENT COMMAND DEBUG ===")
-            print(f"Requested Output: {amps}A")
-            print(f"Calculated DAC Current: {dac_i:.3f}V")
-            print(f"Expected PSU Output: {amps}A")
+            if self.debug:
+                print(f"=== KEYSIGHT CURRENT COMMAND DEBUG ===")
+                print(f"Requested Output: {amps}A")
+                print(f"Calculated DAC Current: {dac_i:.3f}V")
+                print(f"Expected PSU Output: {amps}A")
             
             # STEP 4: Send to T8
             ljm.eWriteName(self.handle, self._DAC_CURRENT, dac_i)
             
             # STEP 5: Readback Verification
             actual_dac_i = ljm.eReadName(self.handle, self._DAC_CURRENT)
-            print(f"DAC Readback - I channel: {actual_dac_i:.3f}V")
-            print(f"=======================================")
+            if self.debug:
+                print(f"DAC Readback - I channel: {actual_dac_i:.3f}V")
+                print(f"=======================================")
             
             return True
         except Exception as e:
@@ -301,10 +310,11 @@ class KeysightAnalogController:
             actual_voltage = (raw_v / self._MONITOR_RANGE_V) * self.rated_max_volts
 
             # Debug output - helps verify scaling is correct
-            print(f"=== KEYSIGHT VOLTAGE MONITOR ===")
-            print(f"Raw AIN ({self._AIN_VOLTAGE}): {raw_v:.4f}V")
-            print(f"Scaled: {actual_voltage:.3f}V  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_volts})")
-            print(f"================================")
+            if self.debug:
+                print(f"=== KEYSIGHT VOLTAGE MONITOR ===")
+                print(f"Raw AIN ({self._AIN_VOLTAGE}): {raw_v:.4f}V")
+                print(f"Scaled: {actual_voltage:.3f}V  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_volts})")
+                print(f"================================")
 
             # Safety check for reasonable values
             if actual_voltage < 0 or actual_voltage > self.rated_max_volts * 1.083:
@@ -336,10 +346,11 @@ class KeysightAnalogController:
             actual_current = (raw_v / self._MONITOR_RANGE_V) * self.rated_max_amps
 
             # Debug output - helps verify scaling is correct
-            print(f"=== KEYSIGHT CURRENT MONITOR ===")
-            print(f"Raw AIN ({self._AIN_CURRENT}): {raw_v:.4f}V")
-            print(f"Scaled: {actual_current:.2f}A  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_amps})")
-            print(f"================================")
+            if self.debug:
+                print(f"=== KEYSIGHT CURRENT MONITOR ===")
+                print(f"Raw AIN ({self._AIN_CURRENT}): {raw_v:.4f}V")
+                print(f"Scaled: {actual_current:.2f}A  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_amps})")
+                print(f"================================")
 
             # Safety check for reasonable values
             if actual_current < 0 or actual_current > self.rated_max_amps * 1.028:
