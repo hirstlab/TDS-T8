@@ -57,6 +57,10 @@ _DEFAULTS = {
     "skip_preflight_check": ("bool", False),
     "ps_enabled":           ("bool", False),
     "xgs_enabled":          ("bool", False),
+    "pp_profiles_folder":    ("str",   ""),
+    "pp_default_ramp_duration": ("int", 60),
+    "pp_default_start_v":    ("float", 0.0),
+    "pp_default_start_a":    ("float", 0.0),
 }
 
 
@@ -115,6 +119,10 @@ class AppSettings:
         self.skip_preflight_check: bool = False
         self.ps_enabled: bool        = False
         self.xgs_enabled: bool       = False
+        self.pp_profiles_folder: str = ""
+        self.pp_default_ramp_duration: int = 60
+        self.pp_default_start_v: float = 0.0
+        self.pp_default_start_a: float = 0.0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API

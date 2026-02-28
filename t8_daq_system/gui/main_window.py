@@ -299,6 +299,16 @@ class MainWindow:
         self._practice_mode = False
         self._loaded_data = None
         self._loaded_data_units = {'temp': 'C', 'press': 'PSI'}
+        self._programmer_mode_active = False
+        self._programmer_ramp_running = False
+        self._programmer_preview_data = ([], [], [])
+        self._programmer_blocks = []
+        self._programmer_control_mode = "Voltage"
+        self._run_ramp_btn_visible = False
+        self._programmer_panel = None
+        self._programmer_panel_frame = None
+        self._programmer_plot_frame = None
+        self._programmer_preview_plot = None
 
         # Reconnection cooldown timers (prevent blocking GUI with repeated failed attempts)
         self._last_xgs_reconnect_time = 0
@@ -664,13 +674,13 @@ class MainWindow:
         self.pinout_btn.pack(side=tk.LEFT, padx=5)
 
         self.power_programmer_btn = ttk.Button(
-            control_frame, text="⚡ Power Programmer",
+            control_frame, text="Power Programmer",
             command=self._toggle_power_programmer
         )
         self.power_programmer_btn.pack(side=tk.LEFT, padx=5)
 
         self.run_ramp_btn = ttk.Button(
-            control_frame, text="▶ Run Program", command=self._on_run_program
+            control_frame, text="Run Program", command=self._on_run_program
         )
         # Do NOT pack yet — only shown when programmer is active AND profile is ready
 
@@ -893,7 +903,7 @@ class MainWindow:
 
     def _activate_power_programmer(self):
         self._programmer_mode_active = True
-        self.power_programmer_btn.config(text="✖ Exit Power Programmer")
+        self.power_programmer_btn.config(text="Exit Power Programmer")
 
         # 1. Hide the sensor panel (Current Readings)
         self.panel_container.pack_forget()
@@ -914,9 +924,18 @@ class MainWindow:
         # 5. Instantiate the programmer panel
         self._programmer_panel = PowerProgrammerPanel(
             parent_frame=self._programmer_panel_frame,
+            settings=self._app_settings,
             on_profile_confirmed_callback=self._on_programmer_profile_confirmed,
             on_panel_closed_callback=self._deactivate_power_programmer
         )
+
+        # Restore saved blocks/mode into the newly created panel
+        if self._programmer_blocks:
+            self._programmer_panel._blocks = list(self._programmer_blocks)
+            self._programmer_panel._mode = self._programmer_control_mode
+            self._programmer_panel._mode_var.set(self._programmer_control_mode)
+            self._programmer_panel._refresh_table()
+            self._programmer_panel._refresh_status()
 
         # 6. Instantiate the preview plot
         self._programmer_preview_plot = ProgrammerPreviewPlot(
@@ -951,11 +970,15 @@ class MainWindow:
         if self._programmer_ramp_running:
             self._stop_programmer_ramp_safe()
 
-        # Save preview data before destroying panel
+        # Save profile data before destroying panel
         if self._programmer_panel and self._programmer_panel.get_profile_ready():
             self._programmer_preview_data = self._programmer_panel.get_preview_data()
+            self._programmer_blocks = list(self._programmer_panel._blocks)
+            self._programmer_control_mode = self._programmer_panel._mode
         else:
             self._programmer_preview_data = ([], [], [])
+            self._programmer_blocks = []
+            self._programmer_control_mode = "Voltage"
 
         # Destroy programmer UI
         if self._programmer_panel_frame:
@@ -973,12 +996,16 @@ class MainWindow:
 
         # Reset button
         self._programmer_mode_active = False
-        self.power_programmer_btn.config(text="⚡ Power Programmer")
+        self.power_programmer_btn.config(text="Power Programmer")
 
-        # Hide run ramp button
-        if self._run_ramp_btn_visible:
-            self.run_ramp_btn.pack_forget()
-            self._run_ramp_btn_visible = False
+        # Keep run ramp button visible if profile is ready
+        if self._programmer_blocks:
+            self.run_ramp_btn.pack(side=tk.LEFT, padx=5)
+            self._run_ramp_btn_visible = True
+        else:
+            if self._run_ramp_btn_visible:
+                self.run_ramp_btn.pack_forget()
+                self._run_ramp_btn_visible = False
 
         # Apply dotted preview overlay to the ps LivePlot
         self._apply_programmer_overlay()
@@ -1008,8 +1035,16 @@ class MainWindow:
         """Start executing the programmer ramp using the ramp_executor infrastructure."""
         from datetime import datetime
 
-        # Guard: must have programmer panel with valid profile
-        if self._programmer_panel is None or not self._programmer_panel.get_profile_ready():
+        # Use stored blocks if panel is not active
+        if self._programmer_panel:
+            blocks = self._programmer_panel._blocks
+            control_mode = self._programmer_panel._mode
+        else:
+            blocks = self._programmer_blocks
+            control_mode = self._programmer_control_mode
+
+        # Guard: must have valid profile
+        if not blocks:
             messagebox.showwarning("No Profile", "Build a valid program first.")
             return
 
@@ -1030,62 +1065,69 @@ class MainWindow:
             return
 
         # Convert programmer blocks to RampProfile steps
-        from t8_daq_system.control.ramp_profile import RampProfile, RampStep, StepType
-        blocks = self._programmer_panel._blocks
-
+        from t8_daq_system.control.ramp_profile import RampProfile, RampStep, StepType, ControlMode
+        
+        # Determine global control mode from programmer
+        is_current_mode = control_mode == "Current"
+        
+        # Initial values from first block
+        first_v = float(blocks[0]["start_v"])
+        first_a = float(blocks[0].get("start_a", blocks[0].get("current_a", 0.0)))
+        
         # Validate hardware limits before building profile
         for block in blocks:
             start_v = float(block["start_v"])
             end_v = float(block["end_v"]) if block["type"] == "Ramp" else float(block["start_v"])
-            current_a = float(block["current_a"])
+            start_a = float(block.get("start_a", block.get("current_a", 0.0)))
+            end_a = float(block.get("end_a", start_a)) if block["type"] == "Ramp" else start_a
 
             if start_v > 6.0 or end_v > 6.0:
                 messagebox.showerror(
                     "Voltage Limit Exceeded",
-                    f"Block has voltage > 6.0V (N5700 hard limit). Aborting.\n"
+                    f"Block has voltage > 6.0V (hard limit). Aborting.\n"
                     f"Start V: {start_v}, End V: {end_v}"
                 )
                 return
-            if current_a > 180.0:
+            if start_a > 180.0 or end_a > 180.0:
                 messagebox.showerror(
                     "Current Limit Exceeded",
-                    f"Block has current > 180A (N5700 hard limit). Aborting.\n"
-                    f"Current: {current_a}"
+                    f"Block has current > 180.0A (hard limit). Aborting.\n"
+                    f"Start A: {start_a}, End A: {end_a}"
                 )
                 return
 
-        if not blocks:
-            messagebox.showwarning("Empty Profile", "No valid blocks to execute.")
-            return
-
-        # Build RampProfile using the actual API
-        first_block = blocks[0]
         profile = RampProfile(
-            name="ProgrammerProfile",
-            start_voltage=float(first_block["start_v"]),
-            start_current=0.0,
-            current_limit=max(float(b["current_a"]) for b in blocks),
+            name=f"Programmer_{datetime.now().strftime('%H%M%S')}",
+            control_mode=ControlMode.CURRENT.value if is_current_mode else ControlMode.VOLTAGE.value,
+            start_voltage=first_v,
+            start_current=first_a,
             voltage_limit=6.0,
-            control_mode="voltage"
+            current_limit=180.0
         )
 
         for block in blocks:
-            end_v = (float(block["end_v"]) if block["type"] == "Ramp"
-                     else float(block["start_v"]))
             duration = float(block["duration"])
             step_type = StepType.RAMP.value if block["type"] == "Ramp" else StepType.HOLD.value
-
-            if step_type == StepType.RAMP.value:
+            
+            if is_current_mode:
+                target = float(block.get("end_a", block.get("start_a", 0.0))) if block["type"] == "Ramp" else float(block.get("start_a", 0.0))
+                v_limit = max(float(block["start_v"]), float(block["end_v"]))
+                profile.voltage_limit = max(profile.voltage_limit, v_limit)
+                
                 step = RampStep(
                     step_type=step_type,
                     duration_sec=duration,
-                    target_voltage=end_v
+                    target_current=target
                 )
             else:
-                # Hold step: RampProfile will hold at current value
+                target = float(block["end_v"]) if block["type"] == "Ramp" else float(block["start_v"])
+                i_limit = max(float(block.get("start_a", 0.0)), float(block.get("end_a", 0.0)))
+                profile.current_limit = max(profile.current_limit, i_limit)
+
                 step = RampStep(
                     step_type=step_type,
-                    duration_sec=duration
+                    duration_sec=duration,
+                    target_voltage=target
                 )
             profile.add_step(step)
 
@@ -1100,18 +1142,18 @@ class MainWindow:
 
         # Mark as running
         self._programmer_ramp_running = True
-        self.run_ramp_btn.config(text="⏹ Stop Program")
+        self.run_ramp_btn.config(text="Stop Program")
 
         # Set overlay start time so the dotted preview anchors correctly on the ps plot
-        ramp_start = datetime.now()
-        times, voltages, currents = self._programmer_panel.get_preview_data()
-        self._programmer_preview_data = (times, voltages, currents)
-
+        # Use stored preview data
+        times, voltages, currents = self._programmer_preview_data
         for plot in getattr(self, '_live_plots', []):
             if hasattr(plot, 'plot_type') and plot.plot_type == 'ps':
                 plot.set_programmer_overlay(times, voltages, currents)
-                plot.set_overlay_start_time(ramp_start)
+                plot.anchor_programmer_overlay(time.time())
                 break
+
+        self.status_var.set("Running Program")
 
     def _stop_programmer_ramp_safe(self):
         """
@@ -1141,7 +1183,7 @@ class MainWindow:
 
         # 3. Update UI
         self._programmer_ramp_running = False
-        self.run_ramp_btn.config(text="▶ Run Program")
+        self.run_ramp_btn.config(text="Run Program")
 
         # Keep overlay visible but don't update start time (dotted lines stay)
 

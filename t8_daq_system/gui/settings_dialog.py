@@ -60,8 +60,41 @@ class SettingsDialog(tk.Toplevel):
         self._build_hardware_tab(notebook)
         self._build_scales_tab(notebook)
         self._build_paths_tab(notebook)
+        self._build_power_programmer_tab(notebook)
 
         self._build_button_frame()
+
+    def _build_power_programmer_tab(self, notebook):
+        """Tab for Power Programmer settings."""
+        tab = ttk.Frame(notebook, padding=15)
+        notebook.add(tab, text="Power Programmer")
+
+        ttk.Label(tab, text="Power Programmer Configuration",
+                 font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 10))
+
+        # Profiles Folder
+        folder_frame = ttk.LabelFrame(tab, text="Profiles Storage", padding=10)
+        folder_frame.pack(fill=tk.X, pady=5)
+
+        input_frame = ttk.Frame(folder_frame)
+        input_frame.pack(fill=tk.X, pady=5)
+
+        self._pp_profiles_folder_var = tk.StringVar()
+        ttk.Entry(input_frame, textvariable=self._pp_profiles_folder_var,
+                 width=35).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        ttk.Button(input_frame, text="Browse…",
+                  command=self._browse_pp_profiles_folder).pack(side=tk.LEFT, padx=5)
+
+        # Default Values
+        defaults_frame = ttk.LabelFrame(tab, text="Default Ramp Parameters", padding=10)
+        defaults_frame.pack(fill=tk.X, pady=5)
+
+        self._create_entry_row(defaults_frame, "Default Duration (s):", "pp_default_ramp_duration", 
+                              width=15, row=0)
+        self._create_entry_row(defaults_frame, "Default Start Voltage (V):", "pp_default_start_v", 
+                              width=15, row=1)
+        self._create_entry_row(defaults_frame, "Default Start Current (A):", "pp_default_start_a", 
+                              width=15, row=2)
 
     def _build_sensor_tab(self, notebook):
         """Tab for sensor configuration."""
@@ -418,6 +451,10 @@ class SettingsDialog(tk.Toplevel):
         self._skip_preflight_check_var.set(s.skip_preflight_check)
         self._ps_enabled_var.set(s.ps_enabled)
         self._xgs_enabled_var.set(s.xgs_enabled)
+        self._pp_profiles_folder_var.set(s.pp_profiles_folder)
+        self._pp_default_ramp_duration_var.set(str(s.pp_default_ramp_duration))
+        self._pp_default_start_v_var.set(str(s.pp_default_start_v))
+        self._pp_default_start_a_var.set(str(s.pp_default_start_a))
 
     def _save_settings_from_gui(self):
         """Internal helper to read all GUI vars and write to AppSettings."""
@@ -462,6 +499,10 @@ class SettingsDialog(tk.Toplevel):
             s.skip_preflight_check = self._skip_preflight_check_var.get()
             s.ps_enabled = self._ps_enabled_var.get()
             s.xgs_enabled = self._xgs_enabled_var.get()
+            s.pp_profiles_folder = self._pp_profiles_folder_var.get().strip()
+            s.pp_default_ramp_duration = int(self._pp_default_ramp_duration_var.get())
+            s.pp_default_start_v = float(self._pp_default_start_v_var.get())
+            s.pp_default_start_a = float(self._pp_default_start_a_var.get())
         except ValueError as exc:
             messagebox.showerror("Invalid Value",
                                 f"Please check your entries:\n{exc}", parent=self)
@@ -485,6 +526,16 @@ class SettingsDialog(tk.Toplevel):
     def _on_apply_click(self):
         """Validate and save settings without closing."""
         self._save_settings_from_gui()
+
+    def _browse_pp_profiles_folder(self):
+        """Open folder browser dialog for profiles."""
+        folder = filedialog.askdirectory(
+            parent=self,
+            title="Select Profiles Folder",
+            initialdir=self._pp_profiles_folder_var.get() or "."
+        )
+        if folder:
+            self._pp_profiles_folder_var.set(folder)
 
     def _browse_log_folder(self):
         """Open folder browser dialog."""
