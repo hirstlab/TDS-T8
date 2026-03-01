@@ -351,13 +351,13 @@ class LivePlot:
         if tc_styles:
             self._custom_tc_styles = list(tc_styles)
         if tc_widths:
-            self._custom_tc_widths = [int(w) for w in tc_widths]
+            self._custom_tc_widths = [int(w) for w in tc_widths if str(w).strip()]
         if press_colors:
             self._custom_press_colors = list(press_colors)
         if press_styles:
             self._custom_press_styles = list(press_styles)
         if press_widths:
-            self._custom_press_widths = [int(w) for w in press_widths]
+            self._custom_press_widths = [int(w) for w in press_widths if str(w).strip()]
         if ps_voltage_color:
             self.ps_colors['PS_Voltage'] = ps_voltage_color
         if ps_current_color:
@@ -367,9 +367,15 @@ class LivePlot:
         if ps_current_style:
             self._ps_current_style = ps_current_style
         if ps_voltage_width:
-            self._ps_voltage_width = int(ps_voltage_width)
+            try:
+                self._ps_voltage_width = int(ps_voltage_width)
+            except (ValueError, TypeError):
+                pass
         if ps_current_width:
-            self._ps_current_width = int(ps_current_width)
+            try:
+                self._ps_current_width = int(ps_current_width)
+            except (ValueError, TypeError):
+                pass
         # Apply immediately to any already-drawn lines
         self._reapply_line_styles()
         self.canvas.draw_idle()

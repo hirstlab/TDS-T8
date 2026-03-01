@@ -545,12 +545,12 @@ class MainWindow:
     def _apply_appearance_to_plots(self):
         """Push appearance settings from AppSettings to all live plot instances."""
         s = self._app_settings
-        tc_colors  = [c.strip() for c in s.tc_colors.split(',')]
-        tc_styles  = [x.strip() for x in s.tc_line_style.split(',')]
-        tc_widths  = [x.strip() for x in s.tc_line_width.split(',')]
-        press_colors = [c.strip() for c in s.press_colors.split(',')]
-        press_styles = [x.strip() for x in s.press_line_style.split(',')]
-        press_widths = [x.strip() for x in s.press_line_width.split(',')]
+        tc_colors  = [c.strip() for c in s.tc_colors.split(',') if c.strip()]
+        tc_styles  = [x.strip() for x in s.tc_line_style.split(',') if x.strip()]
+        tc_widths  = [x.strip() for x in s.tc_line_width.split(',') if x.strip()]
+        press_colors = [c.strip() for c in s.press_colors.split(',') if c.strip()]
+        press_styles = [x.strip() for x in s.press_line_style.split(',') if x.strip()]
+        press_widths = [x.strip() for x in s.press_line_width.split(',') if x.strip()]
         for plot in getattr(self, '_live_plots', []):
             plot.apply_appearance(
                 tc_colors=tc_colors, tc_styles=tc_styles, tc_widths=tc_widths,
