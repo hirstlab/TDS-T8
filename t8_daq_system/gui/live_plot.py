@@ -798,7 +798,6 @@ class LivePlot:
 
             if self._overlay_start_time is not None:
                 # Convert relative seconds to absolute datetime for x-axis alignment
-                from datetime import timedelta
                 overlay_datetimes = [
                     self._overlay_start_time + timedelta(seconds=t)
                     for t in self._overlay_times
