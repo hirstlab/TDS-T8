@@ -53,7 +53,21 @@ def get_base_dir():
 if not getattr(sys, 'frozen', False):
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from t8_daq_system.startup_profiler import profiler
+from t8_daq_system.utils.startup_profiler import profiler
+
+class Logger:
+    def __init__(self, filename):
+        self.terminal = sys.stdout
+        self.log = open(filename, "w")
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.log.write(message)
+        self.log.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.log.flush()
 
 profiler.log("About to import MainWindow...")
 from t8_daq_system.gui.main_window import MainWindow
@@ -77,6 +91,11 @@ def main():
     if not os.path.exists(logs_dir):
         os.makedirs(logs_dir, exist_ok=True)
     profiler.log("Logs directory ready")
+
+    # Initialize terminal logging to log.txt
+    log_file = os.path.join(logs_dir, "log.txt")
+    sys.stdout = Logger(log_file)
+    sys.stderr = sys.stdout
 
     # Load persistent settings from Windows Registry (silent defaults on first launch)
     profiler.log("Loading AppSettings from registry...")

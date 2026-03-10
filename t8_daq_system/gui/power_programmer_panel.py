@@ -381,10 +381,44 @@ class PowerProgrammerPanel:
                 values=["Ramp", "Hold"], state='readonly', width=10
             )
             edit_var.set(block["type"])
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
+        elif col_name == 'Duration (s)':
+            # H, M, S editor
+            h_var = tk.StringVar()
+            m_var = tk.StringVar()
+            s_var = tk.StringVar()
+            
+            total_sec = block.get("duration", 0.0)
+            h, rem = divmod(int(total_sec), 3600)
+            m, s = divmod(rem, 60)
+            # Add back fractional part of seconds
+            s += total_sec - int(total_sec)
+            
+            h_var.set(str(h))
+            m_var.set(str(m))
+            s_var.set(f"{s:.1f}".rstrip('0').rstrip('.'))
+            
+            hms_frame = ttk.Frame(popup)
+            hms_frame.grid(row=0, column=1, padx=6, pady=6)
+            
+            h_entry = ttk.Entry(hms_frame, textvariable=h_var, width=3)
+            h_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="h").pack(side=tk.LEFT)
+            
+            m_entry = ttk.Entry(hms_frame, textvariable=m_var, width=3)
+            m_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="m").pack(side=tk.LEFT)
+            
+            s_entry = ttk.Entry(hms_frame, textvariable=s_var, width=5)
+            s_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="s").pack(side=tk.LEFT)
+            
+            h_entry.focus_set()
+            h_entry.select_range(0, tk.END)
         else:
             # Map column name to block key
             key_map = {
-                'Duration (s)': 'duration',
                 'Start V': 'start_v',
                 'End V': 'end_v',
                 'Start A': 'start_a',
@@ -394,14 +428,12 @@ class PowerProgrammerPanel:
             edit_var.set(str(block.get(key, 0.0)))
             widget = ttk.Entry(popup, textvariable=edit_var, width=14)
             widget.select_range(0, tk.END)
-
-        widget.grid(row=0, column=1, padx=6, pady=6)
-        widget.focus_set()
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
 
         def _apply():
-            val_str = edit_var.get().strip()
-
             if col_name == 'Type':
+                val_str = edit_var.get().strip()
                 if val_str not in ("Ramp", "Hold"):
                     messagebox.showerror("Invalid", "Type must be 'Ramp' or 'Hold'.",
                                          parent=popup)
@@ -413,73 +445,78 @@ class PowerProgrammerPanel:
                     block["end_a"] = block.get("start_a", 0.0)
             elif col_name == 'Duration (s)':
                 try:
-                    v = float(val_str)
+                    h = float(h_var.get() or 0)
+                    m = float(m_var.get() or 0)
+                    s = float(s_var.get() or 0)
+                    v = h * 3600 + m * 60 + s
                     if v <= 0 or v > self.MAX_DURATION:
                         raise ValueError
                 except ValueError:
                     messagebox.showerror(
                         "Invalid",
-                        f"Duration must be a number between 1 and {self.MAX_DURATION}.",
+                        f"Duration must be a number between 1 and {self.MAX_DURATION}s.",
                         parent=popup
                     )
                     return
                 block["duration"] = v
-            elif col_name == 'Start V':
-                try:
-                    v = float(val_str)
-                    if v < 0.0 or v > self.MAX_VOLTAGE:
-                        raise ValueError
-                except ValueError:
-                    messagebox.showerror(
-                        "Invalid",
-                        f"Start V must be between 0.0 and {self.MAX_VOLTAGE}V.",
-                        parent=popup
-                    )
-                    return
-                block["start_v"] = v
-                if block["type"] == "Hold":
+            else:
+                val_str = edit_var.get().strip()
+                if col_name == 'Start V':
+                    try:
+                        v = float(val_str)
+                        if v < 0.0 or v > self.MAX_VOLTAGE:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror(
+                            "Invalid",
+                            f"Start V must be between 0.0 and {self.MAX_VOLTAGE}V.",
+                            parent=popup
+                        )
+                        return
+                    block["start_v"] = v
+                    if block["type"] == "Hold":
+                        block["end_v"] = v
+                elif col_name == 'End V':
+                    try:
+                        v = float(val_str)
+                        if v < 0.0 or v > self.MAX_VOLTAGE:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror(
+                            "Invalid",
+                            f"End V must be between 0.0 and {self.MAX_VOLTAGE}V.",
+                            parent=popup
+                        )
+                        return
                     block["end_v"] = v
-            elif col_name == 'End V':
-                try:
-                    v = float(val_str)
-                    if v < 0.0 or v > self.MAX_VOLTAGE:
-                        raise ValueError
-                except ValueError:
-                    messagebox.showerror(
-                        "Invalid",
-                        f"End V must be between 0.0 and {self.MAX_VOLTAGE}V.",
-                        parent=popup
-                    )
-                    return
-                block["end_v"] = v
-            elif col_name == 'Start A':
-                try:
-                    v = float(val_str)
-                    if v < 0.0 or v > self.MAX_CURRENT:
-                        raise ValueError
-                except ValueError:
-                    messagebox.showerror(
-                        "Invalid",
-                        f"Start A must be between 0.0 and {self.MAX_CURRENT}A.",
-                        parent=popup
-                    )
-                    return
-                block["start_a"] = v
-                if block["type"] == "Hold":
+                elif col_name == 'Start A':
+                    try:
+                        v = float(val_str)
+                        if v < 0.0 or v > self.MAX_CURRENT:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror(
+                            "Invalid",
+                            f"Start A must be between 0.0 and {self.MAX_CURRENT}A.",
+                            parent=popup
+                        )
+                        return
+                    block["start_a"] = v
+                    if block["type"] == "Hold":
+                        block["end_a"] = v
+                elif col_name == 'End A':
+                    try:
+                        v = float(val_str)
+                        if v < 0.0 or v > self.MAX_CURRENT:
+                            raise ValueError
+                    except ValueError:
+                        messagebox.showerror(
+                            "Invalid",
+                            f"End A must be between 0.0 and {self.MAX_CURRENT}A.",
+                            parent=popup
+                        )
+                        return
                     block["end_a"] = v
-            elif col_name == 'End A':
-                try:
-                    v = float(val_str)
-                    if v < 0.0 or v > self.MAX_CURRENT:
-                        raise ValueError
-                except ValueError:
-                    messagebox.showerror(
-                        "Invalid",
-                        f"End A must be between 0.0 and {self.MAX_CURRENT}A.",
-                        parent=popup
-                    )
-                    return
-                block["end_a"] = v
 
             self._refresh_table()
             self._refresh_status()
@@ -515,29 +552,58 @@ class PowerProgrammerPanel:
                 values=["Ramp", "Hold"], state='readonly', width=10
             )
             edit_var.set(block["type"])
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
         elif col_name == 'Duration (s)':
-            edit_var.set(str(block.get("duration_sec", 60.0)))
-            widget = ttk.Entry(popup, textvariable=edit_var, width=14)
-            widget.select_range(0, tk.END)
+            # H, M, S editor
+            h_var = tk.StringVar()
+            m_var = tk.StringVar()
+            s_var = tk.StringVar()
+            
+            total_sec = block.get("duration_sec", 60.0)
+            h, rem = divmod(int(total_sec), 3600)
+            m, s = divmod(rem, 60)
+            # Add back fractional part of seconds
+            s += total_sec - int(total_sec)
+            
+            h_var.set(str(h))
+            m_var.set(str(m))
+            s_var.set(f"{s:.1f}".rstrip('0').rstrip('.'))
+            
+            hms_frame = ttk.Frame(popup)
+            hms_frame.grid(row=0, column=1, padx=6, pady=6)
+            
+            h_entry = ttk.Entry(hms_frame, textvariable=h_var, width=3)
+            h_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="h").pack(side=tk.LEFT)
+            
+            m_entry = ttk.Entry(hms_frame, textvariable=m_var, width=3)
+            m_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="m").pack(side=tk.LEFT)
+            
+            s_entry = ttk.Entry(hms_frame, textvariable=s_var, width=5)
+            s_entry.pack(side=tk.LEFT)
+            ttk.Label(hms_frame, text="s").pack(side=tk.LEFT)
+            
+            h_entry.focus_set()
+            h_entry.select_range(0, tk.END)
         elif col_name == 'Rate (K/min)':
             current_rate = str(block.get("rate_k_per_min", 1.0))
             edit_var.set(current_rate)
             widget = ttk.Combobox(
                 popup, textvariable=edit_var,
-                values=["0.1", "1", "5", "10"], width=10
+                values=["-10", "-5", "-1", "-0.1", "0.1", "1", "5", "10"], width=10
             )
             if block["type"] == "Hold":
                 widget.config(state='disabled')
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
         else:
             popup.destroy()
             return
 
-        widget.grid(row=0, column=1, padx=6, pady=6)
-        widget.focus_set()
-
         def _apply():
             val_str = edit_var.get().strip()
-
             if col_name == 'Type':
                 if val_str not in ("Ramp", "Hold"):
                     messagebox.showerror("Invalid", "Type must be 'Ramp' or 'Hold'.",
@@ -549,7 +615,10 @@ class PowerProgrammerPanel:
 
             elif col_name == 'Duration (s)':
                 try:
-                    v = float(val_str)
+                    h = float(h_var.get() or 0)
+                    m = float(m_var.get() or 0)
+                    s = float(s_var.get() or 0)
+                    v = h * 3600 + m * 60 + s
                     if v <= 0:
                         raise ValueError
                 except ValueError:
@@ -566,11 +635,9 @@ class PowerProgrammerPanel:
                     return
                 try:
                     v = float(val_str)
-                    if v < 0:
-                        raise ValueError
                 except ValueError:
                     messagebox.showerror(
-                        "Invalid", "Rate must be a non-negative number.",
+                        "Invalid", "Rate must be a number.",
                         parent=popup
                     )
                     return

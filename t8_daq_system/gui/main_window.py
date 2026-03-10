@@ -13,14 +13,13 @@ Safety features:
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-import threading
 import time
 import os
 import sys
 import random
 import math
 
-from t8_daq_system.startup_profiler import profiler
+from t8_daq_system.utils.startup_profiler import profiler
 
 
 class GUIProfiler:
@@ -742,6 +741,11 @@ class MainWindow:
             command=self._toggle_power_programmer
         )
         self.power_programmer_btn.pack(side=tk.LEFT, padx=5)
+
+        self.refresh_gui_btn = ttk.Button(
+            control_frame, text="Refresh GUI", command=self._on_refresh_gui
+        )
+        self.refresh_gui_btn.pack(side=tk.LEFT, padx=5)
 
         self.run_ramp_btn = ttk.Button(
             control_frame, text="Run Program", command=self._on_run_program
@@ -2481,6 +2485,19 @@ class MainWindow:
             self.connection.disconnect()
 
         self.root.destroy()
+
+    def _on_refresh_gui(self):
+        """Force a GUI refresh and plot redraw."""
+        try:
+            self.root.update_idletasks()
+            self.root.update()
+            # Redraw plots if they exist
+            if hasattr(self, 'plot_tc'): self.plot_tc.canvas.draw_idle()
+            if hasattr(self, 'plot_pressure'): self.plot_pressure.canvas.draw_idle()
+            if hasattr(self, 'plot_ps'): self.plot_ps.canvas.draw_idle()
+            print("[GUI] Refresh triggered")
+        except Exception as e:
+            print(f"[GUI] Refresh error: {e}")
 
     def run(self):
         self.root.mainloop()

@@ -815,7 +815,7 @@ class LivePlot:
                     color='blue', linestyle=':', linewidth=1.5, alpha=0.6,
                     label='Programmed V'
                 )
-                if self.ax2 is not None:
+                if self.ax2 is not None and self._overlay_currents is not None:
                     self._overlay_line_a, = self.ax2.plot(
                         overlay_datetimes, self._overlay_currents,
                         color='red', linestyle=':', linewidth=1.5, alpha=0.6,
