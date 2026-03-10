@@ -1366,6 +1366,10 @@ class MainWindow:
             for gauge in self.config['frg702_gauges']:
                 gauge['units'] = new_unit
         
+        # Update FRG702 reader target unit
+        if hasattr(self, 'frg702_reader') and self.frg702_reader:
+            self.frg702_reader.target_unit = new_unit
+
         # Update sensor panel if it exists
         if hasattr(self, 'sensor_panel'):
             self.sensor_panel.update_global_pressure_unit(new_unit)
@@ -1464,9 +1468,9 @@ class MainWindow:
                 self.sensor_panel.update(display_last)
         else:
             if hasattr(self, 'plot_tc'):
-                self.plot_tc.update(tc_names)
+                self.plot_tc.update(tc_names, data_units={'temp': self.t_unit_var.get()})
             if hasattr(self, 'plot_pressure'):
-                self.plot_pressure.update(frg_names)
+                self.plot_pressure.update(frg_names, data_units={'press': self.p_unit_var.get()})
             if hasattr(self, 'plot_ps'):
                 self.plot_ps.update(['PS_Voltage', 'PS_Current'])
 
@@ -1500,6 +1504,10 @@ class MainWindow:
                     self.frg_count_var.set(str(metadata['frg702_count']))
                 if 'tc_unit' in metadata:
                     self.t_unit_var.set(metadata['tc_unit'])
+                if 'p_unit' in metadata:
+                    self.p_unit_var.set(metadata['p_unit'])
+                    if hasattr(self, 'sensor_panel'):
+                        self.sensor_panel.update_global_pressure_unit(metadata['p_unit'])
                 if 'sample_rate_ms' in metadata:
                     self.sample_rate_var.set(f"{metadata['sample_rate_ms']}ms")
 
@@ -2143,9 +2151,9 @@ class MainWindow:
                 self.master_scroll_var.set(1.0)
 
             if hasattr(self, 'plot_tc'):
-                self.plot_tc.update(tc_names)
+                self.plot_tc.update(tc_names, data_units={'temp': self.t_unit_var.get()})
             if hasattr(self, 'plot_pressure'):
-                self.plot_pressure.update(frg_names)
+                self.plot_pressure.update(frg_names, data_units={'press': self.p_unit_var.get()})
             if hasattr(self, 'plot_ps'):
                 self.plot_ps.update(['PS_Voltage', 'PS_Current'])
 

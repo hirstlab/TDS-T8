@@ -67,6 +67,9 @@ class LivePlot:
         self._temp_unit = "°C"
         self._press_unit = "mbar"
 
+        # Track the units of the data stored in DataBuffer
+        self._data_units = {'temp': 'C', 'press': 'mbar'}
+
         # Color cycles (default fallbacks)
         self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
@@ -254,12 +257,6 @@ class LivePlot:
         Recompute Y-axis limits based solely on data in currently-visible lines.
         Called after any hide/show toggle when auto-scale mode is active.
         """
-        if self.plot_type == 'pressure':
-            # Log scale — let matplotlib handle it; just call relim + autoscale
-            self.ax.relim()
-            self.ax.autoscale_view()
-            return
-
         def _get_bounds(ax):
             """Return (ymin, ymax) across all visible lines on this axis, or None."""
             y_all = []
@@ -278,8 +275,15 @@ class LivePlot:
         bounds_main = _get_bounds(self.ax)
         if bounds_main is not None:
             lo, hi = bounds_main
-            margin = (hi - lo) * 0.05 if hi != lo else 1.0
-            self.ax.set_ylim(lo - margin, hi + margin)
+            if self.plot_type == 'pressure':
+                # Log scale: use multiplicative margins (e.g. 0.9x and 1.1x)
+                # and ensure we don't hit zero/negative.
+                if lo <= 0:
+                    lo = 1e-12  # emergency fallback
+                self.ax.set_ylim(lo * 0.9, hi * 1.1)
+            else:
+                margin = (hi - lo) * 0.05 if hi != lo else 1.0
+                self.ax.set_ylim(lo - margin, hi + margin)
         else:
             # No visible data — leave axis alone
             pass
@@ -291,7 +295,7 @@ class LivePlot:
                 margin2 = (hi2 - lo2) * 0.05 if hi2 != lo2 else 1.0
                 self.ax2.set_ylim(lo2 - margin2, hi2 + margin2)
 
-    def update(self, sensor_names):
+    def update(self, sensor_names, data_units=None):
         """
         Refresh the plot with current live data.
 
@@ -300,7 +304,11 @@ class LivePlot:
 
         Args:
             sensor_names: List of sensor names this plot should render.
+            data_units:   Optional dict like {'temp': 'C', 'press': 'mbar'}
         """
+        if data_units:
+            self._data_units.update(data_units)
+
         if not self._is_live:
             return  # Frozen — only sync_scroll triggers redraws
         # Keep scrollbar pinned to right edge while live
@@ -549,7 +557,7 @@ class LivePlot:
             if ts and not all_timestamps:
                 all_timestamps = ts
         self._render(all_timestamps, plot_data, self.WINDOW_SECONDS,
-                     data_units={'temp': 'C', 'press': 'mbar'})
+                     data_units=self._data_units)
 
     def _do_update_frozen(self):
         """Render frozen view ending at _frozen_right_edge.
@@ -572,7 +580,7 @@ class LivePlot:
                 all_timestamps = ts
         ws = self.WINDOW_SECONDS if self._slider_mode == 'window_2min' else None
         self._render(all_timestamps, plot_data, ws,
-                     data_units={'temp': 'C', 'press': 'mbar'},
+                     data_units=self._data_units,
                      right_edge=self._frozen_right_edge)
 
     def _sensor_belongs(self, name):
@@ -678,10 +686,10 @@ class LivePlot:
             frg_names = sorted(n for n in plot_data if n.startswith('FRG702_'))
             for name in frg_names:
                 values = list(plot_data.get(name, []))
-                # Unit conversion
+                # Unit conversion: convert from data unit to display unit
                 if data_press_unit != self._press_unit:
                     values = [
-                        FRG702Reader.convert_pressure(v, self._press_unit)
+                        FRG702Reader.convert_pressure(v, data_press_unit, self._press_unit)
                         if v is not None else None
                         for v in values
                     ]

@@ -279,6 +279,20 @@ class XGS600Controller:
                 print(f"XGS-600: Could not parse pressure '{value_str}' for sensor {sensor_code}")
             return None
 
+    def read_units(self):
+        """
+        Read the pressure units currently configured on the XGS-600 (#0013).
+
+        Returns:
+            'Torr', 'mbar', or 'Pa', or None on error.
+        """
+        response = self.send_command("13")
+        if response is None:
+            return None
+
+        unit_map = {'0': 'Torr', '1': 'mbar', '2': 'Pa'}
+        return unit_map.get(response.strip(), None)
+
     def read_controller_info(self):
         """
         Read installed board configuration (#0001).

@@ -307,20 +307,16 @@ class SensorPanel:
                 self.status_labels[name].config(text="CONNECTED", foreground='green')
 
     def _update_frg702_display(self, name, value):
-        """Update an FRG-702 gauge display with unit conversion and scientific notation."""
+        """Update an FRG-702 gauge display with scientific notation."""
         if value is None:
             self.displays[name].config(text="-.--e--", foreground='gray')
             self.status_labels[name].config(text="DISCONNECTED", foreground='red')
             self._set_frg702_indicator(name, 'gray')
             return
 
-        # Convert to selected display unit
-        display_unit = self.global_pressure_unit
-        display_value = FRG702Reader.convert_pressure(value, display_unit)
-
-        # Show in scientific notation
+        # Show in scientific notation. Value is already in display unit.
         self.displays[name].config(
-            text=f"{display_value:.2e}",
+            text=f"{value:.2e}",
             foreground='black'
         )
         self.status_labels[name].config(text="CONNECTED", foreground='green')
@@ -355,11 +351,9 @@ class SensorPanel:
                 else:
                     indicator_color = '#00FF00'  # Green default for valid
 
-                # Convert and display value
-                display_unit = self.global_pressure_unit
-                display_value = FRG702Reader.convert_pressure(pressure, display_unit)
+                # Display value. Pressure is already in display unit.
                 self.displays[name].config(
-                    text=f"{display_value:.2e}",
+                    text=f"{pressure:.2e}",
                     foreground='black'
                 )
                 self.status_labels[name].config(text="CONNECTED", foreground='green')

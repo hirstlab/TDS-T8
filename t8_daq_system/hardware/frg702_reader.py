@@ -41,21 +41,39 @@ class FRG702Reader:
         """
         self.controller = xgs600_controller
         self.gauges = frg702_config_list
+        self._device_unit = None  # Cached unit setting from XGS-600 hardware
+
+    def _refresh_device_unit(self):
+        """Query the XGS-600 for its current front-panel unit setting."""
+        if self.controller and self.controller.is_connected():
+            unit = self.controller.read_units()
+            if unit:
+                self._device_unit = unit
+        return self._device_unit
 
     @staticmethod
-    def convert_pressure(mbar_value, to_unit):
+    def convert_pressure(value, from_unit, to_unit):
         """
-        Convert pressure from mbar to the specified unit.
+        Convert pressure from one unit to another.
 
         Args:
-            mbar_value: Pressure in mbar
-            to_unit: Target unit ('mbar', 'Torr', or 'Pa')
+            value: Pressure value
+            from_unit: Source unit ('mbar', 'Torr', 'Pa')
+            to_unit: Target unit ('mbar', 'Torr', 'Pa')
 
         Returns:
             Converted pressure value
         """
-        factor = UNIT_CONVERSIONS.get(to_unit, 1.0)
-        return mbar_value * factor
+        if from_unit == to_unit or value is None:
+            return value
+
+        # UNIT_CONVERSIONS maps mbar -> unit
+        # factor = unit / mbar  =>  mbar = unit / factor
+        from_factor = UNIT_CONVERSIONS.get(from_unit, 1.0)
+        to_factor = UNIT_CONVERSIONS.get(to_unit, 1.0)
+
+        # (val / from_factor) converts to mbar, then * to_factor converts to target
+        return (value / from_factor) * to_factor
 
     @staticmethod
     def voltage_to_pressure_mbar(voltage):
@@ -95,41 +113,16 @@ class FRG702Reader:
             return MODE_COMBINED
         return MODE_PIRANI_ONLY
 
-    @staticmethod
-    def _to_mbar(pressure, raw_unit):
-        """
-        Normalise a raw pressure reading to mbar.
-
-        The XGS-600 outputs values in whatever unit is configured on its front
-        panel (typically Torr).  All internal storage uses mbar so that the
-        existing unit-conversion pipeline is always applied to a known baseline.
-
-        Args:
-            pressure: Raw float from the controller, or None.
-            raw_unit: Unit string the controller is configured to output
-                      ('Torr', 'mbar', 'Pa').  Comes from gauge config 'units'.
-
-        Returns:
-            Pressure converted to mbar, or None.
-        """
-        if pressure is None or raw_unit == 'mbar':
-            return pressure
-        factor = UNIT_CONVERSIONS.get(raw_unit, 1.0)
-        # UNIT_CONVERSIONS maps mbar→unit (e.g. mbar→Torr = ×0.750062),
-        # so to go unit→mbar we divide by the factor.
-        return pressure / factor
-
     def read_all_with_status(self):
         """
-        Read all enabled FRG-702 gauges, returning pressure (in mbar) and status.
+        Read all enabled FRG-702 gauges, returning pressure and status.
 
-        This is the single hardware-read method.  All values are converted from
-        the gauge's configured output unit (e.g. Torr) to mbar before being
-        returned so that the rest of the pipeline works with a consistent unit.
+        This is the single hardware-read method. Values are converted from
+        the device's front-panel unit setting to the app's target unit
+        (from gauge config) only if they differ.
 
         Returns:
             dict like {'FRG702_Chamber': {'pressure': 1.5e-6, 'status': 'valid'}}
-            Pressure values are always in mbar (or None on error).
         """
         readings = {}
 
@@ -143,16 +136,23 @@ class FRG702Reader:
                 } for g in self.gauges if g.get('enabled', True)
             }
 
+        # Refresh device unit if not yet known
+        if self._device_unit is None:
+            self._refresh_device_unit()
+
+        # Fallback to Torr if query fails or is not yet performed
+        device_unit = self._device_unit or 'Torr'
+
         for gauge in self.gauges:
             if not gauge.get('enabled', True):
                 continue
 
             sensor_code = gauge['sensor_code']
-            raw_unit = gauge.get('units', 'mbar')
+            target_unit = gauge.get('units', 'mbar')
 
             try:
                 raw_pressure = self.controller.read_pressure(sensor_code)
-                pressure = self._to_mbar(raw_pressure, raw_unit)
+                pressure = self.convert_pressure(raw_pressure, device_unit, target_unit)
 
                 if pressure is not None:
                     readings[gauge['name']] = {
@@ -161,7 +161,8 @@ class FRG702Reader:
                         'mode': MODE_UNKNOWN,
                         '_raw_str':   str(raw_pressure) if raw_pressure is not None else '?',
                         '_raw_value': raw_pressure,
-                        '_raw_unit':  raw_unit,
+                        '_raw_device_unit': device_unit,
+                        '_target_unit': target_unit,
                     }
                 else:
                     readings[gauge['name']] = {
@@ -170,7 +171,8 @@ class FRG702Reader:
                         'mode': MODE_UNKNOWN,
                         '_raw_str':   '?',
                         '_raw_value': None,
-                        '_raw_unit':  raw_unit,
+                        '_raw_device_unit': device_unit,
+                        '_target_unit': target_unit,
                     }
 
             except Exception as e:
@@ -181,23 +183,33 @@ class FRG702Reader:
                     'mode': MODE_UNKNOWN,
                     '_raw_str':   '?',
                     '_raw_value': None,
-                    '_raw_unit':  raw_unit,
+                    '_raw_device_unit': device_unit,
+                    '_target_unit': target_unit,
                 }
 
         if DEBUG_PRESSURE:
             for name, result in readings.items():
                 raw_val  = result.get('_raw_value')
-                raw_unit = result.get('_raw_unit', '?')
-                mbar_val = result.get('pressure')
+                dev_u    = result.get('_raw_device_unit', '?')
+                target_u = result.get('_target_unit', '?')
+                conv_val = result.get('pressure')
+
+                # Determine if conversion was actually applied
+                if dev_u == target_u:
+                    conv_str = f"No conversion needed (Device={dev_u}, App={target_u})"
+                else:
+                    f_factor = UNIT_CONVERSIONS.get(dev_u, 1.0)
+                    t_factor = UNIT_CONVERSIONS.get(target_u, 1.0)
+                    conv_str = (f"Converted {dev_u} -> {target_u}: "
+                                f"raw / {f_factor} * {t_factor} = {conv_val}")
+
                 print(
                     f"[PRESSURE DEBUG] Sensor: {name}\n"
                     f"  Serial raw string : {result.get('_raw_str', '?')}\n"
                     f"  Parsed float      : {raw_val}\n"
-                    f"  XGS-600 unit      : {raw_unit}  (from gauge config 'units' field)\n"
-                    f"  Conversion factor : UNIT_CONVERSIONS['{raw_unit}'] = "
-                    f"{UNIT_CONVERSIONS.get(raw_unit, '???')}\n"
-                    f"  mbar = raw / factor = {raw_val} / {UNIT_CONVERSIONS.get(raw_unit, 1.0)}"
-                    f" = {mbar_val}\n"
+                    f"  XGS-600 unit      : {dev_u} (detected from hardware)\n"
+                    f"  App target unit   : {target_u} (from settings)\n"
+                    f"  Logic             : {conv_str}\n"
                     f"  Status            : {result.get('status')}"
                 )
 
@@ -224,14 +236,20 @@ class FRG702Reader:
             channel_name: Name of the gauge to read
 
         Returns:
-            Pressure in mbar, or None if not found/error
+            Pressure in target unit, or None if not found/error
         """
         for gauge in self.gauges:
             if gauge['name'] == channel_name and gauge.get('enabled', True):
-                raw_unit = gauge.get('units', 'mbar')
+                target_unit = gauge.get('units', 'mbar')
+                
+                # Ensure we know the device unit
+                if self._device_unit is None:
+                    self._refresh_device_unit()
+                device_unit = self._device_unit or 'Torr'
+
                 try:
                     raw = self.controller.read_pressure(gauge['sensor_code'])
-                    return self._to_mbar(raw, raw_unit)
+                    return self.convert_pressure(raw, device_unit, target_unit)
                 except Exception as e:
                     print(f"Error reading {channel_name}: {e}")
                     return None

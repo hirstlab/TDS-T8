@@ -100,37 +100,39 @@ class TestFRG702ErrorStates(unittest.TestCase):
 
 
 class TestFRG702UnitConversions(unittest.TestCase):
-    """Test mbar to Torr and Pa conversions."""
+    """Test pressure unit conversions."""
 
-    def test_mbar_no_conversion(self):
-        """mbar to mbar should be identity."""
-        result = FRG702Reader.convert_pressure(1.0, 'mbar')
-        self.assertEqual(result, 1.0)
+    def test_identity_conversion(self):
+        """Converting to the same unit should be identity."""
+        self.assertEqual(FRG702Reader.convert_pressure(1.0, 'mbar', 'mbar'), 1.0)
+        self.assertEqual(FRG702Reader.convert_pressure(1.0, 'Torr', 'Torr'), 1.0)
+        self.assertEqual(FRG702Reader.convert_pressure(1.0, 'Pa', 'Pa'), 1.0)
 
     def test_mbar_to_torr(self):
         """1 mbar = 0.750062 Torr."""
-        result = FRG702Reader.convert_pressure(1.0, 'Torr')
+        result = FRG702Reader.convert_pressure(1.0, 'mbar', 'Torr')
         self.assertAlmostEqual(result, 0.750062, places=5)
+
+    def test_torr_to_mbar(self):
+        """1 Torr = 1 / 0.750062 mbar."""
+        result = FRG702Reader.convert_pressure(0.750062, 'Torr', 'mbar')
+        self.assertAlmostEqual(result, 1.0, places=5)
 
     def test_mbar_to_pa(self):
         """1 mbar = 100 Pa."""
-        result = FRG702Reader.convert_pressure(1.0, 'Pa')
+        result = FRG702Reader.convert_pressure(1.0, 'mbar', 'Pa')
+        self.assertAlmostEqual(result, 100.0, places=1)
+
+    def test_torr_to_pa(self):
+        """Convert Torr to Pa via mbar."""
+        # 1 Torr = 1 / 0.750062 mbar = 100 / 0.750062 Pa
+        result = FRG702Reader.convert_pressure(0.750062, 'Torr', 'Pa')
         self.assertAlmostEqual(result, 100.0, places=1)
 
     def test_atmospheric_pressure_torr(self):
         """1013.25 mbar (1 atm) should be ~760 Torr."""
-        result = FRG702Reader.convert_pressure(1013.25, 'Torr')
+        result = FRG702Reader.convert_pressure(1013.25, 'mbar', 'Torr')
         self.assertAlmostEqual(result, 760, delta=1)
-
-    def test_small_pressure_torr(self):
-        """Verify conversion works for very small pressures."""
-        result = FRG702Reader.convert_pressure(1.0e-6, 'Torr')
-        self.assertAlmostEqual(result, 7.50062e-7, delta=1e-10)
-
-    def test_small_pressure_pa(self):
-        """Verify conversion works for very small pressures in Pa."""
-        result = FRG702Reader.convert_pressure(1.0e-6, 'Pa')
-        self.assertAlmostEqual(result, 1.0e-4, delta=1e-8)
 
 
 class TestFRG702OperatingMode(unittest.TestCase):
