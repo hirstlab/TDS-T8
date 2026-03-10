@@ -55,6 +55,8 @@ class ProgrammerPreviewPlot:
         # Persistent line objects
         self._line_v = None
         self._line_a = None
+        self._line_temp = None  # green temperature line for TempRamp mode
+        self._temp_mode = False  # True when displaying TempRamp preview
 
         # "No program" placeholder text
         self._placeholder = self._ax_v.text(
@@ -139,6 +141,77 @@ class ProgrammerPreviewPlot:
         self._ax_a.relim()
         self._ax_a.autoscale_view()
 
+        self.canvas.draw_idle()
+
+    def update_temp_preview(self, times, temps_k):
+        """
+        Display temperature (K) vs time for TempRamp mode.
+
+        Hides the current (right) axis and replaces the voltage axis label
+        with 'Temperature (K)'.
+        """
+        self._temp_mode = True
+        self._ax_a.set_visible(False)
+        self._ax_v.set_ylabel('Temperature (K)', color='#2ca02c')
+        self._ax_v.tick_params(axis='y', labelcolor='#2ca02c')
+        self._ax_v.set_xlabel('Time (s)')
+        self.fig.suptitle('Temp Ramp Preview', fontsize=11, fontweight='bold')
+
+        # Remove existing V/I lines and block-boundary lines
+        if self._line_v is not None:
+            self._line_v.remove()
+            self._line_v = None
+        if self._line_a is not None:
+            self._line_a.remove()
+            self._line_a = None
+        if self._line_temp is not None:
+            self._line_temp.remove()
+            self._line_temp = None
+        for line in list(self._ax_v.lines):
+            line.remove()
+
+        if not times:
+            self._placeholder.set_visible(True)
+            self._ax_v.relim()
+            self._ax_v.autoscale_view()
+            self.canvas.draw_idle()
+            return
+
+        self._placeholder.set_visible(False)
+        self._line_temp, = self._ax_v.plot(
+            times, temps_k,
+            color='#2ca02c', linewidth=2, linestyle='solid', label='Temperature (K)'
+        )
+        self._ax_v.relim()
+        self._ax_v.autoscale_view()
+        self.canvas.draw_idle()
+
+    def reset_to_vi_mode(self):
+        """
+        Restore the dual-axis Voltage/Current layout after leaving TempRamp mode.
+        """
+        self._temp_mode = False
+        self._ax_a.set_visible(True)
+
+        # Restore axis labels
+        self._ax_v.set_ylabel('Voltage (V)', color=self._v_color)
+        self._ax_v.tick_params(axis='y', labelcolor=self._v_color)
+        self._ax_a.set_ylabel('Current (A)', color=self._a_color,
+                               rotation=270, labelpad=15)
+        self._ax_a.tick_params(axis='y', labelcolor=self._a_color)
+        self.fig.suptitle('Power Program Preview', fontsize=11, fontweight='bold')
+
+        # Remove temperature line
+        if self._line_temp is not None:
+            self._line_temp.remove()
+            self._line_temp = None
+
+        # Show placeholder and reset view
+        self._placeholder.set_visible(True)
+        self._ax_v.relim()
+        self._ax_v.autoscale_view()
+        self._ax_a.relim()
+        self._ax_a.autoscale_view()
         self.canvas.draw_idle()
 
     def apply_appearance(self, voltage_color=None, current_color=None,

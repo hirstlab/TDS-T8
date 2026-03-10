@@ -103,6 +103,8 @@ from t8_daq_system.core.data_acquisition import DataAcquisition
 from t8_daq_system.settings.app_settings import AppSettings
 from t8_daq_system.gui.power_programmer_panel import PowerProgrammerPanel
 from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
+from t8_daq_system.control.temp_ramp_pid import TempRampHistory
+from t8_daq_system.control.temp_ramp_executor import TempRampExecutor
 
 
 class MockPowerSupplyController:
@@ -272,6 +274,11 @@ class MainWindow:
         # Initialize ramp executor and safety monitor
         self.ramp_executor = RampExecutor()
         profiler.checkpoint("RampExecutor created")
+
+        # TempRamp PID mode — history and executor instances
+        self._temp_ramp_history = TempRampHistory()
+        self._temp_ramp_executor = None   # created fresh each run
+        self._programmer_mode = "Voltage"  # tracks current programmer sub-mode
 
         profiler.checkpoint("Creating SafetyMonitor...")
         self.safety_monitor = SafetyMonitor(auto_shutoff=True)
@@ -689,7 +696,7 @@ class MainWindow:
 
         # Power Programmer state
         self._programmer_mode_active = False
-        self._programmer_preview_data = ([], [], [])  # (times, voltages, currents)
+        self._programmer_preview_data = ([], [], [])  # (times, voltages_or_temps, currents_or_None)
         self._programmer_panel = None
         self._programmer_preview_plot = None
         self._programmer_panel_frame = None
@@ -1063,6 +1070,9 @@ class MainWindow:
             self._programmer_panel._blocks = list(self._programmer_blocks)
             self._programmer_panel._mode = self._programmer_control_mode
             self._programmer_panel._mode_var.set(self._programmer_control_mode)
+            # If restoring TempRamp mode, rebuild columns before populating table
+            if self._programmer_control_mode == "TempRamp":
+                self._programmer_panel._build_table_for_mode()
             self._programmer_panel._refresh_table()
             self._programmer_panel._refresh_status()
 
@@ -1086,8 +1096,23 @@ class MainWindow:
 
     def _update_programmer_preview(self):
         if self._programmer_panel and self._programmer_preview_plot:
-            times, voltages, currents = self._programmer_panel.get_preview_data()
-            self._programmer_preview_plot.update_preview(times, voltages, currents)
+            panel_mode = self._programmer_panel._mode
+
+            # Reset plot layout when switching away from TempRamp mode
+            if self._programmer_mode == "TempRamp" and panel_mode != "TempRamp":
+                self._programmer_preview_plot.reset_to_vi_mode()
+
+            self._programmer_mode = panel_mode
+
+            if panel_mode == "TempRamp":
+                times, temps_k = self._programmer_panel._compute_temp_preview()
+                self._programmer_preview_plot.update_temp_preview(times, temps_k)
+                self._programmer_preview_data = (times, temps_k, None)
+            else:
+                times, voltages, currents = self._programmer_panel.get_preview_data()
+                self._programmer_preview_plot.update_preview(times, voltages, currents)
+                self._programmer_preview_data = (times, voltages, currents)
+
             # Show/hide the Run Ramp button
             if (self._programmer_panel.get_profile_ready()
                     and not self._run_ramp_btn_visible):
@@ -1108,10 +1133,12 @@ class MainWindow:
             self._programmer_preview_data = self._programmer_panel.get_preview_data()
             self._programmer_blocks = list(self._programmer_panel._blocks)
             self._programmer_control_mode = self._programmer_panel._mode
+            self._programmer_mode = self._programmer_panel._mode
         else:
             self._programmer_preview_data = ([], [], [])
             self._programmer_blocks = []
             self._programmer_control_mode = "Voltage"
+            self._programmer_mode = "Voltage"
 
         # Destroy programmer UI
         if self._programmer_panel_frame:
@@ -1180,6 +1207,11 @@ class MainWindow:
         else:
             blocks = self._programmer_blocks
             control_mode = self._programmer_control_mode
+
+        # ── TempRamp mode: delegate to PID executor ────────────────────────────
+        if control_mode == "TempRamp" or self._programmer_mode == "TempRamp":
+            self._start_temp_ramp_program()
+            return
 
         # Guard: must have valid profile
         if not blocks:
@@ -1322,6 +1354,110 @@ class MainWindow:
 
         self.status_var.set("Running Program")
 
+    def _start_temp_ramp_program(self):
+        """
+        Start a TempRamp PID run using TempRampExecutor.
+
+        Gets blocks from panel (or stored), queries history for PID gains,
+        creates a fresh executor, wires practice-mode TC simulation, and starts.
+        """
+        # Resolve blocks from panel or stored state
+        if self._programmer_panel:
+            blocks = list(self._programmer_panel._blocks)
+        else:
+            blocks = list(self._programmer_blocks)
+
+        if not blocks:
+            messagebox.showwarning("No Profile", "Build a valid Temp Ramp program first.")
+            return
+
+        if not hasattr(self, 'ps_controller') or self.ps_controller is None:
+            messagebox.showerror("No Power Supply",
+                                 "Power supply is not connected. Cannot run program.")
+            return
+
+        # Get suggested PID gains based on the first Ramp block's target rate
+        first_ramp = next((b for b in blocks if b['type'] == "Ramp"), None)
+        target_rate = float(first_ramp['rate_k_per_min']) if first_ramp else 1.0
+        gains = self._temp_ramp_history.suggest_gains(target_rate)
+        print(f"[TempRamp] Using gains: kp={gains['kp']}, ki={gains['ki']}, kd={gains['kd']}")
+
+        # Create a fresh executor for this run
+        self._temp_ramp_executor = TempRampExecutor(
+            power_supply=self.ps_controller,
+            get_temperature_celsius_fn=(
+                lambda: self.daq.get_latest_tc_celsius() if self.daq else None
+            ),
+            history=self._temp_ramp_history,
+            on_status_callback=self._on_temp_ramp_status,
+            practice_mode=self._practice_mode
+        )
+        self._temp_ramp_executor._pid.update_gains(
+            gains['kp'], gains['ki'], gains['kd']
+        )
+
+        if not self._temp_ramp_executor.load_blocks(blocks):
+            messagebox.showerror("Load Error", "Failed to validate Temp Ramp blocks.")
+            self._temp_ramp_executor = None
+            return
+
+        # Wire practice-mode TC simulation through DataAcquisition
+        if self.daq is not None:
+            self.daq.temp_ramp_executor = self._temp_ramp_executor
+
+        if not self._temp_ramp_executor.start():
+            messagebox.showerror("Start Error", "Failed to start Temp Ramp executor.")
+            self._temp_ramp_executor = None
+            if self.daq is not None:
+                self.daq.temp_ramp_executor = None
+            return
+
+        self._programmer_ramp_running = True
+        self.run_ramp_btn.config(text="Stop Program")
+        self.status_var.set("Temp Ramp Running")
+
+    def _on_temp_ramp_status(self, status: dict):
+        """
+        Receive per-tick status from TempRampExecutor (called from background thread).
+
+        Routes all GUI updates to the main thread via root.after().
+        """
+        # Handle TC missing error
+        if status.get('tc_missing_error'):
+            def _show_error():
+                messagebox.showerror(
+                    "Thermocouple Error",
+                    "No thermocouple reading for 5 consecutive ticks.\n"
+                    "Temp Ramp stopped for safety."
+                )
+                self._programmer_ramp_running = False
+                self.run_ramp_btn.config(text="Run Program")
+                self.status_var.set("Temp Ramp — TC Error")
+            self.root.after(0, _show_error)
+            return
+
+        # Build status string
+        warning_suffix = " [SAT WARN]" if status.get('saturated_warning') else ""
+        status_text = (
+            f"TempRamp | Block {status['block_index']+1}/{status['total_blocks']} | "
+            f"T={status['current_temp_k']:.1f} K | "
+            f"SP={status['setpoint_k']:.1f} K | "
+            f"PID={status['pid_output']:.3f}{warning_suffix}"
+        )
+
+        def _update():
+            self.status_var.set(status_text)
+
+            # Detect executor finishing naturally (no longer running)
+            if (self._temp_ramp_executor is not None
+                    and not self._temp_ramp_executor.is_running()
+                    and self._programmer_ramp_running):
+                self._programmer_ramp_running = False
+                self.run_ramp_btn.config(text="Run Program")
+                self.status_var.set("Temp Ramp Complete")
+
+        self.root.after(0, _update)
+
     def _stop_programmer_ramp_safe(self):
         """
         Safely stop the programmer ramp, following Keysight N5700 manual guidance.
@@ -1333,6 +1469,19 @@ class MainWindow:
         Do NOT abruptly de-assert the Enable/Analog pin while voltage is non-zero.
         """
         import time as _time
+
+        # ── TempRamp executor stop path ────────────────────────────────────────
+        if self._temp_ramp_executor is not None and self._temp_ramp_executor.is_running():
+            self._temp_ramp_executor.stop()
+            self._temp_ramp_executor = None
+            if hasattr(self, 'daq') and self.daq is not None:
+                self.daq.temp_ramp_executor = None
+            self._programmer_ramp_running = False
+            self.run_ramp_btn.config(text="Run Program")
+            self.status_var.set("Temp Ramp Stopped")
+            return
+
+        # ── Existing V/I ramp executor stop path ──────────────────────────────
 
         # 1. Stop the executor thread
         if self.ramp_executor.is_active():
@@ -1877,6 +2026,8 @@ class MainWindow:
             ramp_executor=self.ramp_executor,
             practice_mode=self._practice_mode
         )
+        # Ensure temp_ramp_executor slot is present (set by _start_temp_ramp_program when active)
+        self.daq.temp_ramp_executor = None
 
         def on_new_data(timestamp, all_readings, tc_readings, frg702_details,
                         safety_shutdown=False, raw_voltages=None):
