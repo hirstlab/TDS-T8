@@ -7,7 +7,10 @@ Block types:
   "Ramp" - linearly interpolates from Start V/A to End V/A over Duration
   "Hold" - stays at Start V/A for Duration
 
-Computes a time-series preview of voltage and current from the block list.
+In TempRamp mode each block specifies a ramp rate (K/min); a PID controller
+drives the actual power supply to achieve that temperature rise rate.
+
+Computes a time-series preview from the block list.
 Provides Save/Load of profiles as JSON files.
 Fires a callback with the computed preview data when the profile is confirmed.
 """
@@ -21,7 +24,7 @@ class PowerProgrammerPanel:
     """
     Block editor UI and preview logic for Power Programmer mode.
 
-    Each block is a dict:
+    Voltage/Current mode — each block is a dict:
         {
             "type": "Ramp" or "Hold",
             "duration": float (seconds, min 1, max 86400),
@@ -29,6 +32,13 @@ class PowerProgrammerPanel:
             "end_v":   float (volts, 0.0–6.0),
             "start_a": float (amps, 0.0–180.0),
             "end_a":   float (amps, 0.0–180.0)
+        }
+
+    TempRamp mode — each block is a dict:
+        {
+            "type":          "Ramp" or "Hold",
+            "duration_sec":  float (seconds, > 0),
+            "rate_k_per_min": float (K/min; only meaningful for Ramp blocks)
         }
     """
 
@@ -54,7 +64,11 @@ class PowerProgrammerPanel:
         self._on_closed = on_panel_closed_callback
 
         self._blocks = []  # list of block dicts
-        self._mode = "Voltage"  # "Voltage" or "Current"
+        self._mode = "Voltage"  # "Voltage", "Current", or "TempRamp"
+
+        self._table_frame = None  # kept as ref so _rebuild_table_columns can destroy/recreate
+        self._tree = None
+        self._tree_vsb = None
 
         self._build_gui()
 
@@ -97,34 +111,16 @@ class PowerProgrammerPanel:
         self._mode_var = tk.StringVar(value="Voltage")
         mode_cb = ttk.Combobox(
             toolbar, textvariable=self._mode_var,
-            values=["Voltage", "Current"], state='readonly', width=10
+            values=["Voltage", "Current", "TempRamp"], state='readonly', width=12
         )
         mode_cb.pack(side=tk.LEFT, padx=2)
         mode_cb.bind("<<ComboboxSelected>>", self._on_mode_change)
 
         # ── Row 3: Table ──────────────────────────────────────────────────
-        table_frame = ttk.Frame(self._parent)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
+        self._table_frame = ttk.Frame(self._parent)
+        self._table_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
 
-        columns = ('#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A')
-        col_widths = [30, 70, 90, 60, 60, 60, 60]
-
-        self._tree = ttk.Treeview(
-            table_frame, columns=columns, show='headings', height=6,
-            selectmode='browse'
-        )
-        for col, width in zip(columns, col_widths):
-            self._tree.heading(col, text=col)
-            self._tree.column(col, width=width, anchor='center', stretch=False)
-
-        vsb = ttk.Scrollbar(table_frame, orient='vertical',
-                            command=self._tree.yview)
-        self._tree.configure(yscrollcommand=vsb.set)
-
-        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-
-        self._tree.bind('<Double-1>', self._on_double_click)
+        self._build_table_for_mode()
 
         # ── Row 4: Interpolation selection ────────────────────────────────
         interp_frame = ttk.Frame(self._parent)
@@ -148,9 +144,47 @@ class PowerProgrammerPanel:
         )
         self._ready_label.pack(side=tk.LEFT)
 
+    def _build_table_for_mode(self):
+        """Build (or rebuild) the Treeview columns for the current mode."""
+        # Destroy existing tree and scrollbar widgets inside table_frame
+        for widget in self._table_frame.winfo_children():
+            widget.destroy()
+
+        if self._mode == "TempRamp":
+            columns = ('#', 'Type', 'Duration (s)', 'Rate (K/min)')
+            col_widths = [30, 70, 90, 90]
+        else:
+            columns = ('#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A')
+            col_widths = [30, 70, 90, 60, 60, 60, 60]
+
+        self._tree = ttk.Treeview(
+            self._table_frame, columns=columns, show='headings', height=6,
+            selectmode='browse'
+        )
+        for col, width in zip(columns, col_widths):
+            self._tree.heading(col, text=col)
+            self._tree.column(col, width=width, anchor='center', stretch=False)
+
+        vsb = ttk.Scrollbar(self._table_frame, orient='vertical',
+                            command=self._tree.yview)
+        self._tree.configure(yscrollcommand=vsb.set)
+
+        self._tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        self._tree.bind('<Double-1>', self._on_double_click)
+
     def _on_mode_change(self, event=None):
         """Handle control mode change."""
-        self._mode = self._mode_var.get()
+        new_mode = self._mode_var.get()
+        old_mode = self._mode
+        self._mode = new_mode
+
+        # Rebuild table columns when crossing TempRamp boundary
+        if new_mode == "TempRamp" or old_mode == "TempRamp":
+            self._blocks = []
+            self._build_table_for_mode()
+
         self._refresh_status()
 
     # ──────────────────────────────────────────────────────────────────────
@@ -159,14 +193,21 @@ class PowerProgrammerPanel:
 
     def _add_block(self):
         """Append a default block and refresh."""
-        default = {
-            "type": "Ramp",
-            "duration": self._settings.pp_default_ramp_duration,
-            "start_v": self._settings.pp_default_start_v,
-            "end_v": self._settings.pp_default_start_v,
-            "start_a": self._settings.pp_default_start_a,
-            "end_a": self._settings.pp_default_start_a
-        }
+        if self._mode == "TempRamp":
+            default = {
+                "type": "Ramp",
+                "duration_sec": float(getattr(self._settings, 'pp_default_ramp_duration', 60)),
+                "rate_k_per_min": 1.0
+            }
+        else:
+            default = {
+                "type": "Ramp",
+                "duration": self._settings.pp_default_ramp_duration,
+                "start_v": self._settings.pp_default_start_v,
+                "end_v": self._settings.pp_default_start_v,
+                "start_a": self._settings.pp_default_start_a,
+                "end_a": self._settings.pp_default_start_a
+            }
         self._blocks.append(default)
         self._refresh_table()
         self._refresh_status()
@@ -228,21 +269,41 @@ class PowerProgrammerPanel:
         """Clear and re-populate the Treeview from self._blocks."""
         for item in self._tree.get_children():
             self._tree.delete(item)
-        for i, block in enumerate(self._blocks):
-            row = (
-                i + 1,
-                block["type"],
-                block["duration"],
-                block.get("start_v", 0.0),
-                block.get("end_v", 0.0),
-                block.get("start_a", 0.0),
-                block.get("end_a", 0.0)
-            )
-            self._tree.insert('', 'end', values=row)
+
+        if self._mode == "TempRamp":
+            for i, block in enumerate(self._blocks):
+                rate_display = (
+                    block.get("rate_k_per_min", 1.0)
+                    if block["type"] == "Ramp"
+                    else "—"
+                )
+                row = (
+                    i + 1,
+                    block["type"],
+                    block.get("duration_sec", 0.0),
+                    rate_display
+                )
+                self._tree.insert('', 'end', values=row)
+        else:
+            for i, block in enumerate(self._blocks):
+                row = (
+                    i + 1,
+                    block["type"],
+                    block["duration"],
+                    block.get("start_v", 0.0),
+                    block.get("end_v", 0.0),
+                    block.get("start_a", 0.0),
+                    block.get("end_a", 0.0)
+                )
+                self._tree.insert('', 'end', values=row)
 
     def _refresh_status(self):
         """Update the duration label and ready indicator."""
-        total_seconds = sum(b["duration"] for b in self._blocks)
+        # Handle both key styles (duration_sec for TempRamp, duration for V/I)
+        total_seconds = sum(
+            block.get("duration_sec", block.get("duration", 0))
+            for block in self._blocks
+        )
         minutes, secs = divmod(int(total_seconds), 60)
         hours, minutes = divmod(minutes, 60)
         if hours:
@@ -289,13 +350,17 @@ class PowerProgrammerPanel:
         if not bbox:
             return
 
-        col_names = ['#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A']
-        col_name = col_names[col_index]
-
-        self._open_cell_editor(row_index, col_name, block, bbox)
+        if self._mode == "TempRamp":
+            col_names = ['#', 'Type', 'Duration (s)', 'Rate (K/min)']
+            col_name = col_names[col_index]
+            self._open_tempramp_cell_editor(row_index, col_name, block, bbox)
+        else:
+            col_names = ['#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A']
+            col_name = col_names[col_index]
+            self._open_cell_editor(row_index, col_name, block, bbox)
 
     def _open_cell_editor(self, row_index, col_name, block, bbox):
-        """Create a toplevel popup for editing a single cell."""
+        """Create a toplevel popup for editing a single V/I cell."""
         popup = tk.Toplevel(self._parent)
         popup.title(f"Edit {col_name}")
         popup.resizable(False, False)
@@ -429,6 +494,101 @@ class PowerProgrammerPanel:
         popup.bind('<Return>', lambda e: _apply())
         popup.bind('<Escape>', lambda e: popup.destroy())
 
+    def _open_tempramp_cell_editor(self, row_index, col_name, block, bbox):
+        """Create a toplevel popup for editing a single TempRamp cell."""
+        popup = tk.Toplevel(self._parent)
+        popup.title(f"Edit {col_name}")
+        popup.resizable(False, False)
+        popup.grab_set()
+
+        x = self._tree.winfo_rootx() + bbox[0]
+        y = self._tree.winfo_rooty() + bbox[1]
+        popup.geometry(f"+{x}+{y}")
+
+        ttk.Label(popup, text=f"{col_name}:").grid(row=0, column=0, padx=6, pady=6, sticky='w')
+
+        edit_var = tk.StringVar()
+
+        if col_name == 'Type':
+            widget = ttk.Combobox(
+                popup, textvariable=edit_var,
+                values=["Ramp", "Hold"], state='readonly', width=10
+            )
+            edit_var.set(block["type"])
+        elif col_name == 'Duration (s)':
+            edit_var.set(str(block.get("duration_sec", 60.0)))
+            widget = ttk.Entry(popup, textvariable=edit_var, width=14)
+            widget.select_range(0, tk.END)
+        elif col_name == 'Rate (K/min)':
+            current_rate = str(block.get("rate_k_per_min", 1.0))
+            edit_var.set(current_rate)
+            widget = ttk.Combobox(
+                popup, textvariable=edit_var,
+                values=["0.1", "1", "5", "10"], width=10
+            )
+            if block["type"] == "Hold":
+                widget.config(state='disabled')
+        else:
+            popup.destroy()
+            return
+
+        widget.grid(row=0, column=1, padx=6, pady=6)
+        widget.focus_set()
+
+        def _apply():
+            val_str = edit_var.get().strip()
+
+            if col_name == 'Type':
+                if val_str not in ("Ramp", "Hold"):
+                    messagebox.showerror("Invalid", "Type must be 'Ramp' or 'Hold'.",
+                                         parent=popup)
+                    return
+                block["type"] = val_str
+                if val_str == "Hold":
+                    block["rate_k_per_min"] = 0.0
+
+            elif col_name == 'Duration (s)':
+                try:
+                    v = float(val_str)
+                    if v <= 0:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror(
+                        "Invalid", "Duration must be a positive number.",
+                        parent=popup
+                    )
+                    return
+                block["duration_sec"] = v
+
+            elif col_name == 'Rate (K/min)':
+                if block["type"] == "Hold":
+                    popup.destroy()
+                    return
+                try:
+                    v = float(val_str)
+                    if v < 0:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror(
+                        "Invalid", "Rate must be a non-negative number.",
+                        parent=popup
+                    )
+                    return
+                block["rate_k_per_min"] = v
+
+            self._refresh_table()
+            self._refresh_status()
+            popup.destroy()
+
+        btn_frame = ttk.Frame(popup)
+        btn_frame.grid(row=1, column=0, columnspan=2, pady=4)
+        ttk.Button(btn_frame, text="OK", command=_apply).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Cancel",
+                   command=popup.destroy).pack(side=tk.LEFT, padx=4)
+
+        popup.bind('<Return>', lambda e: _apply())
+        popup.bind('<Escape>', lambda e: popup.destroy())
+
     # ──────────────────────────────────────────────────────────────────────
     # Save / Load
     # ──────────────────────────────────────────────────────────────────────
@@ -478,8 +638,54 @@ class PowerProgrammerPanel:
                 messagebox.showerror("Load Error", "Invalid profile format.")
                 return
 
+            # ── TempRamp profile ──────────────────────────────────────────
+            if mode == "TempRamp":
+                validated = []
+                for i, block in enumerate(blocks):
+                    if not isinstance(block, dict):
+                        messagebox.showerror("Load Error",
+                                             f"Block {i+1} is not a valid object.")
+                        return
+                    if block.get("type") not in ("Ramp", "Hold"):
+                        messagebox.showerror("Load Error",
+                                             f"Block {i+1}: type must be 'Ramp' or 'Hold'.")
+                        return
+                    try:
+                        dur = float(block["duration_sec"])
+                        if dur <= 0:
+                            raise ValueError
+                    except (KeyError, ValueError, TypeError):
+                        messagebox.showerror("Load Error",
+                                             f"Block {i+1}: invalid duration_sec.")
+                        return
+                    try:
+                        rate = float(block.get("rate_k_per_min", 0.0))
+                    except (ValueError, TypeError):
+                        messagebox.showerror("Load Error",
+                                             f"Block {i+1}: invalid rate_k_per_min.")
+                        return
+                    validated.append({
+                        "type": block["type"],
+                        "duration_sec": dur,
+                        "rate_k_per_min": rate
+                    })
+
+                old_mode = self._mode
+                self._mode = "TempRamp"
+                self._mode_var.set("TempRamp")
+                if old_mode != "TempRamp":
+                    self._build_table_for_mode()
+                self._blocks = validated
+                self._refresh_table()
+                self._refresh_status()
+                return
+
+            # ── Voltage / Current profile ─────────────────────────────────
             self._mode = mode
             self._mode_var.set(mode)
+            if self._mode == "TempRamp":
+                # Shouldn't reach here, but guard anyway
+                self._build_table_for_mode()
 
             validated = []
             for i, block in enumerate(blocks):
@@ -593,12 +799,52 @@ class PowerProgrammerPanel:
 
         return times, voltages, currents
 
+    def _compute_temp_preview(self) -> tuple:
+        """
+        Compute the temperature (K) vs time preview for TempRamp mode.
+
+        Returns:
+            (times, temps_k) — two lists of floats
+        """
+        times = [0.0]
+        temps = [293.15]  # start at room temperature (20°C = 293.15 K)
+
+        for block in self._blocks:
+            duration = block['duration_sec']
+            n_points = max(2, int(duration / 10))  # one point every ~10 seconds
+            t_start = times[-1]
+            temp_start = temps[-1]
+
+            if block['type'] == "Hold":
+                for i in range(1, n_points + 1):
+                    times.append(t_start + duration * i / n_points)
+                    temps.append(temp_start)
+            else:
+                rate_k_per_sec = block['rate_k_per_min'] / 60.0
+                for i in range(1, n_points + 1):
+                    dt = duration * i / n_points
+                    times.append(t_start + dt)
+                    temps.append(temp_start + rate_k_per_sec * dt)
+
+        return times, temps
+
     def get_profile_ready(self):
         """Return True if the profile has at least one block."""
         return len(self._blocks) >= 1
 
     def get_preview_data(self):
-        """Return compute_preview() if profile ready, else ([], [], [])."""
-        if self.get_profile_ready():
-            return self.compute_preview()
-        return [], [], []
+        """
+        Return preview data appropriate for the current mode.
+
+        For Voltage/Current: returns (times, voltages, currents) if ready.
+        For TempRamp: returns (times, temps_k, None) if ready.
+        Returns ([], [], []) if not ready.
+        """
+        if not self.get_profile_ready():
+            return [], [], []
+
+        if self._mode == "TempRamp":
+            times, temps_k = self._compute_temp_preview()
+            return times, temps_k, None
+
+        return self.compute_preview()

@@ -99,6 +99,15 @@ class DataAcquisition:
         self._acquisition_thread = None
         self._acquisition_callback = None
 
+        # Latest TC readings cache (thread-safe, for TempRampExecutor access)
+        self._latest_tc_readings = {}
+        self._tc_readings_lock = threading.Lock()
+
+        # TempRampExecutor reference — set by main_window when a TempRamp run
+        # is active so practice-mode TC simulation uses the executor's simulated
+        # temperature instead of the generic sine-wave formula.
+        self.temp_ramp_executor = None
+
         # Timing diagnostics
         self._timing_samples = []
         self._timing_lock = threading.Lock()
@@ -129,7 +138,15 @@ class DataAcquisition:
             for tc in self.config.get('thermocouples', []):
                 if tc.get('enabled', True):
                     t = time.time()
-                    val = 20.0 + 5.0 * math.sin(t / 10.0) + random.uniform(-0.5, 0.5)
+                    # When a TempRamp run is active, source the simulated TC
+                    # temperature from the executor's thermal model rather than
+                    # the generic sine wave so the live display reflects the PID.
+                    if (self.temp_ramp_executor is not None
+                            and self.temp_ramp_executor.is_running()):
+                        sim_temp_k = self.temp_ramp_executor._practice_temp_k or 293.15
+                        val = sim_temp_k - 273.15  # convert K → °C for display
+                    else:
+                        val = 20.0 + 5.0 * math.sin(t / 10.0) + random.uniform(-0.5, 0.5)
                     tc_readings[tc['name']] = val
                     # Simulate raw TC voltage: typical range ±0.1V (100mV)
                     # Approximate back-calculation from temperature for Type K
@@ -371,6 +388,10 @@ class DataAcquisition:
                     timestamp, all_readings, tc_readings, frg702_details, raw_voltages = \
                         self.read_all_sensors()
 
+                    # Cache latest TC readings for thread-safe access by TempRampExecutor
+                    with self._tc_readings_lock:
+                        self._latest_tc_readings = dict(tc_readings)
+
                     # Safety check
                     if self.safety_monitor and tc_readings:
                         safe = self.safety_monitor.check_limits(tc_readings)
@@ -445,3 +466,32 @@ class DataAcquisition:
             self.ps_controller = ps_controller
         if config is not None:
             self.config = config
+
+    def get_latest_tc_celsius(self, name=None):
+        """
+        Return the most recent thermocouple reading in °C.
+
+        Thread-safe — can be called from background threads (e.g. TempRampExecutor).
+
+        Args:
+            name: Optional TC name (e.g. 'TC_1').  If None, returns the first
+                  enabled TC reading found.
+
+        Returns:
+            float in °C, or None if no reading is available.
+        """
+        with self._tc_readings_lock:
+            readings = dict(self._latest_tc_readings)
+
+        if not readings:
+            return None
+
+        if name and name in readings:
+            return readings[name]
+
+        # Return first enabled TC in config order
+        for tc in self.config.get('thermocouples', []):
+            if tc.get('enabled', True) and tc['name'] in readings:
+                return readings[tc['name']]
+
+        return None
