@@ -93,7 +93,7 @@ class SettingsDialog(tk.Toplevel):
                               width=15, row=0)
         self._create_entry_row(defaults_frame, "Default Start Voltage (V):", "pp_default_start_v", 
                               width=15, row=1)
-        self._create_entry_row(defaults_frame, "Default Start Current (A):", "pp_default_start_a", 
+        self._create_entry_row(defaults_frame, "Default Current Limit (A):", "pp_default_current_a",
                               width=15, row=2)
 
     def _build_sensor_tab(self, notebook):
@@ -498,16 +498,13 @@ class SettingsDialog(tk.Toplevel):
         self._create_entry_row(limit_frame, 'Voltage Limit (V):', 'ps_voltage_limit', width=15, row=0)
         self._create_entry_row(limit_frame, 'Current Limit (A):', 'ps_current_limit', width=15, row=1)
 
-        # ── Power Programmer Plot Appearance ───────────────────────────────────
+        # ── Voltage Setpoint Overlay Appearance ────────────────────────────────
         s = self._settings
         self._pp_v_color_var = s.pp_voltage_color
-        self._pp_a_color_var = s.pp_current_color
         self._pp_v_style_var = tk.StringVar(value=s.pp_voltage_line_style)
-        self._pp_a_style_var = tk.StringVar(value=s.pp_current_line_style)
         self._pp_v_width_var = tk.StringVar(value=s.pp_voltage_line_width)
-        self._pp_a_width_var = tk.StringVar(value=s.pp_current_line_width)
 
-        pp_frame = ttk.LabelFrame(parent, text='Power Programmer Plot', padding=8)
+        pp_frame = ttk.LabelFrame(parent, text='Voltage Setpoint Overlay', padding=8)
         pp_frame.pack(fill=tk.X, pady=5)
 
         ttk.Label(pp_frame, text='Line Appearance',
@@ -533,20 +530,6 @@ class SettingsDialog(tk.Toplevel):
         ttk.Combobox(ppv_row, textvariable=self._pp_v_style_var,
                      values=self._STYLE_CHOICES, state='readonly', width=9).pack(side=tk.LEFT, padx=4)
         ttk.Spinbox(ppv_row, textvariable=self._pp_v_width_var, from_=1, to=4, width=4).pack(side=tk.LEFT, padx=4)
-
-        # PP Current row
-        ppa_row = ttk.Frame(pp_frame)
-        ppa_row.pack(fill=tk.X, pady=1)
-        ttk.Label(ppa_row, text='PP Current', width=11).pack(side=tk.LEFT, padx=4)
-
-        def _set_ppa_color(c):
-            self._pp_a_color_var = c
-
-        self._pp_a_color_btn = self._make_color_picker_btn(ppa_row, self._pp_a_color_var, _set_ppa_color)
-        self._pp_a_color_btn.pack(side=tk.LEFT, padx=4)
-        ttk.Combobox(ppa_row, textvariable=self._pp_a_style_var,
-                     values=self._STYLE_CHOICES, state='readonly', width=9).pack(side=tk.LEFT, padx=4)
-        ttk.Spinbox(ppa_row, textvariable=self._pp_a_width_var, from_=1, to=4, width=4).pack(side=tk.LEFT, padx=4)
 
     def _build_paths_tab(self, notebook):
         """Tab for file paths and power supply configuration."""
@@ -736,18 +719,14 @@ class SettingsDialog(tk.Toplevel):
         self._ps_v_width_var.set(s.ps_voltage_line_width)
         self._ps_i_width_var.set(s.ps_current_line_width)
 
-        # ── Appearance: PP colors/styles/widths ───────────────────────────
+        # ── Appearance: PP voltage overlay color/style/width ─────────────
         self._pp_v_color_var = s.pp_voltage_color
-        self._pp_a_color_var = s.pp_current_color
         try:
             self._pp_v_color_btn.configure(bg=s.pp_voltage_color)
-            self._pp_a_color_btn.configure(bg=s.pp_current_color)
         except Exception:
             pass
         self._pp_v_style_var.set(s.pp_voltage_line_style)
-        self._pp_a_style_var.set(s.pp_current_line_style)
         self._pp_v_width_var.set(s.pp_voltage_line_width)
-        self._pp_a_width_var.set(s.pp_current_line_width)
 
         self._log_folder_var.set(s.log_folder)
         self._frg_interface_var.set(s.frg_interface)
@@ -762,7 +741,7 @@ class SettingsDialog(tk.Toplevel):
         self._pp_profiles_folder_var.set(s.pp_profiles_folder)
         self._pp_default_ramp_duration_var.set(str(s.pp_default_ramp_duration))
         self._pp_default_start_v_var.set(str(s.pp_default_start_v))
-        self._pp_default_start_a_var.set(str(s.pp_default_start_a))
+        self._pp_default_current_a_var.set(str(s.pp_default_current_a))
 
     def _save_settings_from_gui(self):
         """Internal helper to read all GUI vars and write to AppSettings."""
@@ -811,11 +790,8 @@ class SettingsDialog(tk.Toplevel):
             s.ps_voltage_line_width = self._ps_v_width_var.get()
             s.ps_current_line_width = self._ps_i_width_var.get()
             s.pp_voltage_color      = self._pp_v_color_var
-            s.pp_current_color      = self._pp_a_color_var
             s.pp_voltage_line_style = self._pp_v_style_var.get()
-            s.pp_current_line_style = self._pp_a_style_var.get()
             s.pp_voltage_line_width = self._pp_v_width_var.get()
-            s.pp_current_line_width = self._pp_a_width_var.get()
 
             s.log_folder = self._log_folder_var.get().strip()
             s.frg_interface = self._frg_interface_var.get()
@@ -831,7 +807,7 @@ class SettingsDialog(tk.Toplevel):
             s.pp_profiles_folder = self._pp_profiles_folder_var.get().strip()
             s.pp_default_ramp_duration = int(self._pp_default_ramp_duration_var.get())
             s.pp_default_start_v = float(self._pp_default_start_v_var.get())
-            s.pp_default_start_a = float(self._pp_default_start_a_var.get())
+            s.pp_default_current_a = float(self._pp_default_current_a_var.get())
         except ValueError as exc:
             messagebox.showerror("Invalid Value",
                                 f"Please check your entries:\n{exc}", parent=self)

@@ -60,7 +60,7 @@ _DEFAULTS = {
     "pp_profiles_folder":    ("str",   ""),
     "pp_default_ramp_duration": ("int", 60),
     "pp_default_start_v":    ("float", 0.0),
-    "pp_default_start_a":    ("float", 0.0),
+    "pp_default_current_a":  ("float", 180.0),
     # ── Appearance / Plot Style defaults ─────────────────────────────────
     # TC plot colors — one per channel, stored as comma-separated hex strings
     "tc_colors":            ("str", "#1f77b4,#ff7f0e,#2ca02c,#d62728,#9467bd,#8c564b,#e377c2,#7f7f7f"),
@@ -79,11 +79,8 @@ _DEFAULTS = {
     "ps_current_line_width":("str", "2"),
     # Power Programmer preview plot
     "pp_voltage_color":      ("str", "#1f77b4"),   # blue default
-    "pp_current_color":      ("str", "#d62728"),   # red default
     "pp_voltage_line_style": ("str", "solid"),
-    "pp_current_line_style": ("str", "dashed"),
     "pp_voltage_line_width": ("str", "2"),
-    "pp_current_line_width": ("str", "2"),
 }
 
 
@@ -145,7 +142,7 @@ class AppSettings:
         self.pp_profiles_folder: str = ""
         self.pp_default_ramp_duration: int = 60
         self.pp_default_start_v: float = 0.0
-        self.pp_default_start_a: float = 0.0
+        self.pp_default_current_a: float = 180.0
         # Appearance / Plot Style
         self.tc_colors: str            = "#1f77b4,#ff7f0e,#2ca02c,#d62728,#9467bd,#8c564b,#e377c2,#7f7f7f"
         self.tc_line_style: str        = "solid,solid,solid,solid,solid,solid,solid,solid"
@@ -160,11 +157,8 @@ class AppSettings:
         self.ps_voltage_line_width: str = "2"
         self.ps_current_line_width: str = "2"
         self.pp_voltage_color: str       = "#1f77b4"
-        self.pp_current_color: str       = "#d62728"
         self.pp_voltage_line_style: str  = "solid"
-        self.pp_current_line_style: str  = "dashed"
         self.pp_voltage_line_width: str  = "2"
-        self.pp_current_line_width: str  = "2"
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API

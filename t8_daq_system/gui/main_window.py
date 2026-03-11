@@ -567,6 +567,9 @@ class MainWindow:
                 ps_current_style=s.ps_current_line_style,
                 ps_voltage_width=s.ps_voltage_line_width,
                 ps_current_width=s.ps_current_line_width,
+                pp_voltage_color=s.pp_voltage_color,
+                pp_voltage_style=s.pp_voltage_line_style,
+                pp_voltage_width=s.pp_voltage_line_width,
             )
 
         # Apply appearance to the Power Programmer preview plot (if open)
@@ -574,11 +577,8 @@ class MainWindow:
                 and self._programmer_preview_plot is not None):
             self._programmer_preview_plot.apply_appearance(
                 voltage_color=s.pp_voltage_color,
-                current_color=s.pp_current_color,
                 voltage_style=s.pp_voltage_line_style,
-                current_style=s.pp_current_line_style,
                 voltage_width=s.pp_voltage_line_width,
-                current_width=s.pp_current_line_width,
             )
 
     def _open_settings_dialog(self):
@@ -1240,20 +1240,16 @@ class MainWindow:
 
         # Convert programmer blocks to RampProfile steps
         from t8_daq_system.control.ramp_profile import RampProfile, RampStep, StepType, ControlMode
-        
-        # Determine global control mode from programmer
-        is_current_mode = control_mode == "Current"
-        
+
         # Initial values from first block
         first_v = float(blocks[0]["start_v"])
-        first_a = float(blocks[0].get("start_a", blocks[0].get("current_a", 0.0)))
-        
+        first_a = float(blocks[0].get("current_a", 0.0))
+
         # Validate hardware limits before building profile
         for block in blocks:
             start_v = float(block["start_v"])
             end_v = float(block["end_v"]) if block["type"] == "Ramp" else float(block["start_v"])
-            start_a = float(block.get("start_a", block.get("current_a", 0.0)))
-            end_a = float(block.get("end_a", start_a)) if block["type"] == "Ramp" else start_a
+            current_a = float(block.get("current_a", 0.0))
 
             if start_v > 6.0 or end_v > 6.0:
                 messagebox.showerror(
@@ -1262,19 +1258,15 @@ class MainWindow:
                     f"Start V: {start_v}, End V: {end_v}"
                 )
                 return
-            if start_a > 180.0 or end_a > 180.0:
+            if current_a > 180.0:
                 messagebox.showerror(
                     "Current Limit Exceeded",
-                    f"Block has current > 180.0A (hard limit). Aborting.\n"
-                    f"Start A: {start_a}, End A: {end_a}"
+                    f"Block has current > 180.0A. Aborting.\nCurrent A: {current_a}"
                 )
                 return
 
         # Compute actual max current and voltage across all blocks (never hardcode 180.0)
-        max_current_a = max(
-            max(float(b.get("start_a", 0.0)), float(b.get("end_a", b.get("start_a", 0.0))))
-            for b in blocks
-        )
+        max_current_a = max(float(b.get("current_a", 0.0)) for b in blocks)
         max_voltage_v = max(
             max(float(b["start_v"]), float(b["end_v"]))
             for b in blocks
@@ -1285,7 +1277,7 @@ class MainWindow:
 
         profile = RampProfile(
             name=f"Programmer_{datetime.now().strftime('%H%M%S')}",
-            control_mode=ControlMode.CURRENT.value if is_current_mode else ControlMode.VOLTAGE.value,
+            control_mode=ControlMode.VOLTAGE.value,
             start_voltage=first_v,
             start_current=first_a,
             voltage_limit=max_voltage_v,
@@ -1296,33 +1288,22 @@ class MainWindow:
             duration = float(block["duration"])
             step_type = StepType.RAMP.value if block["type"] == "Ramp" else StepType.HOLD.value
 
-            # Per-block current and voltage targets (for interpolation during execution)
-            block_start_a = float(block.get("start_a", block.get("current_a", 0.0)))
-            block_end_a = float(block.get("end_a", block_start_a)) if block["type"] == "Ramp" else block_start_a
+            # Per-block current and voltage targets
+            block_current_a = float(block.get("current_a", 0.0))
             block_start_v = float(block["start_v"])
             block_end_v = float(block["end_v"]) if block["type"] == "Ramp" else block_start_v
 
             print(f"[BLOCK DEBUG] Block #{blocks.index(block) + 1}")
             print(f"  From table: Start V={block_start_v}, End V={block_end_v}")
-            print(f"  From table: Start A={block_start_a}, End A={block_end_a}")
+            print(f"  From table: Current A={block_current_a}")
 
-            if is_current_mode:
-                target_a = block_end_a
-                step = RampStep(
-                    step_type=step_type,
-                    duration_sec=duration,
-                    target_current=target_a
-                )
-            else:
-                target_v = block_end_v
-                # Also store target_current so ramp_executor can interpolate current per-block
-                target_a = block_end_a
-                step = RampStep(
-                    step_type=step_type,
-                    duration_sec=duration,
-                    target_voltage=target_v,
-                    target_current=target_a
-                )
+            target_v = block_end_v
+            step = RampStep(
+                step_type=step_type,
+                duration_sec=duration,
+                target_voltage=target_v,
+                target_current=block_current_a
+            )
             profile.add_step(step)
 
         # Load into ramp_executor and start
@@ -1427,6 +1408,13 @@ class MainWindow:
         self._programmer_ramp_running = True
         self.run_ramp_btn.config(text="Stop Program")
         self.status_var.set("Temp Ramp Running")
+
+        # Clear any programmer overlay from ps plot — TempRamp is PID-driven
+        # and has no predetermined voltage profile to preview
+        for _plot in getattr(self, "_live_plots", []):
+            if hasattr(_plot, "plot_type") and _plot.plot_type == "ps":
+                _plot.set_programmer_overlay([], [], [])
+                break
 
     def _on_temp_ramp_status(self, status: dict):
         """
