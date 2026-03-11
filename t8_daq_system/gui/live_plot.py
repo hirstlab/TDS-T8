@@ -157,9 +157,7 @@ class LivePlot:
         # Programmer overlay (dotted preview lines)
         self._overlay_times = []       # list of floats (seconds relative to ramp start)
         self._overlay_voltages = []    # list of floats
-        self._overlay_currents = []    # list of floats
         self._overlay_line_v = None    # matplotlib Line2D or None
-        self._overlay_line_a = None    # matplotlib Line2D or None
         self._overlay_start_time = None  # datetime when ramp started, or None
 
     # ──────────────────────────────────────────────────────────────────────
@@ -395,9 +393,8 @@ class LivePlot:
         self.ax.set_xlabel('Time')
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
 
-        # Reset overlay lines (they were removed by ax.clear())
+        # Reset overlay line (removed by ax.clear())
         self._overlay_line_v = None
-        self._overlay_line_a = None
 
         if self.plot_type == 'tc':
             self.ax.set_ylabel(f'Temperature ({self._temp_unit})')
@@ -434,7 +431,9 @@ class LivePlot:
                          press_colors=None, press_styles=None, press_widths=None,
                          ps_voltage_color=None, ps_current_color=None,
                          ps_voltage_style=None, ps_current_style=None,
-                         ps_voltage_width=None, ps_current_width=None):
+                         ps_voltage_width=None, ps_current_width=None,
+                         pp_voltage_color=None, pp_voltage_style=None,
+                         pp_voltage_width=None):
         """
         Apply appearance settings to existing and future plot lines.
         Call this after loading settings or after the user saves in Settings dialog.
@@ -469,6 +468,13 @@ class LivePlot:
                 self._ps_current_width = int(ps_current_width)
             except (ValueError, TypeError):
                 pass
+        # Cache pp_voltage overlay appearance settings
+        if pp_voltage_color:
+            self._pp_voltage_color = pp_voltage_color
+        if pp_voltage_style:
+            self._pp_voltage_style = pp_voltage_style
+        if pp_voltage_width:
+            self._pp_voltage_width = pp_voltage_width
         # ── Re-apply axis label colors and layout for ps plot ──────────────────
         if self.plot_type == 'ps':
             self.ax.set_ylabel('PS Voltage (V)', color=self.ps_colors['PS_Voltage'])
@@ -529,19 +535,32 @@ class LivePlot:
                     line.set_linestyle(self._linestyle_str_to_mpl(self._ps_current_style))
                     line.set_linewidth(self._ps_current_width)
 
-    def set_programmer_overlay(self, times, voltages, currents):
-        """
-        Set the dotted preview overlay on the ps plot.
-        Call with empty lists to clear the overlay.
+        # Apply appearance to voltage setpoint overlay line if it exists
+        if self.plot_type == "ps" and self._overlay_line_v is not None:
+            try:
+                ov_color = getattr(self, "_pp_voltage_color", None)
+                ov_style = getattr(self, "_pp_voltage_style", None)
+                ov_width = getattr(self, "_pp_voltage_width", None)
+                if ov_color:
+                    self._overlay_line_v.set_color(ov_color)
+                if ov_style:
+                    self._overlay_line_v.set_linestyle(self._linestyle_str_to_mpl(ov_style))
+                if ov_width:
+                    self._overlay_line_v.set_linewidth(int(ov_width))
+            except Exception:
+                pass
+
+    def set_programmer_overlay(self, times, voltages, currents=None):
+        """Set dotted voltage preview overlay on the ps plot. Pass empty lists to clear.
 
         Args:
             times:    list of floats in seconds (relative offsets from ramp start)
             voltages: list of floats in volts
-            currents: list of floats in amps
+            currents: accepted for backward compatibility but ignored
         """
         self._overlay_times = times
         self._overlay_voltages = voltages
-        self._overlay_currents = currents
+        # currents parameter accepted for backward compatibility but ignored
         self._overlay_start_time = None  # Reset; set when ramp starts
 
     def set_overlay_start_time(self, start_datetime):
@@ -815,21 +834,15 @@ class LivePlot:
                 now_dt
             )
 
-        # ── Programmer overlay (dotted preview lines) for ps plot ──────────
+        # ── Programmer overlay (dotted voltage preview line) for ps plot ───
         if self.plot_type == 'ps' and self._overlay_times and self._overlay_voltages:
-            # Remove stale overlay lines
+            # Remove stale overlay line
             if self._overlay_line_v is not None:
                 try:
                     self._overlay_line_v.remove()
                 except (ValueError, NotImplementedError):
                     pass
                 self._overlay_line_v = None
-            if self._overlay_line_a is not None and self.ax2 is not None:
-                try:
-                    self._overlay_line_a.remove()
-                except (ValueError, NotImplementedError):
-                    pass
-                self._overlay_line_a = None
 
             if self._overlay_start_time is not None:
                 # Convert relative seconds to absolute datetime for x-axis alignment
@@ -837,17 +850,17 @@ class LivePlot:
                     self._overlay_start_time + timedelta(seconds=t)
                     for t in self._overlay_times
                 ]
+                ov_color = getattr(self, '_pp_voltage_color', 'blue')
+                ov_style = getattr(self, '_pp_voltage_style', 'dotted')
+                ov_width = getattr(self, '_pp_voltage_width', '1')
                 self._overlay_line_v, = self.ax.plot(
                     overlay_datetimes, self._overlay_voltages,
-                    color='blue', linestyle=':', linewidth=1.5, alpha=0.6,
-                    label='Programmed V'
+                    color=ov_color,
+                    linestyle=self._linestyle_str_to_mpl(ov_style) if isinstance(ov_style, str) else ':',
+                    linewidth=int(ov_width) if str(ov_width).isdigit() else 1,
+                    alpha=0.6,
+                    label='Voltage Setpoint'
                 )
-                if self.ax2 is not None and self._overlay_currents is not None:
-                    self._overlay_line_a, = self.ax2.plot(
-                        overlay_datetimes, self._overlay_currents,
-                        color='red', linestyle=':', linewidth=1.5, alpha=0.6,
-                        label='Programmed I'
-                    )
 
         # ── Legend (built after overlay so all lines are included) ─────────
         handles = list(self.lines.values())
@@ -858,10 +871,7 @@ class LivePlot:
         if self.plot_type == 'ps':
             if self._overlay_line_v is not None:
                 handles.append(self._overlay_line_v)
-                labels.append('Programmed V')
-            if self._overlay_line_a is not None:
-                handles.append(self._overlay_line_a)
-                labels.append('Programmed I')
+                labels.append('Voltage Setpoint')
         if handles:
             self.ax.legend(handles, labels, loc='upper left', fontsize=7)
 

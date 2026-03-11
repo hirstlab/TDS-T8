@@ -24,14 +24,13 @@ class PowerProgrammerPanel:
     """
     Block editor UI and preview logic for Power Programmer mode.
 
-    Voltage/Current mode — each block is a dict:
+    Voltage mode — each block is a dict:
         {
-            "type": "Ramp" or "Hold",
-            "duration": float (seconds, min 1, max 86400),
-            "start_v": float (volts, 0.0–6.0),
-            "end_v":   float (volts, 0.0–6.0),
-            "start_a": float (amps, 0.0–180.0),
-            "end_a":   float (amps, 0.0–180.0)
+            "type":       "Ramp" or "Hold",
+            "duration":   float (seconds, min 1, max 86400),
+            "start_v":    float (volts, 0.0-6.0),
+            "end_v":      float (volts, 0.0-6.0),
+            "current_a":  float (amps, 0.0-180.0)  # fixed ceiling, never ramped
         }
 
     TempRamp mode — each block is a dict:
@@ -64,7 +63,7 @@ class PowerProgrammerPanel:
         self._on_closed = on_panel_closed_callback
 
         self._blocks = []  # list of block dicts
-        self._mode = "Voltage"  # "Voltage", "Current", or "TempRamp"
+        self._mode = "Voltage"  # "Voltage" or "TempRamp"
         self._safe_test_mode = False  # Controlled by Safe Test Mode checkbox
 
         self._table_frame = None  # kept as ref so _rebuild_table_columns can destroy/recreate
@@ -112,7 +111,7 @@ class PowerProgrammerPanel:
         self._mode_var = tk.StringVar(value="Voltage")
         mode_cb = ttk.Combobox(
             toolbar, textvariable=self._mode_var,
-            values=["Voltage", "Current", "TempRamp"], state='readonly', width=12
+            values=["Voltage", "TempRamp"], state='readonly', width=12
         )
         mode_cb.pack(side=tk.LEFT, padx=2)
         mode_cb.bind("<<ComboboxSelected>>", self._on_mode_change)
@@ -168,8 +167,8 @@ class PowerProgrammerPanel:
             columns = ('#', 'Type', 'Duration (s)', 'Rate (K/min)')
             col_widths = [30, 70, 90, 90]
         else:
-            columns = ('#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A')
-            col_widths = [30, 70, 90, 60, 60, 60, 60]
+            columns = ('#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Current (A)')
+            col_widths = [30, 70, 90, 70, 70, 80]
 
         self._tree = ttk.Treeview(
             self._table_frame, columns=columns, show='headings', height=6,
@@ -238,8 +237,7 @@ class PowerProgrammerPanel:
                 "duration": self._settings.pp_default_ramp_duration,
                 "start_v": self._settings.pp_default_start_v,
                 "end_v": self._settings.pp_default_start_v,
-                "start_a": self._settings.pp_default_start_a,
-                "end_a": self._settings.pp_default_start_a
+                "current_a": self._settings.pp_default_current_a
             }
         self._blocks.append(default)
         self._refresh_table()
@@ -325,8 +323,7 @@ class PowerProgrammerPanel:
                     block["duration"],
                     block.get("start_v", 0.0),
                     block.get("end_v", 0.0),
-                    block.get("start_a", 0.0),
-                    block.get("end_a", 0.0)
+                    block.get("current_a", 0.0)
                 )
                 self._tree.insert('', 'end', values=row)
 
@@ -388,7 +385,7 @@ class PowerProgrammerPanel:
             col_name = col_names[col_index]
             self._open_tempramp_cell_editor(row_index, col_name, block, bbox)
         else:
-            col_names = ['#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Start A', 'End A']
+            col_names = ['#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Current (A)']
             col_name = col_names[col_index]
             self._open_cell_editor(row_index, col_name, block, bbox)
 
@@ -454,11 +451,11 @@ class PowerProgrammerPanel:
             key_map = {
                 'Start V': 'start_v',
                 'End V': 'end_v',
-                'Start A': 'start_a',
-                'End A': 'end_a'
+                'Current (A)': 'current_a'
             }
             key = key_map[col_name]
-            edit_var.set(str(block.get(key, 0.0)))
+            default_val = 180.0 if col_name == 'Current (A)' else 0.0
+            edit_var.set(str(block.get(key, default_val)))
             widget = ttk.Entry(popup, textvariable=edit_var, width=14)
             widget.select_range(0, tk.END)
             widget.grid(row=0, column=1, padx=6, pady=6)
@@ -472,10 +469,9 @@ class PowerProgrammerPanel:
                                          parent=popup)
                     return
                 block["type"] = val_str
-                # Sync end values for Hold
+                # Sync end_v for Hold
                 if val_str == "Hold":
                     block["end_v"] = block["start_v"]
-                    block["end_a"] = block.get("start_a", 0.0)
             elif col_name == 'Duration (s)':
                 try:
                     h = float(h_var.get() or 0)
@@ -522,7 +518,7 @@ class PowerProgrammerPanel:
                         )
                         return
                     block["end_v"] = v
-                elif col_name == 'Start A':
+                elif col_name == 'Current (A)':
                     try:
                         v = float(val_str)
                         if v < 0.0 or v > self.MAX_CURRENT:
@@ -530,26 +526,11 @@ class PowerProgrammerPanel:
                     except ValueError:
                         messagebox.showerror(
                             "Invalid",
-                            f"Start A must be between 0.0 and {self.MAX_CURRENT}A.",
+                            f"Current (A) must be between 0.0 and {self.MAX_CURRENT}A.",
                             parent=popup
                         )
                         return
-                    block["start_a"] = v
-                    if block["type"] == "Hold":
-                        block["end_a"] = v
-                elif col_name == 'End A':
-                    try:
-                        v = float(val_str)
-                        if v < 0.0 or v > self.MAX_CURRENT:
-                            raise ValueError
-                    except ValueError:
-                        messagebox.showerror(
-                            "Invalid",
-                            f"End A must be between 0.0 and {self.MAX_CURRENT}A.",
-                            parent=popup
-                        )
-                        return
-                    block["end_a"] = v
+                    block["current_a"] = v
 
             self._refresh_table()
             self._refresh_status()
@@ -780,12 +761,9 @@ class PowerProgrammerPanel:
                 self._refresh_status()
                 return
 
-            # ── Voltage / Current profile ─────────────────────────────────
-            self._mode = mode
-            self._mode_var.set(mode)
-            if self._mode == "TempRamp":
-                # Shouldn't reach here, but guard anyway
-                self._build_table_for_mode()
+            # ── Voltage profile (treat any non-TempRamp mode as Voltage) ──────
+            self._mode = "Voltage"
+            self._mode_var.set("Voltage")
 
             validated = []
             for i, block in enumerate(blocks):
@@ -793,10 +771,7 @@ class PowerProgrammerPanel:
                     messagebox.showerror("Load Error",
                                          f"Block {i+1} is not a valid object.")
                     return
-                # Allow both old (current_a) and new (start_a, end_a) formats
-                has_old = "current_a" in block
-                has_new = "start_a" in block and "end_a" in block
-                if not ({"type", "duration", "start_v", "end_v"}.issubset(block.keys()) and (has_old or has_new)):
+                if not {"type", "duration", "start_v", "end_v"}.issubset(block.keys()):
                     messagebox.showerror("Load Error",
                                          f"Block {i+1} is missing required fields.")
                     return
@@ -808,12 +783,27 @@ class PowerProgrammerPanel:
                     duration = float(block["duration"])
                     start_v = float(block["start_v"])
                     end_v = float(block["end_v"])
-                    start_a = float(block.get("start_a", block.get("current_a", 0.0)))
-                    end_a = float(block.get("end_a", block.get("current_a", 0.0)))
                 except (ValueError, TypeError):
                     messagebox.showerror("Load Error",
                                          f"Block {i+1}: numeric values are invalid.")
                     return
+
+                # Support old format (start_a / end_a) and new format (current_a)
+                if "current_a" in block:
+                    try:
+                        current_a = float(block["current_a"])
+                    except (ValueError, TypeError):
+                        messagebox.showerror("Load Error",
+                                             f"Block {i+1}: invalid current_a value.")
+                        return
+                elif "start_a" in block:
+                    # Old profile: collapse to single ceiling value
+                    try:
+                        current_a = float(block.get("start_a", 0.0))
+                    except (ValueError, TypeError):
+                        current_a = 0.0
+                else:
+                    current_a = 0.0
 
                 if not (0 < duration <= self.MAX_DURATION):
                     messagebox.showerror("Load Error",
@@ -827,13 +817,9 @@ class PowerProgrammerPanel:
                     messagebox.showerror("Load Error",
                                          f"Block {i+1}: End V out of range (0–{self.MAX_VOLTAGE}V).")
                     return
-                if not (0.0 <= start_a <= self.MAX_CURRENT):
+                if not (0.0 <= current_a <= self.MAX_CURRENT):
                     messagebox.showerror("Load Error",
-                                         f"Block {i+1}: Start A out of range (0–{self.MAX_CURRENT}A).")
-                    return
-                if not (0.0 <= end_a <= self.MAX_CURRENT):
-                    messagebox.showerror("Load Error",
-                                         f"Block {i+1}: End A out of range (0–{self.MAX_CURRENT}A).")
+                                         f"Block {i+1}: Current (A) out of range.")
                     return
 
                 validated.append({
@@ -841,8 +827,7 @@ class PowerProgrammerPanel:
                     "duration": duration,
                     "start_v": start_v,
                     "end_v": end_v,
-                    "start_a": start_a,
-                    "end_a": end_a
+                    "current_a": current_a
                 })
 
             self._blocks = validated
@@ -870,23 +855,21 @@ class PowerProgrammerPanel:
         currents = []
         t = 0
         end_v = 0.0
-        end_a = 0.0
+        block_a = 0.0
 
         for block in self._blocks:
             duration = block["duration"]
             start_v = block["start_v"]
             end_v = block["end_v"] if block["type"] == "Ramp" else block["start_v"]
-            start_a = block.get("start_a", 0.0)
-            end_a = block.get("end_a", start_a) if block["type"] == "Ramp" else start_a
+            block_a = block.get("current_a", 0.0)
 
             for second in range(int(duration)):
                 fraction = second / duration if duration > 0 else 0
                 if block["type"] == "Ramp":
                     v = start_v + (end_v - start_v) * fraction
-                    a = start_a + (end_a - start_a) * fraction
                 else:
                     v = start_v
-                    a = start_a
+                a = block_a
                 times.append(t)
                 voltages.append(v)
                 currents.append(a)
@@ -895,7 +878,7 @@ class PowerProgrammerPanel:
         # Append final point
         times.append(t)
         voltages.append(end_v)
-        currents.append(end_a)
+        currents.append(block_a)
 
         return times, voltages, currents
 
