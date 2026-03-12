@@ -255,7 +255,7 @@ Thumbs.db
 
 .zencoder/docs/
 .zencoder/docs/*
-.zencoder/rules/
+.zencoder/rules/*
 .zencoder/rules/repo.md
 
 logs/*
