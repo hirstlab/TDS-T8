@@ -1184,6 +1184,17 @@ class MainWindow:
         It becomes time-anchored once the user clicks Run Program.
         """
         from datetime import datetime
+        # In TempRamp mode the preview data contains temperatures (K), not voltages.
+        # Sending those values to the PS overlay would make the V axis autoscale to ~300V.
+        # Guard: only apply the overlay when operating in Voltage/Current mode.
+        if getattr(self, '_programmer_mode', 'Voltage') == 'TempRamp':
+            # Clear any stale overlay from a previous Voltage/Current session
+            for plot in getattr(self, '_live_plots', []):
+                if hasattr(plot, 'plot_type') and plot.plot_type == 'ps':
+                    plot.set_programmer_overlay([], [], [])
+                    break
+            return
+
         times, voltages, currents = self._programmer_preview_data
         for plot in getattr(self, '_live_plots', []):
             if hasattr(plot, 'plot_type') and plot.plot_type == 'ps':
@@ -1462,6 +1473,19 @@ class MainWindow:
                 if hasattr(self, 'plot_ps'):
                     self.plot_ps.set_legend_label_overrides({})
                     self.plot_ps.update(['PS_Voltage', 'PS_Current'])
+                # Log achieved rate and overshoot to the CSV as a metadata comment line
+                if self.is_logging and hasattr(self, '_temp_ramp_executor') and self._temp_ramp_executor is not None:
+                    history = getattr(self._temp_ramp_executor, 'history', [])
+                    if history:
+                        last = history[-1]
+                        achieved_rate = last.get('rate_k_per_min', last.get('rate', None))
+                        overshoot = last.get('overshoot_k', last.get('overshoot', None))
+                        if self.logger and self.logger.is_logging():
+                            self.logger.file.write(
+                                f"#TEMPRAMP_RESULT: achieved_rate={achieved_rate:.3f} K/min, "
+                                f"overshoot={overshoot:.3f} K\n"
+                            )
+                            self.logger.file.flush()
 
             # ── Feed V/I to power supply display ──────────────────────────────
             # The status dict carries the PID's computed voltage setpoint and
@@ -2172,7 +2196,27 @@ class MainWindow:
                             if g.get('enabled', True)]
 
             if self.ps_controller:
-                sensor_names += ['PS_Voltage', 'PS_Current']
+                sensor_names += ['PS_Voltage', 'PS_Current',
+                                 'PS_Voltage_Setpoint', 'PS_CC_Limit']
+
+            # Append Power Programmer / TempRamp metadata if a profile is loaded
+            if self._programmer_blocks:
+                metadata['programmer_mode'] = self._programmer_control_mode
+                if self._programmer_control_mode == 'TempRamp':
+                    # Log PID gains from ramp history if available
+                    if hasattr(self, '_temp_ramp_executor') and self._temp_ramp_executor is not None:
+                        metadata['pid_kp'] = getattr(self._temp_ramp_executor, 'kp', None)
+                        metadata['pid_ki'] = getattr(self._temp_ramp_executor, 'ki', None)
+                        metadata['pid_kd'] = getattr(self._temp_ramp_executor, 'kd', None)
+                    # Log each block's target rate and duration
+                    metadata['tempramp_blocks'] = [
+                        {
+                            'type': b.get('type'),
+                            'duration_sec': b.get('duration_sec'),
+                            'rate_k_per_min': b.get('rate_k_per_min'),
+                        }
+                        for b in self._programmer_blocks
+                    ]
 
             # Append raw-voltage columns right after the temperature columns so the
             # log shows the full conversion chain for each thermocouple:

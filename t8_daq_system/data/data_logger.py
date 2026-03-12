@@ -109,6 +109,10 @@ class DataLogger:
             # Use scientific notation for FRG-702 gauge values (very small floats)
             if name.startswith('FRG702_') and isinstance(value, float):
                 row.append(f"{value:.2e}")
+            elif name in ('PS_Voltage', 'PS_Voltage_Setpoint') and isinstance(value, float):
+                row.append(f"{value:.4f}")
+            elif name in ('PS_Current', 'PS_CC_Limit') and isinstance(value, float):
+                row.append(f"{value:.3f}")
             else:
                 row.append(value)
         self.writer.writerow(row)
