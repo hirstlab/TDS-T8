@@ -129,6 +129,46 @@ class PowerProgrammerPanel:
         )
         self._safe_test_cb.pack(side=tk.LEFT, padx=6)
 
+        # TC channel selector row (inside _safe_test_frame, TempRamp only)
+        tc_row = tk.Frame(self._safe_test_frame)
+        tc_row.pack(fill=tk.X, pady=2)
+
+        tk.Label(tc_row, text="PID Thermocouple:", font=("Arial", 9)).pack(side=tk.LEFT, padx=4)
+
+        self._tc_names_var = tk.StringVar(value="")
+        self._tc_selector = ttk.Combobox(
+            tc_row,
+            textvariable=self._tc_names_var,
+            state="readonly",
+            width=20
+        )
+        self._tc_selector.pack(side=tk.LEFT, padx=4)
+
+        self._tc_refresh_btn = tk.Button(
+            tc_row,
+            text="↺",
+            font=("Arial", 9),
+            command=self._refresh_tc_list
+        )
+        self._tc_refresh_btn.pack(side=tk.LEFT, padx=2)
+
+        self._get_tc_names_fn = None
+
+        # ── Row 2c: Safe Mode checkbox (Voltage/Current mode only) ────────
+        self._safe_mode_frame = ttk.Frame(self._parent)
+        # Packed immediately (Voltage is the default mode)
+        self._safe_mode_frame.pack(fill=tk.X, pady=(2, 0), padx=4)
+
+        self._safe_mode_var = tk.BooleanVar(value=False)
+        self._safe_mode_check = tk.Checkbutton(
+            self._safe_mode_frame,
+            text="Safe Mode (≤1V / ≤10A)",
+            variable=self._safe_mode_var,
+            fg="orange",
+            font=("Arial", 9, "bold")
+        )
+        self._safe_mode_check.pack(side=tk.LEFT, padx=8)
+
         # ── Row 3: Table ──────────────────────────────────────────────────
         self._table_frame = ttk.Frame(self._parent)
         self._table_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
@@ -206,6 +246,14 @@ class PowerProgrammerPanel:
             else:
                 self._safe_test_frame.pack_forget()
 
+        # Show Safe Mode checkbox only in Voltage/Current mode
+        if hasattr(self, '_safe_mode_frame'):
+            if new_mode == "TempRamp":
+                self._safe_mode_frame.pack_forget()
+            else:
+                self._safe_mode_frame.pack(fill=tk.X, pady=(2, 0), padx=4,
+                                           before=self._table_frame)
+
         self._refresh_status()
 
     def _on_safe_test_toggle(self):
@@ -218,6 +266,35 @@ class PowerProgrammerPanel:
     def get_safe_test_mode(self) -> bool:
         """Return True if Safe Test Mode is currently checked."""
         return self._safe_test_mode
+
+    def get_programmer_safe_mode(self) -> bool:
+        """Return True if Safe Mode is checked for the Voltage/Current programmer."""
+        return self._safe_mode_var.get()
+
+    def _refresh_tc_list(self):
+        """Populate the TC selector from the DAQ's available channels."""
+        names = []
+        if hasattr(self, '_get_tc_names_fn') and self._get_tc_names_fn:
+            names = self._get_tc_names_fn()
+        if names:
+            self._tc_selector['values'] = names
+            if self._tc_names_var.get() not in names:
+                self._tc_names_var.set(names[0])
+        else:
+            self._tc_selector['values'] = ["(no TCs found)"]
+            self._tc_names_var.set("(no TCs found)")
+
+    def get_selected_tc_name(self) -> str:
+        """Return the currently selected TC name for the PID loop."""
+        return self._tc_names_var.get()
+
+    def set_tc_names_callback(self, fn):
+        """
+        Register a callback that returns a list of available TC names.
+        Called when the user clicks the refresh button.
+        """
+        self._get_tc_names_fn = fn
+        self._refresh_tc_list()  # Auto-populate on registration
 
     # ──────────────────────────────────────────────────────────────────────
     # Block operations

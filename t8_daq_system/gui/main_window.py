@@ -105,6 +105,10 @@ from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
 from t8_daq_system.control.temp_ramp_pid import TempRampHistory
 from t8_daq_system.control.temp_ramp_executor import TempRampExecutor
 
+# Safe Mode limits for the Voltage/Current Power Programmer (not TempRamp)
+_PROGRAMMER_SAFE_MODE_MAX_VOLTS = 1.0   # V
+_PROGRAMMER_SAFE_MODE_MAX_AMPS  = 10.0  # A
+
 
 class MockPowerSupplyController:
     """
@@ -1072,6 +1076,12 @@ class MainWindow:
             on_panel_closed_callback=self._deactivate_power_programmer
         )
 
+        # Wire up the TC name provider so the TempRamp dropdown populates
+        if hasattr(self._programmer_panel, 'set_tc_names_callback'):
+            self._programmer_panel.set_tc_names_callback(
+                lambda: self.daq.get_available_tc_names() if self.daq else []
+            )
+
         # Restore saved blocks/mode into the newly created panel
         if self._programmer_blocks:
             self._programmer_panel._blocks = list(self._programmer_blocks)
@@ -1252,6 +1262,29 @@ class MainWindow:
             )
             return
 
+        # Apply Safe Mode clamping if the programmer panel has it enabled
+        _prog_safe_mode = (
+            self._programmer_panel.get_programmer_safe_mode()
+            if self._programmer_panel is not None
+            else False
+        )
+        if _prog_safe_mode:
+            import copy
+            blocks = copy.deepcopy(blocks)
+            for blk in blocks:
+                if 'voltage' in blk:
+                    blk['voltage'] = min(float(blk['voltage']), _PROGRAMMER_SAFE_MODE_MAX_VOLTS)
+                if 'start_v' in blk:
+                    blk['start_v'] = min(float(blk['start_v']), _PROGRAMMER_SAFE_MODE_MAX_VOLTS)
+                if 'end_v' in blk:
+                    blk['end_v'] = min(float(blk['end_v']), _PROGRAMMER_SAFE_MODE_MAX_VOLTS)
+                if 'current_limit' in blk:
+                    blk['current_limit'] = min(float(blk['current_limit']), _PROGRAMMER_SAFE_MODE_MAX_AMPS)
+                if 'current_a' in blk:
+                    blk['current_a'] = min(float(blk['current_a']), _PROGRAMMER_SAFE_MODE_MAX_AMPS)
+            print(f"[Programmer] SAFE MODE ACTIVE — voltage clamped ≤{_PROGRAMMER_SAFE_MODE_MAX_VOLTS}V, "
+                  f"current clamped ≤{_PROGRAMMER_SAFE_MODE_MAX_AMPS}A")
+
         # Convert programmer blocks to RampProfile steps
         from t8_daq_system.control.ramp_profile import RampProfile, RampStep, StepType, ControlMode
 
@@ -1330,6 +1363,19 @@ class MainWindow:
         if hasattr(self.ps_controller, 'output_on'):
             self.ps_controller.output_on()
 
+        # Register a completion callback so the button resets when the profile
+        # finishes naturally (without the user pressing Stop).
+        def _on_voltage_ramp_complete():
+            def _update():
+                self._programmer_ramp_running = False
+                self.run_ramp_btn.config(text="Run Program")
+                if isinstance(self.ps_controller, MockPowerSupplyController):
+                    self.ps_controller.programmer_active = False
+                self.status_var.set("Program Complete")
+            self.root.after(0, _update)
+
+        self.ramp_executor.on_complete(_on_voltage_ramp_complete)
+
         if not self.ramp_executor.start():
             messagebox.showerror("Start Error", "Failed to start ramp executor.")
             return
@@ -1388,11 +1434,26 @@ class MainWindow:
             else False
         )
 
+        # Resolve which TC the PID should read
+        _selected_tc = (
+            self._programmer_panel.get_selected_tc_name()
+            if self._programmer_panel is not None
+            else ""
+        )
+        if not _selected_tc or _selected_tc == "(no TCs found)":
+            messagebox.showerror(
+                "No TC Selected",
+                "Please select a thermocouple for the PID loop before running."
+            )
+            return
+
+        print(f"[TempRamp] PID will read TC: '{_selected_tc}'")
+
         # Create a fresh executor for this run
         self._temp_ramp_executor = TempRampExecutor(
             power_supply=self.ps_controller,
             get_temperature_celsius_fn=(
-                lambda: self.daq.get_latest_tc_celsius() if self.daq else None
+                lambda: self.daq.get_tc_kelvin_by_name(_selected_tc) if self.daq else None
             ),
             history=self._temp_ramp_history,
             on_status_callback=self._on_temp_ramp_status,

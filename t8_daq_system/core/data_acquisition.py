@@ -519,3 +519,39 @@ class DataAcquisition:
                 return readings[tc['name']]
 
         return None
+
+    def get_tc_kelvin_by_name(self, tc_name: str):
+        """
+        Read a thermocouple by name and return the value in Kelvin,
+        regardless of the display unit setting.
+
+        The ThermocoupleReader always configures AIN_EF_CONFIG_A = 1 (Celsius).
+        This method explicitly converts Celsius → Kelvin so the PID loop
+        always receives Kelvin without double-converting.
+
+        Returns:
+            float: Temperature in Kelvin, or None if reading failed.
+        """
+        if self.tc_reader is None:
+            return None
+        try:
+            temp_c = self.tc_reader.read_single(tc_name)
+            if temp_c is None:
+                return None
+            # ThermocoupleReader always outputs Celsius (EF_CONFIG_A=1)
+            # Convert to Kelvin for PID consumption
+            return temp_c + 273.15
+        except Exception as e:
+            print(f"[DAQ] get_tc_kelvin_by_name({tc_name}) error: {e}")
+            return None
+
+    def get_available_tc_names(self) -> list:
+        """
+        Return a list of enabled thermocouple names available for PID selection.
+
+        Returns:
+            list of str: e.g. ['TC_AIN0_C', 'TC_AIN1_C']
+        """
+        if self.tc_reader is None:
+            return []
+        return self.tc_reader.get_enabled_channels()

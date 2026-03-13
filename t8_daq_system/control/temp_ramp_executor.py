@@ -13,7 +13,7 @@ import threading
 import time
 import random
 
-from .temp_ramp_pid import PIDController, TempRampHistory, celsius_to_kelvin
+from .temp_ramp_pid import PIDController, TempRampHistory
 
 # ── Module-level constants ─────────────────────────────────────────────────────
 
@@ -171,9 +171,9 @@ class TempRampExecutor:
 
             # Initialise practice temperature from live reading or default to 20°C
             if self.practice_mode and self._practice_temp_k is None:
-                tc_c = self._get_temp_fn()
-                if tc_c is not None:
-                    self._practice_temp_k = celsius_to_kelvin(tc_c)
+                tc_k = self._get_temp_fn()
+                if tc_k is not None:
+                    self._practice_temp_k = tc_k  # Already in Kelvin
                 else:
                     self._practice_temp_k = 293.15  # 20°C fallback
 
@@ -220,8 +220,8 @@ class TempRampExecutor:
         if self.practice_mode:
             initial_temp_k = self._practice_temp_k
         else:
-            tc_c = self._get_temp_fn()
-            initial_temp_k = celsius_to_kelvin(tc_c) if tc_c is not None else 293.15
+            tc_k = self._get_temp_fn()
+            initial_temp_k = tc_k if tc_k is not None else 293.15  # Already in Kelvin
 
         block_start_temp_k = initial_temp_k
         current_temp_k     = initial_temp_k
@@ -266,8 +266,8 @@ class TempRampExecutor:
                 current_temp_k = self._simulate_practice_temp(setpoint_k, loop_start)
                 consecutive_none_tc = 0
             else:
-                tc_c = self._get_temp_fn()
-                if tc_c is None:
+                tc_k = self._get_temp_fn()
+                if tc_k is None:
                     consecutive_none_tc += 1
                     if consecutive_none_tc >= 5:
                         # No TC for 5 consecutive ticks — abort safely
@@ -289,7 +289,7 @@ class TempRampExecutor:
                     continue
                 else:
                     consecutive_none_tc = 0
-                    current_temp_k = celsius_to_kelvin(tc_c)
+                    current_temp_k = tc_k  # Already in Kelvin from get_tc_kelvin_by_name()
 
             # ── 4. PID compute ─────────────────────────────────────────────────
             pid_output = self._pid.compute(setpoint_k, current_temp_k, loop_start)

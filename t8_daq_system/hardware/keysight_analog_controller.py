@@ -13,8 +13,8 @@ WIRING:
     J1 Pin 24 -> AIN5         (Current Monitor, SW1 Switch 4 DOWN = 0–5V monitor range)
     J1 Pin 12 -> AIN4-        (Signal Common / -S, also jumpered to AIN5-)
                               No connection to T8 GND - avoids ground loop
-    J1 Pin 8  -> EIO0         (Local/Analog select - pull LOW for analog mode)
-    J1 Pin 15 -> EIO1         (Shut Off - pull HIGH to kill output)
+    J1 Pin 8  -> FIO0         (Local/Analog select - pull LOW for analog mode)
+    J1 Pin 15 -> FIO1         (Shut Off - pull HIGH to kill output)
 """
 
 from labjack import ljm
@@ -38,8 +38,8 @@ class KeysightAnalogController:
     _DAC_CURRENT = "DAC1"   # J1 Pin 10 – current program
     _AIN_VOLTAGE = "AIN4"   # J1 Pin 11 – voltage monitor
     _AIN_CURRENT = "AIN5"   # J1 Pin 24 – current monitor
-    _DIO_ANALOG_EN = "EIO0" # J1 Pin 8  – pull LOW to enable analog mode
-    _DIO_SHUTOFF  = "EIO1"  # J1 Pin 15 – pull HIGH to kill output
+    _DIO_ANALOG_EN = "FIO0" # J1 Pin 8  – pull LOW to enable analog mode
+    _DIO_SHUTOFF  = "FIO1"  # J1 Pin 15 – pull HIGH to kill output
 
     # Keysight SW1 switch 4 DOWN = 0-5V monitor range
     # 0V = 0% of rated output, 5V = 100% of rated output
@@ -142,7 +142,7 @@ class KeysightAnalogController:
         """
         try:
             ljm.eWriteName(self.handle, self._DIO_ANALOG_EN, 0)
-            print(f'[Keysight] Analog mode ENABLED via EIO0=LOW')
+            print(f'[Keysight] Analog mode ENABLED via FIO0=LOW')
             print(f'[Keysight] DAC hard clamp active: max {self._DAC_MAX_V}V on DAC0/DAC1')
             print(f'[Keysight] Scaling: 5.0V DAC = {self.rated_max_volts}V / {self.rated_max_amps}A output')
         except Exception as e:
@@ -479,7 +479,7 @@ class KeysightAnalogController:
 
     def output_on(self):
         """
-        Enable the power supply output by de-asserting the Shut Off pin (EIO1 = 0).
+        Enable the power supply output by de-asserting the Shut Off pin (FIO1 = 0).
 
         Returns:
             True if successful, False if failed
@@ -495,7 +495,7 @@ class KeysightAnalogController:
         """
         Disable the power supply output.  CRITICAL SAFETY FUNCTION.
 
-        Asserts the Shut Off pin (EIO1 = 1) and verifies it was accepted.
+        Asserts the Shut Off pin (FIO1 = 1) and verifies it was accepted.
         Retries up to 3 times to ensure the output is disabled.
 
         Returns:
@@ -516,8 +516,8 @@ class KeysightAnalogController:
         """
         Check whether the output is currently enabled.
 
-        EIO1 = 0 → Shut Off de-asserted → output ON
-        EIO1 = 1 → Shut Off asserted    → output OFF
+        FIO1 = 0 → Shut Off de-asserted → output ON
+        FIO1 = 1 → Shut Off asserted    → output OFF
 
         Returns:
             bool: True if output is on, False if off or on error
