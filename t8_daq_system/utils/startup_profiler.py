@@ -7,15 +7,19 @@ FIXED: Handle all encoding issues for Windows console
 import sys
 import time
 
+PROFILER_ENABLED = False  # Set True to re-enable startup timing output
+
+
 class StartupProfiler:
     def __init__(self):
         self.start_time = time.time()
         self.checkpoints = []
-        self.enabled = True
+        self.enabled = PROFILER_ENABLED
 
-        is_frozen = getattr(sys, 'frozen', False)
-        mode = "FROZEN EXE" if is_frozen else "DEVELOPMENT"
-        self.log(f"=== PROFILER ACTIVE ({mode}) ===")
+        if self.enabled:
+            is_frozen = getattr(sys, 'frozen', False)
+            mode = "FROZEN EXE" if is_frozen else "DEVELOPMENT"
+            self.log(f"=== PROFILER ACTIVE ({mode}) ===")
 
     def _safe_print(self, text):
         """Print text safely, handling encoding errors."""

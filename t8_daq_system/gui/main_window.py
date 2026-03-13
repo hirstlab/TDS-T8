@@ -2517,7 +2517,7 @@ class MainWindow:
                 baudrate=xgs_config.get('baudrate', 9600),
                 timeout=xgs_config.get('timeout', 1.0),
                 address=xgs_config.get('address', '00'),
-                debug=True # Enable verbose serial logging for debugging
+                debug=False # Enable verbose serial logging for debugging
             )
             if not self.xgs600.connect(silent=True):
                 self.xgs600 = None

@@ -312,6 +312,10 @@ class LivePlot:
         if data_units:
             self._data_units.update(data_units)
 
+        # Remember the current sensor list so frozen mode uses the same names
+        if sensor_names:
+            self._active_sensor_names = list(sensor_names)
+
         if not self._is_live:
             return  # Frozen — only sync_scroll triggers redraws
         # Keep scrollbar pinned to right edge while live
@@ -587,6 +591,20 @@ class LivePlot:
         """Render the most recent WINDOW_SECONDS of data (live mode)."""
         plot_data = {}
         all_timestamps = []
+
+        if self.plot_type == 'tc' and getattr(self, '_tc_debug_count', 0) % 30 == 0:
+            buffer_names = self.data_buffer.get_sensor_names()
+            tc_in_buffer = [n for n in buffer_names if n.startswith('TC_') and not n.endswith('_rawV')]
+            print(f"[PLOT DEBUG] TC plot — requested: {sensor_names}")
+            print(f"[PLOT DEBUG] TC plot — TC names in buffer: {tc_in_buffer}")
+            for name in sensor_names:
+                ts, vals = self.data_buffer.get_sensor_data(name)
+                non_none = [v for v in vals if v is not None]
+                print(f"[PLOT DEBUG]   {name}: {len(vals)} samples, "
+                      f"{len(non_none)} non-None"
+                      + (f", last={non_none[-1]:.3f}" if non_none else ", ALL NONE"))
+        self._tc_debug_count = getattr(self, '_tc_debug_count', 0) + 1
+
         for name in sensor_names:
             ts, vals = self.data_buffer.get_sensor_data(name)
             plot_data[name] = vals
@@ -604,14 +622,19 @@ class LivePlot:
         """
         if self._frozen_right_edge is None:
             return
-        # Collect all data from buffer and filter to this plot's sensor types
-        names = self.data_buffer.get_sensor_names()
+        # Use the same sensor list that live mode uses (respects custom TC names).
+        # Fall back to prefix-based filtering if update() hasn't been called yet.
+        active = getattr(self, '_active_sensor_names', None)
+        if active:
+            names = active
+        else:
+            names = [n for n in self.data_buffer.get_sensor_names()
+                     if self._sensor_belongs(n)]
         plot_data = {}
         all_timestamps = []
         for name in names:
             ts, vals = self.data_buffer.get_sensor_data(name)
-            if self._sensor_belongs(name):
-                plot_data[name] = vals
+            plot_data[name] = vals
             if ts and not all_timestamps:
                 all_timestamps = ts
         ws = self.WINDOW_SECONDS if self._slider_mode == 'window_2min' else None
@@ -682,7 +705,7 @@ class LivePlot:
             data_temp_unit = (data_units.get('temp', 'C') if data_units else 'C')
             tc_names = sorted(
                 n for n in plot_data
-                if n.startswith('TC_') and not n.endswith('_rawV')
+                if not n.endswith('_rawV')
             )
             for name in tc_names:
                 values = list(plot_data.get(name, []))

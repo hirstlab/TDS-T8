@@ -6,7 +6,7 @@ analog voltage conversion. Pressure values are read directly from the controller
 """
 
 
-DEBUG_PRESSURE = True   # Set False to silence once working correctly
+DEBUG_PRESSURE = False   # Set False to silence once working correctly
 
 # Unit conversion factors from mbar
 UNIT_CONVERSIONS = {

@@ -4,6 +4,8 @@ PURPOSE: Read thermocouple temperatures from T8
 KEY CONCEPT: T8 has "Extended Features" (EF) that do the math automatically
 """
 
+DEBUG_TC = True   # Set False to silence TC debug output
+
 from labjack import ljm
 
 
@@ -25,6 +27,7 @@ class ThermocoupleReader:
         """
         self.handle = handle
         self.thermocouples = tc_config_list
+        self._debug_read_count = 0
         self._configure_channels()
 
     def _configure_channels(self):
@@ -32,6 +35,9 @@ class ThermocoupleReader:
         Set up each thermocouple channel on the T8.
         This tells the T8 "this channel has a Type K thermocouple"
         """
+        if DEBUG_TC:
+            print(f"[TC DEBUG] Configuring {len([t for t in self.thermocouples if t['enabled']])} enabled TC channels")
+
         for tc in self.thermocouples:
             if not tc['enabled']:
                 continue
@@ -57,6 +63,12 @@ class ThermocoupleReader:
                 # Set output units: always Celsius (1) for internal consistency
                 # Conversion for display is handled in the GUI
                 ljm.eWriteName(self.handle, config_name, 1)
+
+                if DEBUG_TC:
+                    neg_ch = ljm.eReadName(self.handle, f"AIN{channel}_NEGATIVE_CH")
+                    print(f"[TC DEBUG] Configured {tc['name']}: AIN{channel}, type={tc_type} "
+                          f"(EF_INDEX={self.TC_TYPES[tc_type]}), RANGE=0.1V, "
+                          f"NEGATIVE_CH={int(neg_ch)}")
             except ljm.LJMError as e:
                 print(f"Error configuring thermocouple {tc['name']} on AIN{channel}: {e}")
                 raise e
@@ -92,6 +104,16 @@ class ThermocoupleReader:
                 readings[tc['name']] = None
             else:
                 readings[tc['name']] = round(temp, 3)
+
+        if DEBUG_TC:
+            self._debug_read_count += 1
+            # Print every 10th read to avoid flooding the log
+            if self._debug_read_count % 10 == 1:
+                print(f"[TC DEBUG] Read #{self._debug_read_count} — "
+                      f"{len(enabled_tcs)} channels, registers: {read_names}")
+                for name, val in readings.items():
+                    status = f"{val:.3f} °C" if val is not None else "NONE (-9999 / open circuit)"
+                    print(f"  {name}: {status}")
 
         return readings
 
