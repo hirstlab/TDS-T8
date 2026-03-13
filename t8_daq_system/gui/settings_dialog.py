@@ -38,6 +38,9 @@ class SettingsDialog(tk.Toplevel):
         self._on_save = on_save_callback
         self._result_saved = False
 
+        self._tc_name_vars = []
+        self._tc_label_vars = []
+
         self._build_widgets()
         self._load_values()
 
@@ -152,8 +155,10 @@ class SettingsDialog(tk.Toplevel):
         existing_pins  = [v.get() for v in self._tc_pin_vars]
         for w in self._tc_types_frame.winfo_children():
             w.destroy()
+        
         self._tc_type_vars = []
         self._tc_pin_vars  = []
+
         if count == 0:
             ttk.Label(self._tc_types_frame,
                       text="No thermocouples configured").pack(anchor='w')
@@ -166,6 +171,11 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(hdr, text="Type",    width=7, font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=5)
         ttk.Label(hdr, text="AIN Pin", width=8, font=('Arial', 9, 'bold')).pack(side=tk.LEFT, padx=5)
 
+        # Get current names from settings to pre-populate name vars if needed
+        tc_pin_list = self._settings.get_tc_pin_list(count)
+        tc_type_list = self._settings.get_tc_type_list(count)
+        tc_name_list = self._settings.get_tc_name_list(count, tc_pin_list, tc_type_list)
+
         for i in range(count):
             default_type = existing_types[i] if i < len(existing_types) else self._settings.tc_type
             default_pin  = existing_pins[i]  if i < len(existing_pins)  else str(i)
@@ -175,9 +185,30 @@ class SettingsDialog(tk.Toplevel):
             self._tc_type_vars.append(type_var)
             self._tc_pin_vars.append(pin_var)
 
+            # Link name from Appearance tab if already built, otherwise use from settings
+            if i < len(self._tc_name_vars):
+                name_var = self._tc_name_vars[i]
+            else:
+                name_var = tk.StringVar(value=tc_name_list[i])
+                self._tc_name_vars.append(name_var)
+
+            if i < len(self._tc_label_vars):
+                label_var = self._tc_label_vars[i]
+            else:
+                label_var = tk.StringVar(value=f"{name_var.get()}:")
+                self._tc_label_vars.append(label_var)
+
+                # Trace name_var to update label_var (only add once per var pair)
+                def _make_label_updater(nv, lv):
+                    def _update(*args):
+                        lv.set(f"{nv.get()}:")
+                    return _update
+                
+                name_var.trace_add("write", _make_label_updater(name_var, label_var))
+
             row_f = ttk.Frame(self._tc_types_frame)
             row_f.pack(fill=tk.X, pady=2)
-            ttk.Label(row_f, text=f"TC_AIN{default_pin}_{default_type}:", width=14).pack(side=tk.LEFT, padx=5)
+            ttk.Label(row_f, textvariable=label_var, width=14).pack(side=tk.LEFT, padx=5)
             ttk.Combobox(row_f, textvariable=type_var, values=self._TC_TYPE_VALUES,
                          state='readonly', width=5).pack(side=tk.LEFT, padx=5)
             ttk.Combobox(row_f, textvariable=pin_var, values=self._AIN_PIN_VALUES,
@@ -339,7 +370,6 @@ class SettingsDialog(tk.Toplevel):
         default_colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728',
                           '#9467bd', '#8c564b', '#e377c2', '#7f7f7f']
 
-        self._tc_name_vars  = []
         self._tc_color_vars = []
         self._tc_color_btns = []
         self._tc_style_vars = []
@@ -347,10 +377,16 @@ class SettingsDialog(tk.Toplevel):
 
         for i in range(tc_count):
             color = default_colors[i % len(default_colors)]
-            name_var  = tk.StringVar(value=tc_name_list[i])
+            
+            # Use existing name_var if it was already created by the Sensors tab
+            if i < len(self._tc_name_vars):
+                name_var = self._tc_name_vars[i]
+            else:
+                name_var = tk.StringVar(value=tc_name_list[i])
+                self._tc_name_vars.append(name_var)
+            
             style_var = tk.StringVar(value='solid')
             width_var = tk.StringVar(value='2')
-            self._tc_name_vars.append(name_var)
             self._tc_color_vars.append(color)
             self._tc_style_vars.append(style_var)
             self._tc_width_vars.append(width_var)

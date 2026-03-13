@@ -38,8 +38,8 @@ class KeysightAnalogController:
     _DAC_CURRENT = "DAC1"   # J1 Pin 10 – current program
     _AIN_VOLTAGE = "AIN4"   # J1 Pin 11 – voltage monitor
     _AIN_CURRENT = "AIN5"   # J1 Pin 24 – current monitor
-    _DIO_ANALOG_EN = "FIO0" # J1 Pin 8  – pull LOW to enable analog mode
-    _DIO_SHUTOFF  = "FIO1"  # J1 Pin 15 – pull HIGH to kill output
+    _DIO_ANALOG_EN = "EIO0" # J1 Pin 8  – pull LOW to enable analog mode
+    _DIO_SHUTOFF  = "EIO1"  # J1 Pin 15 – pull HIGH to kill output
 
     # Keysight SW1 switch 4 DOWN = 0-5V monitor range
     # 0V = 0% of rated output, 5V = 100% of rated output
@@ -137,16 +137,16 @@ class KeysightAnalogController:
 
     def _enable_analog_mode(self):
         """
-        Pull the Local/Analog select pin LOW (FIO0 = 0) to put the supply in
+        Pull the Local/Analog select pin LOW (EIO0 = 0) to put the supply in
         analog programming mode.  Must be called once at startup.
         """
         try:
             ljm.eWriteName(self.handle, self._DIO_ANALOG_EN, 0)
-            print(f'[Keysight] Analog mode ENABLED via FIO0=LOW')
+            print(f'[Keysight] Analog mode ENABLED via {self._DIO_ANALOG_EN}=LOW')
             print(f'[Keysight] DAC hard clamp active: max {self._DAC_MAX_V}V on DAC0/DAC1')
             print(f'[Keysight] Scaling: 5.0V DAC = {self.rated_max_volts}V / {self.rated_max_amps}A output')
         except Exception as e:
-            print(f'[Keysight] Warning: Could not enable analog mode: {e}')
+            print(f'[Keysight] Warning: Could not enable analog mode on {self._DIO_ANALOG_EN}: {e}')
 
     # ──────────────────────────────────────────────────────────────────────────
     # Validation helpers
@@ -182,10 +182,20 @@ class KeysightAnalogController:
         """
         if value < 0.0:
             raise ValueError(f'DAC value cannot be negative: {value}')
+        
         clamped = min(value, self._DAC_MAX_V)
         if clamped != value:
             print(f'WARNING: DAC value {value:.4f}V clamped to {clamped:.4f}V on {register}')
-        ljm.eWriteName(self.handle, register, clamped)
+        
+        if self.debug:
+            print(f"[DEBUG] LJM Write: {register} = {clamped:.4f}V (original: {value:.4f}V)")
+            
+        try:
+            ljm.eWriteName(self.handle, register, clamped)
+        except Exception as e:
+            print(f"ERROR: Failed to write {clamped:.4f}V to {register}: {e}")
+            raise
+            
         return clamped
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -209,12 +219,15 @@ class KeysightAnalogController:
 
         try:
             # STEP 2: Calculate DAC values with correct scaling
+            # FORMULA: (target / rated_max) * 5.0
             dac_v = (volts / self.rated_max_volts) * 5.0
 
             # STEP 3: Debug output (Before write)
             if self.debug:
-                print(f"=== KEYSIGHT VOLTAGE COMMAND ===")
-                print(f"Target: {volts}V  →  DAC: {dac_v:.4f}V")
+                print(f"\n--- KEYSIGHT VOLTAGE COMMAND ---")
+                print(f"Target Voltage: {volts:.3f} V")
+                print(f"Scaling Info: Rated Max={self.rated_max_volts}V, DAC Max=5.0V")
+                print(f"Calculated DAC: {dac_v:.4f} V (formula: ({volts:.3f} / {self.rated_max_volts}) * 5.0)")
 
             # STEP 4: Send to T8 via clamped write
             actual_written = self._safe_dac_write(self._DAC_VOLTAGE, dac_v)
@@ -222,12 +235,12 @@ class KeysightAnalogController:
             # STEP 5: Readback Verification
             actual_dac_v = ljm.eReadName(self.handle, self._DAC_VOLTAGE)
             if self.debug:
-                print(f"DAC Readback: {actual_dac_v:.4f}V")
-                print(f"=================================")
+                print(f"DAC Readback:   {actual_dac_v:.4f} V")
+                print(f"--------------------------------\n")
 
             return True
         except Exception as e:
-            print(f"Failed to set voltage: {e}")
+            print(f"Failed to set voltage to {volts}V: {e}")
             return False
 
     def set_current(self, amps):
@@ -247,12 +260,15 @@ class KeysightAnalogController:
 
         try:
             # STEP 2: Calculate DAC values with correct scaling
+            # FORMULA: (target / rated_max) * 5.0
             dac_i = (amps / self.rated_max_amps) * 5.0
 
             # STEP 3: Debug output (Before write)
             if self.debug:
-                print(f"=== KEYSIGHT CURRENT COMMAND ===")
-                print(f"Target: {amps}A  →  DAC: {dac_i:.4f}V")
+                print(f"\n--- KEYSIGHT CURRENT COMMAND ---")
+                print(f"Target Current: {amps:.2f} A")
+                print(f"Scaling Info: Rated Max={self.rated_max_amps}A, DAC Max=5.0V")
+                print(f"Calculated DAC: {dac_i:.4f} V (formula: ({amps:.2f} / {self.rated_max_amps}) * 5.0)")
 
             # STEP 4: Send to T8 via clamped write
             actual_written = self._safe_dac_write(self._DAC_CURRENT, dac_i)
@@ -260,12 +276,12 @@ class KeysightAnalogController:
             # STEP 5: Readback Verification
             actual_dac_i = ljm.eReadName(self.handle, self._DAC_CURRENT)
             if self.debug:
-                print(f"DAC Readback: {actual_dac_i:.4f}V")
-                print(f"=================================")
+                print(f"DAC Readback:   {actual_dac_i:.4f} V")
+                print(f"--------------------------------\n")
 
             return True
         except Exception as e:
-            print(f"Failed to set current: {e}")
+            print(f"Failed to set current to {amps}A: {e}")
             return False
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -325,19 +341,21 @@ class KeysightAnalogController:
 
             # Debug output - helps verify scaling is correct
             if self.debug:
-                print(f"=== KEYSIGHT VOLTAGE MONITOR ===")
-                print(f"Raw AIN ({self._AIN_VOLTAGE}): {raw_v:.4f}V")
-                print(f"Scaled: {actual_voltage:.3f}V  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_volts})")
-                print(f"================================")
+                print(f"\n--- KEYSIGHT VOLTAGE MONITOR ---")
+                print(f"Raw AIN ({self._AIN_VOLTAGE}): {raw_v:.4f} V")
+                print(f"Monitor Range: {self._MONITOR_RANGE_V} V (Switch 4: {self.switch_4_position})")
+                print(f"Rated Max:     {self.rated_max_volts} V")
+                print(f"Scaled Value:  {actual_voltage:.3f} V (formula: ({raw_v:.4f} / {self._MONITOR_RANGE_V}) * {self.rated_max_volts})")
+                print(f"--------------------------------\n")
 
             # Safety check for reasonable values - allow for small negative noise (-0.05V raw)
             if raw_v < -0.05 or actual_voltage > self.rated_max_volts * 1.083:
                 print(f"WARNING: Voltage reading {actual_voltage:.3f}V is out of expected range (0-{self.rated_max_volts}V)")
-                print(f"         Raw AIN reading was: {raw_v:.4f}V")
+                print(f"         Raw AIN reading was: {raw_v:.4f}V on {self._AIN_VOLTAGE}")
 
             return actual_voltage
         except Exception as e:
-            print(f"Failed to measure voltage: {e}")
+            print(f"Failed to measure voltage on {self._AIN_VOLTAGE}: {e}")
             return None
 
     def get_current(self):
@@ -361,19 +379,21 @@ class KeysightAnalogController:
 
             # Debug output - helps verify scaling is correct
             if self.debug:
-                print(f"=== KEYSIGHT CURRENT MONITOR ===")
-                print(f"Raw AIN ({self._AIN_CURRENT}): {raw_v:.4f}V")
-                print(f"Scaled: {actual_current:.2f}A  (formula: {raw_v:.4f} / {self._MONITOR_RANGE_V} * {self.rated_max_amps})")
-                print(f"================================")
+                print(f"\n--- KEYSIGHT CURRENT MONITOR ---")
+                print(f"Raw AIN ({self._AIN_CURRENT}): {raw_v:.4f} V")
+                print(f"Monitor Range: {self._MONITOR_RANGE_V} V (Switch 4: {self.switch_4_position})")
+                print(f"Rated Max:     {self.rated_max_amps} A")
+                print(f"Scaled Value:  {actual_current:.2f} A (formula: ({raw_v:.4f} / {self._MONITOR_RANGE_V}) * {self.rated_max_amps})")
+                print(f"--------------------------------\n")
 
             # Safety check for reasonable values - allow for small negative noise (-0.05V raw)
             if raw_v < -0.05 or actual_current > self.rated_max_amps * 1.028:
                 print(f"WARNING: Current reading {actual_current:.2f}A is out of expected range (0-{self.rated_max_amps}A)")
-                print(f"         Raw AIN reading was: {raw_v:.4f}V")
+                print(f"         Raw AIN reading was: {raw_v:.4f}V on {self._AIN_CURRENT}")
 
             return actual_current
         except Exception as e:
-            print(f"Failed to measure current: {e}")
+            print(f"Failed to measure current on {self._AIN_CURRENT}: {e}")
             return None
 
     def validate_scaling(self):
@@ -479,23 +499,25 @@ class KeysightAnalogController:
 
     def output_on(self):
         """
-        Enable the power supply output by de-asserting the Shut Off pin (FIO1 = 0).
+        Enable the power supply output by de-asserting the Shut Off pin (EIO1 = 0).
 
         Returns:
             True if successful, False if failed
         """
         try:
             ljm.eWriteName(self.handle, self._DIO_SHUTOFF, 0)
+            if self.debug:
+                print(f"[DEBUG] Output ON: {self._DIO_SHUTOFF} = 0")
             return True
         except Exception as e:
-            print(f"Failed to enable output: {e}")
+            print(f"Failed to enable output on {self._DIO_SHUTOFF}: {e}")
             return False
 
     def output_off(self):
         """
         Disable the power supply output.  CRITICAL SAFETY FUNCTION.
 
-        Asserts the Shut Off pin (FIO1 = 1) and verifies it was accepted.
+        Asserts the Shut Off pin (EIO1 = 1) and verifies it was accepted.
         Retries up to 3 times to ensure the output is disabled.
 
         Returns:
@@ -504,12 +526,14 @@ class KeysightAnalogController:
         for attempt in range(3):
             try:
                 ljm.eWriteName(self.handle, self._DIO_SHUTOFF, 1)
+                if self.debug:
+                    print(f"[DEBUG] Output OFF: {self._DIO_SHUTOFF} = 1 (Attempt {attempt+1})")
                 if not self.is_output_on():
                     return True
             except Exception as e:
-                print(f"Output off attempt {attempt + 1} failed: {e}")
+                print(f"Output off attempt {attempt + 1} on {self._DIO_SHUTOFF} failed: {e}")
 
-        print("CRITICAL: Failed to disable output after 3 attempts!")
+        print(f"CRITICAL: Failed to disable output on {self._DIO_SHUTOFF} after 3 attempts!")
         return False
 
     def is_output_on(self):
@@ -532,6 +556,93 @@ class KeysightAnalogController:
     # ──────────────────────────────────────────────────────────────────────────
     # Status and diagnostics
     # ──────────────────────────────────────────────────────────────────────────
+
+    def check_control_pins(self):
+        """
+        Read the current state of the control pins (FIO0 and FIO1).
+        
+        Returns:
+            dict: {pin_name: state}
+        """
+        states = {}
+        for pin in [self._DIO_ANALOG_EN, self._DIO_SHUTOFF]:
+            try:
+                states[pin] = int(ljm.eReadName(self.handle, pin))
+            except Exception as e:
+                states[pin] = f"ERROR: {e}"
+        return states
+
+    def run_diagnostics(self):
+        """
+        Perform a comprehensive diagnostic check of the analog controller.
+        Prints results directly to console.
+        """
+        print("\n" + "="*50)
+        print("KEYSIGHT ANALOG CONTROLLER DIAGNOSTICS")
+        print("="*50)
+        
+        # 1. Check Handle
+        print(f"LJM Handle: {'VALID' if self.handle is not None else 'INVALID (None)'}")
+        if self.handle is None:
+            print("ERROR: No valid LabJack handle. Diagnostics cannot continue.")
+            return
+
+        # 2. Check Pin Configuration
+        print("\n[ Pin Configuration ]")
+        print(f"  Voltage Program: {self._DAC_VOLTAGE}")
+        print(f"  Current Program: {self._DAC_CURRENT}")
+        print(f"  Voltage Monitor: {self._AIN_VOLTAGE}")
+        print(f"  Current Monitor: {self._AIN_CURRENT}")
+        print(f"  Analog Enable:   {self._DIO_ANALOG_EN} (Should be LOW/0)")
+        print(f"  Shut Off:        {self._DIO_SHUTOFF} (Should be LOW/0 for output)")
+
+        # 3. Check Control Pin States
+        print("\n[ Control Pin States ]")
+        pin_states = self.check_control_pins()
+        for pin, state in pin_states.items():
+            print(f"  {pin}: {state}")
+            
+        if pin_states.get(self._DIO_ANALOG_EN) != 0:
+            print(f"  WARNING: {self._DIO_ANALOG_EN} is NOT LOW. Analog mode may be disabled!")
+        else:
+            print(f"  OK: {self._DIO_ANALOG_EN} is LOW (Analog mode enabled)")
+
+        # 4. Check Monitor Scaling
+        print("\n[ Monitor Scaling ]")
+        print(f"  Switch 4:    {self.switch_4_position}")
+        print(f"  Monitor Range: {self._MONITOR_RANGE_V} V")
+        print(f"  Rated Max V:   {self.rated_max_volts} V")
+        print(f"  Rated Max I:   {self.rated_max_amps} A")
+
+        # 5. Live Readings
+        print("\n[ Live Readings ]")
+        try:
+            raw_v_mon = ljm.eReadName(self.handle, self._AIN_VOLTAGE)
+            raw_i_mon = ljm.eReadName(self.handle, self._AIN_CURRENT)
+            actual_v = self.get_voltage()
+            actual_i = self.get_current()
+            
+            print(f"  {self._AIN_VOLTAGE} (Raw): {raw_v_mon:.4f} V  →  {actual_v:.3f} V actual")
+            print(f"  {self._AIN_CURRENT} (Raw): {raw_i_mon:.4f} V  →  {actual_i:.2f} A actual")
+        except Exception as e:
+            print(f"  ERROR reading monitors: {e}")
+
+        # 6. Setpoint Verification
+        print("\n[ Setpoint Verification ]")
+        try:
+            dac_v = ljm.eReadName(self.handle, self._DAC_VOLTAGE)
+            dac_i = ljm.eReadName(self.handle, self._DAC_CURRENT)
+            set_v = self._dac_to_volts(dac_v, self.rated_max_volts)
+            set_i = self._dac_to_volts(dac_i, self.rated_max_amps)
+            
+            print(f"  {self._DAC_VOLTAGE} (Raw): {dac_v:.4f} V  →  {set_v:.3f} V setpoint")
+            print(f"  {self._DAC_CURRENT} (Raw): {dac_i:.4f} V  →  {set_i:.2f} A setpoint")
+        except Exception as e:
+            print(f"  ERROR reading DACs: {e}")
+
+        print("\n" + "="*50)
+        print("DIAGNOSTICS COMPLETE")
+        print("="*50 + "\n")
 
     def get_status(self):
         """

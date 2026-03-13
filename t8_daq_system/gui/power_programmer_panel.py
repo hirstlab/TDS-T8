@@ -135,22 +135,23 @@ class PowerProgrammerPanel:
 
         tk.Label(tc_row, text="PID Thermocouple:", font=("Arial", 9)).pack(side=tk.LEFT, padx=4)
 
-        self._tc_names_var = tk.StringVar(value="")
+        self._tc_names_var = tk.StringVar(value="(select TC...)")
         self._tc_selector = ttk.Combobox(
             tc_row,
             textvariable=self._tc_names_var,
+            values=["(select TC...)"],
             state="readonly",
             width=20
         )
         self._tc_selector.pack(side=tk.LEFT, padx=4)
+        self._tc_selector.bind("<<ComboboxSelected>>", lambda e: self._refresh_status())
 
-        self._tc_refresh_btn = tk.Button(
+        self._tc_refresh_btn = ttk.Button(
             tc_row,
-            text="↺",
-            font=("Arial", 9),
+            text="Refresh TC List",
             command=self._refresh_tc_list
         )
-        self._tc_refresh_btn.pack(side=tk.LEFT, padx=2)
+        self._tc_refresh_btn.pack(side=tk.LEFT, padx=10)
 
         self._get_tc_names_fn = None
 
@@ -228,19 +229,29 @@ class PowerProgrammerPanel:
         self._tree.bind('<Double-1>', self._on_double_click)
 
     def _on_mode_change(self, event=None):
-        """Handle control mode change."""
+        """Handle control mode change from the UI (combobox)."""
         new_mode = self._mode_var.get()
+        self.set_mode(new_mode, clear_blocks=True)
+
+    def set_mode(self, mode: str, clear_blocks: bool = True):
+        """
+        Switch between Voltage and TempRamp modes.
+        If clear_blocks=True, the block list is emptied (recommended when manually
+        changing modes as the data structures differ).
+        """
         old_mode = self._mode
-        self._mode = new_mode
+        self._mode = mode
+        self._mode_var.set(mode)
 
         # Rebuild table columns when crossing TempRamp boundary
-        if new_mode == "TempRamp" or old_mode == "TempRamp":
-            self._blocks = []
+        if mode == "TempRamp" or old_mode == "TempRamp":
+            if clear_blocks:
+                self._blocks = []
             self._build_table_for_mode()
 
         # Show safe test checkbox only in TempRamp mode
         if hasattr(self, '_safe_test_frame'):
-            if new_mode == "TempRamp":
+            if mode == "TempRamp":
                 self._safe_test_frame.pack(fill=tk.X, pady=(2, 0), padx=4,
                                            before=self._table_frame)
             else:
@@ -248,7 +259,7 @@ class PowerProgrammerPanel:
 
         # Show Safe Mode checkbox only in Voltage/Current mode
         if hasattr(self, '_safe_mode_frame'):
-            if new_mode == "TempRamp":
+            if mode == "TempRamp":
                 self._safe_mode_frame.pack_forget()
             else:
                 self._safe_mode_frame.pack(fill=tk.X, pady=(2, 0), padx=4,
@@ -277,16 +288,34 @@ class PowerProgrammerPanel:
         if hasattr(self, '_get_tc_names_fn') and self._get_tc_names_fn:
             names = self._get_tc_names_fn()
         if names:
-            self._tc_selector['values'] = names
-            if self._tc_names_var.get() not in names:
-                self._tc_names_var.set(names[0])
+            # names = ["TC1", "TC2", ...]
+            self._tc_selector['values'] = ["(select TC...)"] + names
+            # If current selection is invalid, set to placeholder
+            curr = self._tc_names_var.get()
+            if not curr or curr not in names:
+                if curr != "(select TC...)":
+                    self._tc_names_var.set("(select TC...)")
         else:
             self._tc_selector['values'] = ["(no TCs found)"]
             self._tc_names_var.set("(no TCs found)")
+        self._refresh_status()
 
     def get_selected_tc_name(self) -> str:
         """Return the currently selected TC name for the PID loop."""
         return self._tc_names_var.get()
+
+    def set_selected_tc_name(self, name: str):
+        """Set the selected TC name for the PID loop."""
+        if name:
+            # Check if name is in current values
+            current_values = self._tc_selector['values']
+            if name in current_values:
+                self._tc_names_var.set(name)
+            else:
+                # If not in values, maybe it needs a refresh or it's a stale name
+                # We'll set it anyway so it's ready if/when the list populates
+                self._tc_names_var.set(name)
+        self._refresh_status()
 
     def set_tc_names_callback(self, fn):
         """
@@ -413,12 +442,7 @@ class PowerProgrammerPanel:
         )
         minutes, secs = divmod(int(total_seconds), 60)
         hours, minutes = divmod(minutes, 60)
-        if hours:
-            dur_str = f"Total: {hours}h {minutes}m {secs}s"
-        elif minutes:
-            dur_str = f"Total: {minutes}m {secs}s"
-        else:
-            dur_str = f"Total: {secs}s"
+        dur_str = f"Total: {hours}h {minutes}m {secs}s" if hours else (f"Total: {minutes}m {secs}s" if minutes else f"Total: {secs}s")
         self._duration_label.config(text=dur_str)
 
         if self.get_profile_ready():
@@ -426,8 +450,19 @@ class PowerProgrammerPanel:
                 text="Profile ready: YES", foreground='green'
             )
         else:
+            # Construct why not ready
+            msg = " NO"
+            if not self._blocks:
+                msg += " (No blocks)"
+            elif self._mode == "TempRamp":
+                sel_tc = self.get_selected_tc_name()
+                if not sel_tc or sel_tc in ["(no TCs found)", "(select TC...)"]:
+                    msg += " (Choose PID TC)"
+                else:
+                    msg += " (TC Invalid)"
+
             self._ready_label.config(
-                text="Profile ready: NO", foreground='red'
+                text=f"Profile ready:{msg}", foreground='red'
             )
 
     # ──────────────────────────────────────────────────────────────────────
@@ -989,8 +1024,25 @@ class PowerProgrammerPanel:
         return times, temps
 
     def get_profile_ready(self):
-        """Return True if the profile has at least one block."""
-        return len(self._blocks) >= 1
+        """
+        Return True if the profile has at least one block AND
+        (if in TempRamp mode) a valid thermocouple is selected.
+        """
+        if len(self._blocks) < 1:
+            return False
+
+        if self._mode == "TempRamp":
+            sel_tc = self.get_selected_tc_name()
+            placeholders = ["(no TCs found)", "(select TC...)"]
+            if not sel_tc or sel_tc in placeholders:
+                return False
+            # Check if selection is actually in the list of available TCs
+            all_vals = list(self._tc_selector['values'])
+            valid_list = [v for v in all_vals if v not in placeholders]
+            if not valid_list or sel_tc not in valid_list:
+                return False
+
+        return True
 
     def get_preview_data(self):
         """

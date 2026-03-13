@@ -350,6 +350,7 @@ class MainWindow:
         self._programmer_preview_data = ([], [], [])
         self._programmer_blocks = []
         self._programmer_control_mode = "Voltage"
+        self._programmer_pid_tc = None  # Store the last selected TC for PID
         self._run_ramp_btn_visible = False
         self._programmer_panel = None
         self._programmer_panel_frame = None
@@ -1083,13 +1084,16 @@ class MainWindow:
             )
 
         # Restore saved blocks/mode into the newly created panel
+        if hasattr(self._programmer_panel, 'set_mode'):
+            self._programmer_panel.set_mode(self._programmer_control_mode, clear_blocks=False)
+
+        # Restore PID TC selection if in TempRamp mode
+        if self._programmer_control_mode == "TempRamp" and self._programmer_pid_tc:
+            if hasattr(self._programmer_panel, 'set_selected_tc_name'):
+                self._programmer_panel.set_selected_tc_name(self._programmer_pid_tc)
+
         if self._programmer_blocks:
             self._programmer_panel._blocks = list(self._programmer_blocks)
-            self._programmer_panel._mode = self._programmer_control_mode
-            self._programmer_panel._mode_var.set(self._programmer_control_mode)
-            # If restoring TempRamp mode, rebuild columns before populating table
-            if self._programmer_control_mode == "TempRamp":
-                self._programmer_panel._build_table_for_mode()
             self._programmer_panel._refresh_table()
             self._programmer_panel._refresh_status()
 
@@ -1120,6 +1124,10 @@ class MainWindow:
                 self._programmer_preview_plot.reset_to_vi_mode()
 
             self._programmer_mode = panel_mode
+            self._programmer_control_mode = panel_mode
+            self._programmer_blocks = list(self._programmer_panel._blocks)
+            if panel_mode == "TempRamp":
+                self._programmer_pid_tc = self._programmer_panel.get_selected_tc_name()
 
             if panel_mode == "TempRamp":
                 times, temps_k = self._programmer_panel._compute_temp_preview()
@@ -1146,16 +1154,14 @@ class MainWindow:
             self._stop_programmer_ramp_safe()
 
         # Save profile data before destroying panel
-        if self._programmer_panel and self._programmer_panel.get_profile_ready():
+        if self._programmer_panel:
             self._programmer_preview_data = self._programmer_panel.get_preview_data()
             self._programmer_blocks = list(self._programmer_panel._blocks)
             self._programmer_control_mode = self._programmer_panel._mode
             self._programmer_mode = self._programmer_panel._mode
-        else:
-            self._programmer_preview_data = ([], [], [])
-            self._programmer_blocks = []
-            self._programmer_control_mode = "Voltage"
-            self._programmer_mode = "Voltage"
+            # PID Thermocouple selection
+            self._programmer_pid_tc = self._programmer_panel.get_selected_tc_name()
+        # (Otherwise keep whatever was already in self._programmer_blocks/mode)
 
         # Destroy programmer UI
         if self._programmer_panel_frame:
@@ -1435,12 +1441,11 @@ class MainWindow:
         )
 
         # Resolve which TC the PID should read
-        _selected_tc = (
-            self._programmer_panel.get_selected_tc_name()
-            if self._programmer_panel is not None
-            else ""
-        )
-        if not _selected_tc or _selected_tc == "(no TCs found)":
+        if self._programmer_panel is not None:
+            _selected_tc = self._programmer_panel.get_selected_tc_name()
+        else:
+            _selected_tc = self._programmer_pid_tc if self._programmer_pid_tc else ""
+        if not _selected_tc or _selected_tc in ["(no TCs found)", "(select TC...)"]:
             messagebox.showerror(
                 "No TC Selected",
                 "Please select a thermocouple for the PID loop before running."
