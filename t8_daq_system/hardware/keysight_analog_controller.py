@@ -137,7 +137,7 @@ class KeysightAnalogController:
 
     def _enable_analog_mode(self):
         """
-        Pull the Local/Analog select pin LOW (EIO0 = 0) to put the supply in
+        Pull the Local/Analog select pin LOW (FIO0 = 0) to put the supply in
         analog programming mode.  Must be called once at startup.
         """
         try:
