@@ -77,11 +77,11 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.SensorPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
     def test_slider_mode_btn_exists(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
-        """Verify that the slider mode toggle button exists."""
+        """Verify that the slider mode toggle buttons exist."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
-        self.assertTrue(hasattr(app, '_slider_mode_btn'),
-                        "_slider_mode_btn must exist (History % / 2-min Window toggle)")
+        self.assertTrue(hasattr(app, '_btn_2min'), "_btn_2min must exist")
+        self.assertTrue(hasattr(app, '_btn_hist'), "_btn_hist must exist")
 
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')

@@ -196,6 +196,13 @@ class DataLogger:
                 try:
                     json_str = line[len(cls.METADATA_PREFIX):]
                     metadata = json.loads(json_str)
+                    
+                    # Restore list from comma-joined string if needed
+                    if 'sensors' in metadata and isinstance(metadata['sensors'], str):
+                        metadata['sensors'] = [s.strip() for s in metadata['sensors'].split(',')] if metadata['sensors'] else []
+                    if 'tc_types' in metadata and isinstance(metadata['tc_types'], str):
+                        metadata['tc_types'] = [s.strip() for s in metadata['tc_types'].split(',')] if metadata['tc_types'] else []
+                        
                 except json.JSONDecodeError:
                     pass
                 continue
@@ -275,7 +282,14 @@ class DataLogger:
                     metadata = json.loads(json_str)
                     info['metadata'] = metadata
                     info['start_time'] = metadata.get('start_time')
-                    info['sensors'] = metadata.get('sensors', [])
+                    
+                    # Restore list from comma-joined string if needed
+                    sensors_meta = metadata.get('sensors', [])
+                    if isinstance(sensors_meta, str):
+                        info['sensors'] = [s.strip() for s in sensors_meta.split(',')] if sensors_meta else []
+                    else:
+                        info['sensors'] = sensors_meta
+
                     info['settings'] = {
                         'tc_count': metadata.get('tc_count'),
                         'tc_type': metadata.get('tc_type'),

@@ -247,10 +247,10 @@ class TestLivePlotSliderMode(unittest.TestCase):
         from t8_daq_system.gui.live_plot import LivePlot
         return LivePlot(mock_frame, mock_buffer, plot_type=plot_type)
 
-    def test_default_slider_mode_is_history_pct(self):
-        """Default slider mode should be 'history_pct'."""
+    def test_default_slider_mode_is_window_2min(self):
+        """Default slider mode should be 'window_2min'."""
         plot = self._make_plot()
-        self.assertEqual(plot._slider_mode, 'history_pct')
+        self.assertEqual(plot._slider_mode, 'window_2min')
 
     def test_set_slider_mode_window_2min(self):
         """set_slider_mode('window_2min') should update _slider_mode."""
@@ -341,6 +341,8 @@ class TestLivePlotSliderMode(unittest.TestCase):
         mock_fig = MagicMock()
         mock_fig.add_subplot.return_value = mock_ax
         mock_ax.twinx.return_value = mock_ax2
+        mock_ax.plot.return_value = [MagicMock()] # Return a list with one line object
+        mock_ax2.plot.return_value = [MagicMock()]
         mock_figure.return_value = mock_fig
 
         # Create PS plot

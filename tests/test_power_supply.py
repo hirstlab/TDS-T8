@@ -12,7 +12,7 @@ class TestKeysightAnalogController(unittest.TestCase):
     """Tests for KeysightAnalogController — the LJM-based analog PS interface."""
 
     def setUp(self):
-        mock_ljm.reset_mock()
+        mock_ljm.reset_mock(return_value=True, side_effect=True)
         mock_ljm.LJMError = type("LJMError", (Exception,), {})
         self.handle = 42  # Dummy LJM handle
 
@@ -29,11 +29,11 @@ class TestKeysightAnalogController(unittest.TestCase):
     # ── Initialisation ────────────────────────────────────────────────────────
 
     def test_init_enables_analog_mode(self):
-        """EIO0 must be pulled LOW (0) on init to select analog programming mode."""
-        eio0_calls = [c for c in mock_ljm.eWriteName.call_args_list
-                      if c[0][1] == 'EIO0']
-        self.assertTrue(eio0_calls, "EIO0 should be written during init")
-        self.assertEqual(eio0_calls[0][0][2], 0)
+        """FIO0 must be pulled LOW (0) on init to select analog programming mode."""
+        fio0_calls = [c for c in mock_ljm.eWriteName.call_args_list
+                      if c[0][1] == 'FIO0']
+        self.assertTrue(fio0_calls, "FIO0 should be written during init")
+        self.assertEqual(fio0_calls[0][0][2], 0)
 
     def test_init_with_none_handle_skips_configuration(self):
         """Passing handle=None must not call any LJM functions."""
@@ -273,44 +273,52 @@ class TestKeysightAnalogController(unittest.TestCase):
     # ── Output enable / disable ───────────────────────────────────────────────
 
     def test_output_on_deasserts_shutoff_pin(self):
-        """output_on() must write 0 to EIO1 (de-assert Shut Off)."""
+        """output_on() must write 0 to FIO1 (de-assert Shut Off)."""
         self.controller.output_on()
-        mock_ljm.eWriteName.assert_any_call(self.handle, 'EIO1', 0)
+        mock_ljm.eWriteName.assert_any_call(self.handle, 'FIO1', 0)
 
     def test_output_on_returns_true_on_success(self):
         result = self.controller.output_on()
         self.assertTrue(result)
 
     def test_output_off_asserts_shutoff_pin(self):
-        """output_off() must write 1 to EIO1 (assert Shut Off)."""
+        """output_off() must write 1 to FIO1 (assert Shut Off)."""
         mock_ljm.eReadName.return_value = 1.0  # read-back confirms off
         self.controller.output_off()
-        mock_ljm.eWriteName.assert_any_call(self.handle, 'EIO1', 1)
+        mock_ljm.eWriteName.assert_any_call(self.handle, 'FIO1', 1)
 
     def test_output_off_returns_true_when_verified(self):
-        mock_ljm.eReadName.return_value = 1.0  # EIO1=1 means output is off
+        mock_ljm.eReadName.return_value = 1.0  # FIO1=1 means output is off
         result = self.controller.output_off()
         self.assertTrue(result)
 
     def test_output_off_retries_until_verified(self):
         """output_off() should retry if the pin read-back still shows output ON."""
-        # First two reads say output is still on (EIO1=0), third says off (EIO1=1)
-        mock_ljm.reset_mock()
-        mock_ljm.eReadName.side_effect = [0.0, 0.0, 1.0]
+        # Each attempt in output_off calls:
+        # 1. _set_pin_output -> eReadName('FIO_DIRECTION')
+        # 2. output_off -> eReadName('FIO1') for readback print
+        # 3. is_output_on -> eReadName('FIO1')
+        # Total 3 reads per attempt.
+        #
+        # Attempt 1 (EIO1=0): reads [0.0, 0.0, 0.0]
+        # Attempt 2 (EIO1=0): reads [0.0, 0.0, 0.0]
+        # Attempt 3 (EIO1=1): reads [0.0, 1.0, 1.0]
+        mock_ljm.reset_mock(return_value=True, side_effect=True)
+        mock_ljm.eReadName.side_effect = [0.0]*3 + [0.0]*3 + [0.0, 1.0, 1.0]
         result = self.controller.output_off()
         self.assertTrue(result)
         shutoff_writes = [c for c in mock_ljm.eWriteName.call_args_list
-                          if c[0][1] == 'EIO1' and c[0][2] == 1]
+                          if c[0][1] == 'FIO1' and c[0][2] == 1]
         self.assertEqual(len(shutoff_writes), 3)
         mock_ljm.eReadName.side_effect = None
 
-    def test_is_output_on_returns_true_when_eio1_is_zero(self):
-        """EIO1=0 means Shut Off de-asserted → output is ON."""
+    def test_is_output_on_returns_true_when_fio1_is_zero(self):
+        """FIO1=0 means Shut Off de-asserted → output is ON."""
         mock_ljm.eReadName.return_value = 0.0
         self.assertTrue(self.controller.is_output_on())
 
-    def test_is_output_on_returns_false_when_eio1_is_one(self):
-        """EIO1=1 means Shut Off asserted → output is OFF."""
+    def test_is_output_on_returns_false_when_fio1_is_one(self):
+        """FIO1=1 means Shut Off asserted → output is OFF."""
         mock_ljm.eReadName.return_value = 1.0
         self.assertFalse(self.controller.is_output_on())
 
@@ -323,25 +331,25 @@ class TestKeysightAnalogController(unittest.TestCase):
     # ── Emergency shutdown ────────────────────────────────────────────────────
 
     def test_emergency_shutdown_zeros_dacs_and_asserts_shutoff(self):
-        """emergency_shutdown() must: assert EIO1=1, DAC0=0, DAC1=0."""
-        mock_ljm.eReadName.return_value = 1.0  # EIO1 read-back confirms off
+        """emergency_shutdown() must: assert FIO1=1, DAC0=0, DAC1=0."""
+        mock_ljm.eReadName.return_value = 1.0  # FIO1 read-back confirms off
         result = self.controller.emergency_shutdown()
         self.assertTrue(result)
         write_calls = {(c[0][1], c[0][2]) for c in mock_ljm.eWriteName.call_args_list}
-        self.assertIn(('EIO1', 1), write_calls)
+        self.assertIn(('FIO1', 1), write_calls)
         self.assertIn(('DAC0', 0.0), write_calls)
         self.assertIn(('DAC1', 0.0), write_calls)
 
     # ── Reset ─────────────────────────────────────────────────────────────────
 
     def test_reset_zeros_dacs_and_deasserts_shutoff(self):
-        """reset() must zero DAC0, DAC1 and write 0 to EIO1."""
+        """reset() must zero DAC0, DAC1 and write 0 to FIO1."""
         result = self.controller.reset()
         self.assertTrue(result)
         write_calls = {(c[0][1], c[0][2]) for c in mock_ljm.eWriteName.call_args_list}
         self.assertIn(('DAC0', 0.0), write_calls)
         self.assertIn(('DAC1', 0.0), write_calls)
-        self.assertIn(('EIO1', 0), write_calls)
+        self.assertIn(('FIO1', 0), write_calls)
 
     # ── get_readings / get_status ─────────────────────────────────────────────
 

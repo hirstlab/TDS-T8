@@ -459,11 +459,12 @@ class MainWindow:
         frg702_gauges = []
         frg_pin_list = s.get_frg_pin_list(s.frg_count)
 
-        # Warn if any FRG pin conflicts with an assigned TC channel
-        tc_channels_used = {f"AIN{i}" for i in range(s.tc_count)}
-        for pin in frg_pin_list:
-            if pin in tc_channels_used:
-                print(f"[CONFIG WARNING] FRG pin {pin} conflicts with a TC channel!")
+        # Warn if any FRG pin conflicts with an assigned TC channel (Analog interface only)
+        if s.frg_interface != "XGS600":
+            tc_channels_used = {f"AIN{ch}" for ch in tc_pin_list}
+            for pin in frg_pin_list:
+                if pin in tc_channels_used:
+                    print(f"[CONFIG WARNING] FRG pin {pin} conflicts with a TC channel!")
         frg_name_list = s.get_frg_name_list(s.frg_count, s.frg_interface, frg_pin_list)
         for i in range(s.frg_count):
             sensor_code = f"T{2*i+1}"
