@@ -70,6 +70,9 @@ class LivePlot:
         # Track the units of the data stored in DataBuffer
         self._data_units = {'temp': 'C', 'press': 'mbar'}
 
+        # Valid sensor names for this plot (Change 7: avoid startswith)
+        self._valid_sensor_names = set()
+
         # Color cycles (default fallbacks)
         self.colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd',
                        '#8c564b', '#e377c2', '#7f7f7f', '#bcbd22', '#17becf']
@@ -255,19 +258,28 @@ class LivePlot:
 
         self.canvas.draw_idle()
 
+    # Setpoint/limit lines excluded from autoscale on the PS plot
+    _PS_AUTOSCALE_EXCLUDE = {'PS_Voltage_Setpoint', 'PS_CC_Limit'}
+
     def _autoscale_visible_only(self):
         """
         Recompute Y-axis limits based solely on data in currently-visible lines.
         Called after any hide/show toggle when auto-scale mode is active.
+        For the PS plot, reference lines (Setpoint, CC_Limit) are excluded so
+        the axes scale to the measured Voltage / Current only.
         """
         def _get_bounds(ax):
             """Return (ymin, ymax) across all visible lines on this axis, or None."""
             y_all = []
-            for line in ax.get_lines():
+            for key, line in self.lines.items():
+                if line.axes is not ax:
+                    continue
                 if not line.get_visible():
                     continue
+                # Skip reference lines on PS plot
+                if self.plot_type == 'ps' and key[1] in self._PS_AUTOSCALE_EXCLUDE:
+                    continue
                 ydata = line.get_ydata()
-                # Filter out NaN/None
                 valid = [y for y in ydata if y is not None and y == y]
                 if valid:
                     y_all.extend(valid)
@@ -279,17 +291,12 @@ class LivePlot:
         if bounds_main is not None:
             lo, hi = bounds_main
             if self.plot_type == 'pressure':
-                # Log scale: use multiplicative margins (e.g. 0.9x and 1.1x)
-                # and ensure we don't hit zero/negative.
                 if lo <= 0:
-                    lo = 1e-12  # emergency fallback
+                    lo = 1e-12
                 self.ax.set_ylim(lo * 0.9, hi * 1.1)
             else:
                 margin = (hi - lo) * 0.05 if hi != lo else 1.0
                 self.ax.set_ylim(lo - margin, hi + margin)
-        else:
-            # No visible data — leave axis alone
-            pass
 
         if self.ax2 is not None:
             bounds_ax2 = _get_bounds(self.ax2)
@@ -315,6 +322,7 @@ class LivePlot:
         # Remember the current sensor list so frozen mode uses the same names
         if sensor_names:
             self._active_sensor_names = list(sensor_names)
+            self._valid_sensor_names = set(sensor_names)
 
         if not self._is_live:
             return  # Frozen — only sync_scroll triggers redraws
@@ -340,15 +348,16 @@ class LivePlot:
 
         if sensor_names is not None:
             plot_data = {n: loaded_data[n] for n in sensor_names if n in loaded_data}
+            self._valid_sensor_names = set(sensor_names)
         else:
             # Auto-select based on plot_type
             if self.plot_type == 'tc':
                 plot_data = {k: v for k, v in loaded_data.items()
-                             if k.startswith('TC_') and not k.endswith('_rawV')
+                             if self._sensor_belongs(k)
                              and k != 'timestamps'}
             elif self.plot_type == 'pressure':
                 plot_data = {k: v for k, v in loaded_data.items()
-                             if k.startswith('FRG702_') and k != 'timestamps'}
+                             if self._sensor_belongs(k) and k != 'timestamps'}
             elif self.plot_type == 'ps':
                 plot_data = {k: v for k, v in loaded_data.items()
                              if k in ('PS_Voltage', 'PS_Current')}
@@ -592,19 +601,6 @@ class LivePlot:
         plot_data = {}
         all_timestamps = []
 
-        if self.plot_type == 'tc' and getattr(self, '_tc_debug_count', 0) % 30 == 0:
-            buffer_names = self.data_buffer.get_sensor_names()
-            tc_in_buffer = [n for n in buffer_names if n.startswith('TC_') and not n.endswith('_rawV')]
-            print(f"[PLOT DEBUG] TC plot — requested: {sensor_names}")
-            print(f"[PLOT DEBUG] TC plot — TC names in buffer: {tc_in_buffer}")
-            for name in sensor_names:
-                ts, vals = self.data_buffer.get_sensor_data(name)
-                non_none = [v for v in vals if v is not None]
-                print(f"[PLOT DEBUG]   {name}: {len(vals)} samples, "
-                      f"{len(non_none)} non-None"
-                      + (f", last={non_none[-1]:.3f}" if non_none else ", ALL NONE"))
-        self._tc_debug_count = getattr(self, '_tc_debug_count', 0) + 1
-
         for name in sensor_names:
             ts, vals = self.data_buffer.get_sensor_data(name)
             plot_data[name] = vals
@@ -644,6 +640,9 @@ class LivePlot:
 
     def _sensor_belongs(self, name):
         """Return True if the sensor name belongs to this plot's type."""
+        if self._valid_sensor_names and name in self._valid_sensor_names:
+            return True
+        # Fallback for when update() hasn't been called yet
         if self.plot_type == 'tc':
             return name.startswith('TC_') and not name.endswith('_rawV')
         elif self.plot_type == 'pressure':
@@ -743,7 +742,7 @@ class LivePlot:
         # ── Pressure plot ──────────────────────────────────────────────────
         elif self.plot_type == 'pressure':
             data_press_unit = (data_units.get('press', 'mbar') if data_units else 'mbar')
-            frg_names = sorted(n for n in plot_data if n.startswith('FRG702_'))
+            frg_names = sorted(n for n in plot_data if self._sensor_belongs(n))
             for name in frg_names:
                 values = list(plot_data.get(name, []))
                 # Unit conversion: convert from data unit to display unit
@@ -827,16 +826,44 @@ class LivePlot:
             del self.lines[key]
 
         # ── Autoscaling ────────────────────────────────────────────────────
-        self.ax.relim()
-        if self._use_absolute_scales:
+        if self.plot_type == 'ps' and not self._use_absolute_scales:
+            # For the PS plot, autoscale only from the measured lines (Voltage &
+            # Current), not the reference/limit lines (Setpoint & CC_Limit).
+            # Including those causes the axis to jump to fit e.g. 180 A CC_Limit
+            # while the real current is in single digits.
+            _measured_ax  = {('ps', 'PS_Voltage')}
+            _measured_ax2 = {('ps', 'PS_Current')}
+
+            def _ylim_from_keys(ax, keys):
+                y_all = []
+                for key in keys:
+                    line = self.lines.get(key)
+                    if line is None:
+                        continue
+                    ydata = [y for y in line.get_ydata() if y is not None and y == y]
+                    y_all.extend(ydata)
+                if not y_all:
+                    return
+                lo, hi = min(y_all), max(y_all)
+                margin = (hi - lo) * 0.1 if hi != lo else max(abs(hi) * 0.1, 0.1)
+                ax.set_ylim(lo - margin, hi + margin)
+
+            _ylim_from_keys(self.ax, _measured_ax)
+            if self.ax2 is not None:
+                _ylim_from_keys(self.ax2, _measured_ax2)
+            # Still update x-axis autoscale
             self.ax.autoscale_view(scaley=False)
         else:
-            self.ax.autoscale_view()
+            self.ax.relim()
+            if self._use_absolute_scales:
+                self.ax.autoscale_view(scaley=False)
+            else:
+                self.ax.autoscale_view()
 
-        if self.ax2 is not None:
-            self.ax2.relim()
-            if not self._use_absolute_scales:
-                self.ax2.autoscale_view()
+            if self.ax2 is not None:
+                self.ax2.relim()
+                if not self._use_absolute_scales:
+                    self.ax2.autoscale_view()
 
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
         self.ax.grid(True, alpha=0.3)

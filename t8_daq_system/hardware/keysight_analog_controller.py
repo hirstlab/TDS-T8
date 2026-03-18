@@ -38,8 +38,8 @@ class KeysightAnalogController:
     _DAC_CURRENT = "DAC1"   # J1 Pin 10 – current program
     _AIN_VOLTAGE = "AIN4"   # J1 Pin 11 – voltage monitor
     _AIN_CURRENT = "AIN5"   # J1 Pin 24 – current monitor
-    _DIO_ANALOG_EN = "EIO0" # J1 Pin 8  – pull LOW to enable analog mode
-    _DIO_SHUTOFF  = "EIO1"  # J1 Pin 15 – pull HIGH to kill output
+    _DIO_ANALOG_EN = "FIO0" # J1 Pin 8  – pull LOW to enable analog mode
+    _DIO_SHUTOFF  = "FIO1"  # J1 Pin 15 – pull HIGH to kill output
 
     # Keysight SW1 switch 4 DOWN = 0-5V monitor range
     # 0V = 0% of rated output, 5V = 100% of rated output
@@ -110,6 +110,34 @@ class KeysightAnalogController:
     # One-time hardware configuration
     # ──────────────────────────────────────────────────────────────────────────
 
+    def _set_pin_output(self, pin_name):
+        """
+        Set a DIO pin to output direction on the T8.
+
+        The T8 LJM firmware does not support individual FIO#_DIRECTION or
+        DIO#_DIRECTION registers.  Direction must be set via the byte registers
+        FIO_DIRECTION or EIO_DIRECTION using a read-modify-write on the
+        appropriate bit.  Falls back to the legacy '{pin}_DIRECTION' write for
+        any unrecognised pin names (T7 compatibility).
+
+        FIO0-7  → FIO_DIRECTION bits 0-7
+        EIO0-7  → EIO_DIRECTION bits 0-7
+        """
+        pin_upper = pin_name.upper()
+        if pin_upper.startswith('FIO') and pin_upper[3:].isdigit():
+            bit = int(pin_upper[3:])
+            byte_reg = 'FIO_DIRECTION'
+        elif pin_upper.startswith('EIO') and pin_upper[3:].isdigit():
+            bit = int(pin_upper[3:])
+            byte_reg = 'EIO_DIRECTION'
+        else:
+            # Fallback for T7 or unexpected names
+            ljm.eWriteName(self.handle, f"{pin_name}_DIRECTION", 1)
+            return
+
+        current = int(ljm.eReadName(self.handle, byte_reg))
+        ljm.eWriteName(self.handle, byte_reg, current | (1 << bit))
+
     def _configure_ain_channels(self):
         """
         Configure AIN4 and AIN5 for hardware differential measurement.
@@ -141,10 +169,27 @@ class KeysightAnalogController:
         analog programming mode.  Must be called once at startup.
         """
         try:
+            # Disable any Extended Feature (EF) on this pin first.
+            # If a previous application (e.g. Kipling) left an EF active on FIO0,
+            # the EF controls the pin and direct digital writes are silently ignored —
+            # which causes FIO0 to read back 1 even after writing 0.
+            try:
+                ljm.eWriteName(self.handle, f"{self._DIO_ANALOG_EN}_EF_ENABLE", 0)
+            except Exception:
+                pass  # Not all T8 firmware versions expose this; safe to ignore
+
+            # FIO pins default to input on the T8 — must set direction to output first
+            self._set_pin_output(self._DIO_ANALOG_EN)
             ljm.eWriteName(self.handle, self._DIO_ANALOG_EN, 0)
             print(f'[Keysight] Analog mode ENABLED via {self._DIO_ANALOG_EN}=LOW')
             print(f'[Keysight] DAC hard clamp active: max {self._DAC_MAX_V}V on DAC0/DAC1')
             print(f'[Keysight] Scaling: 5.0V DAC = {self.rated_max_volts}V / {self.rated_max_amps}A output')
+            # Readback verification — confirms pin actually went LOW on this hardware
+            readback = int(ljm.eReadName(self.handle, self._DIO_ANALOG_EN))
+            if readback == 0:
+                print(f'[Keysight] {self._DIO_ANALOG_EN} readback=LOW (0) ✓ — analog mode confirmed')
+            else:
+                print(f'[Keysight] WARNING: {self._DIO_ANALOG_EN} readback={readback} (expected 0/LOW) — analog mode may NOT be active!')
         except Exception as e:
             print(f'[Keysight] Warning: Could not enable analog mode on {self._DIO_ANALOG_EN}: {e}')
 
@@ -505,9 +550,10 @@ class KeysightAnalogController:
             True if successful, False if failed
         """
         try:
+            self._set_pin_output(self._DIO_SHUTOFF)
             ljm.eWriteName(self.handle, self._DIO_SHUTOFF, 0)
-            if self.debug:
-                print(f"[DEBUG] Output ON: {self._DIO_SHUTOFF} = 0")
+            readback = int(ljm.eReadName(self.handle, self._DIO_SHUTOFF))
+            print(f"[Keysight] output_on: wrote {self._DIO_SHUTOFF}=0, readback={readback} ({'OK' if readback == 0 else 'MISMATCH — check wiring/logic!'})")
             return True
         except Exception as e:
             print(f"Failed to enable output on {self._DIO_SHUTOFF}: {e}")
@@ -525,9 +571,10 @@ class KeysightAnalogController:
         """
         for attempt in range(3):
             try:
+                self._set_pin_output(self._DIO_SHUTOFF)
                 ljm.eWriteName(self.handle, self._DIO_SHUTOFF, 1)
-                if self.debug:
-                    print(f"[DEBUG] Output OFF: {self._DIO_SHUTOFF} = 1 (Attempt {attempt+1})")
+                readback = int(ljm.eReadName(self.handle, self._DIO_SHUTOFF))
+                print(f"[Keysight] output_off attempt {attempt+1}: wrote {self._DIO_SHUTOFF}=1, readback={readback} ({'OK' if readback == 1 else 'MISMATCH — output may still be ON!'})")
                 if not self.is_output_on():
                     return True
             except Exception as e:

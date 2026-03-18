@@ -63,7 +63,7 @@ class SensorPanel:
 
             # Create frame for this sensor with fixed size
             frame = ttk.LabelFrame(parent_frame, text=name, width=206, height=90)
-            frame.grid(row=i//10, column=i%10, padx=6, pady=5)
+            frame.grid(row=0, column=i, padx=6, pady=5)
             frame.pack_propagate(False)
             self.frames[name] = frame
 
@@ -106,7 +106,7 @@ class SensorPanel:
 
                 # Wider frame for FRG-702 to accommodate unit selector and mode
                 frame = ttk.LabelFrame(parent_frame, text=name, width=240, height=120)
-                frame.grid(row=i//7, column=i%7, padx=6, pady=5)
+                frame.grid(row=0, column=i, padx=6, pady=5)
                 frame.pack_propagate(False)
                 self.frames[name] = frame
 
@@ -160,7 +160,7 @@ class SensorPanel:
         # ── PS Voltage tile (Change 3) ─────────────────────────────────────
         self._sensor_visible['PS_Voltage'] = True
         ps_v_frame = ttk.LabelFrame(parent_frame, text="PS Voltage", width=206, height=90)
-        ps_v_frame.grid(row=i//7, column=i%7, padx=6, pady=5)
+        ps_v_frame.grid(row=0, column=i, padx=6, pady=5)
         ps_v_frame.pack_propagate(False)
         self.frames['PS_Voltage'] = ps_v_frame
 
@@ -184,7 +184,7 @@ class SensorPanel:
         # ── PS Current tile (Change 3) ─────────────────────────────────────
         self._sensor_visible['PS_Current'] = True
         ps_i_frame = ttk.LabelFrame(parent_frame, text="PS Current", width=206, height=90)
-        ps_i_frame.grid(row=i//7, column=i%7, padx=6, pady=5)
+        ps_i_frame.grid(row=0, column=i, padx=6, pady=5)
         ps_i_frame.pack_propagate(False)
         self.frames['PS_Current'] = ps_i_frame
 

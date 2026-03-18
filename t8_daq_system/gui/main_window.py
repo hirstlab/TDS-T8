@@ -231,6 +231,8 @@ class MainWindow:
 
         # Build the internal config dict from AppSettings
         self.config = self._build_config_from_settings(settings)
+        self._tc_names = {tc['name'] for tc in self.config['thermocouples']}
+        self._frg_names = {g['name'] for g in self.config.get('frg702_gauges', [])}
         profiler.checkpoint("Config built from AppSettings")
 
         # Axis scale settings (from AppSettings)
@@ -1563,20 +1565,15 @@ class MainWindow:
             _v_setpoint = status.get('voltage_setpoint_v', 0.0)
             _i_cc_limit = status.get('current_limit_a', 0.0)
 
-            # Update the main power supply live plot via the data buffer
-            if hasattr(self, 'data_buffer') and hasattr(self, 'plot_ps'):
+            # Write PID setpoint and CC limit into the data buffer so the
+            # regular GUI update loop picks them up without an extra plot redraw.
+            if hasattr(self, 'data_buffer'):
                 self.data_buffer.add_reading({
                     'PS_Voltage_Setpoint': _v_setpoint,
                     'PS_CC_Limit':         _i_cc_limit,
                 })
-                # Render all four lines: DAQ-monitored + PID setpoint + CC limit
-                self.plot_ps.update([
-                    'PS_Voltage',           # Monitored voltage (from DAQ / AIN4)
-                    'PS_Current',           # Monitored current (from DAQ / AIN5)
-                    'PS_Voltage_Setpoint',  # PID commanded voltage
-                    'PS_CC_Limit',          # Fixed current ceiling
-                ])
-                # Apply human-readable legend labels
+            # Apply human-readable legend labels once (idempotent)
+            if hasattr(self, 'plot_ps'):
                 self.plot_ps.set_legend_label_overrides({
                     'PS_Voltage':          'Voltage (V)',
                     'PS_Current':          'Current (A)',
@@ -1589,8 +1586,6 @@ class MainWindow:
                     and hasattr(self._programmer_panel, '_temp_ramp_panel')):
                 _rp = self._programmer_panel._temp_ramp_panel
                 if _rp is not None and hasattr(_rp, 'update_plot_data'):
-                    # Debug: log the values being sent to the embedded plot
-                    print(f"[DEBUG] TempRamp status -> embedded plot: V={_v_setpoint:.3f}V, I={_i_cc_limit:.2f}A")
                     _rp.update_plot_data(_v_setpoint, _i_cc_limit)
 
         self.root.after(0, _update)
@@ -1751,7 +1746,7 @@ class MainWindow:
                 for name, value in last_readings.items():
                     if value is None:
                         display_last[name] = None
-                    elif name.startswith('TC_'):
+                    elif name in self._tc_names:
                         display_last[name] = convert_temperature(value, source_t_unit, t_unit)
                     else:
                         display_last[name] = value
@@ -1819,7 +1814,7 @@ class MainWindow:
                     if value is None:
                         display_last[name] = None
                         continue
-                    if name.startswith('TC_'):
+                    if name in self._tc_names:
                         display_last[name] = convert_temperature(value, source_t_unit, t_unit)
                     else:
                         display_last[name] = value
@@ -1870,8 +1865,8 @@ class MainWindow:
         """
         # Re-build the entire config dict from settings
         self.config = self._build_config_from_settings(self._app_settings)
-        print(f"[DEBUG] _on_config_change: New config built. PS enabled: {self.config.get('power_supply', {}).get('enabled')}")
-
+        self._tc_names = {tc['name'] for tc in self.config['thermocouples']}
+        self._frg_names = {g['name'] for g in self.config.get('frg702_gauges', [])}
         # Sync GUI vars (for historical reasons / other panels that watch them)
         self.tc_count_var.set(str(len(self.config['thermocouples'])))
         self.frg_count_var.set(str(len(self.config.get('frg702_gauges', []))))
@@ -1943,10 +1938,10 @@ class MainWindow:
 
     def _on_sensor_toggle(self, name, visible):
         """Route a sensor-tile click to the correct plot's visibility toggle."""
-        if name.startswith('TC_'):
+        if name in self._tc_names:
             if hasattr(self, 'plot_tc'):
                 self.plot_tc.set_sensor_visible(name, visible)
-        elif name.startswith('FRG702_'):
+        elif name in self._frg_names:
             if hasattr(self, 'plot_pressure'):
                 self.plot_pressure.set_sensor_visible(name, visible)
         elif name == 'PS_Voltage':
@@ -2188,7 +2183,7 @@ class MainWindow:
                     if value is None:
                         log_readings[name] = None
                         continue
-                    if name.startswith('TC_'):
+                    if name in self._tc_names:
                         log_readings[name] = convert_temperature(value, 'C', t_unit)
                     else:
                         log_readings[name] = value
@@ -2212,7 +2207,6 @@ class MainWindow:
                 self.root.after(0, self._handle_safety_shutdown)
 
         self.daq.start_fast_acquisition(callback=on_new_data)
-        self._update_gui()
 
     def _on_stop(self):
         self.is_running = False
@@ -2431,7 +2425,7 @@ class MainWindow:
             if value is None:
                 display_readings[name] = None
                 continue
-            if name.startswith('TC_'):
+            if name in self._tc_names:
                 display_readings[name] = convert_temperature(value, 'C', t_unit)
             else:
                 display_readings[name] = value
@@ -2479,7 +2473,10 @@ class MainWindow:
             if hasattr(self, 'plot_pressure'):
                 self.plot_pressure.update(frg_names, data_units={'press': self.p_unit_var.get()})
             if hasattr(self, 'plot_ps'):
-                self.plot_ps.update(['PS_Voltage', 'PS_Current'])
+                _ps_names = ['PS_Voltage', 'PS_Current']
+                if getattr(self, '_programmer_ramp_running', False):
+                    _ps_names += ['PS_Voltage_Setpoint', 'PS_CC_Limit']
+                self.plot_ps.update(_ps_names)
 
         gui_profiler.start("schedule_next")
         self.root.after(self.config['display']['update_rate_ms'], self._update_gui)
@@ -2607,7 +2604,7 @@ class MainWindow:
                 voltage_monitor_pin=ps_config.get('voltage_monitor_pin', "AIN4"),
                 current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5"),
                 switch_4_position=switch_position,
-                debug=False # Disable verbose calculation debug prints
+                debug=True # Enable verbose DAC/AIN calculation debug prints for diagnostics
             )
 
             # Update live DAQ engine if running
@@ -2622,6 +2619,7 @@ class MainWindow:
             self.ps_resource_var.set(f"Analog ({v_pin}/{i_pin})")
 
             print(f"Analog power supply controller initialized successfully (Range: {switch_position})")
+            self.ps_controller.run_diagnostics()
             return True
         except Exception as e:
             print(f"Failed to initialize analog PS controller: {e}")

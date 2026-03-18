@@ -49,8 +49,10 @@ def convert_temperature(value, from_unit, to_unit):
     Returns:
         Converted temperature value
     """
-    f = from_unit.upper()[0] if from_unit else 'C'
-    t = to_unit.upper()[0] if to_unit else 'C'
+    # Normalize units: take last character if it contains a degree symbol, 
+    # otherwise take the first character.  Handles 'C', '°C', 'degC', etc.
+    f = from_unit.upper().replace('°', '').replace('DEG', '').strip()[0] if from_unit else 'C'
+    t = to_unit.upper().replace('°', '').replace('DEG', '').strip()[0] if to_unit else 'C'
 
     if f == t:
         return value

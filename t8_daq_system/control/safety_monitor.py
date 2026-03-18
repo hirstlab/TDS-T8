@@ -184,10 +184,9 @@ class SafetyMonitor:
             return True
 
         # First: check 2200C override on ALL thermocouple readings
+        # Note: sensor_readings here contains only TC readings, so no name filter needed
         max_tc = 0.0
         for sensor_name, value in sensor_readings.items():
-            if not sensor_name.startswith('TC_'):
-                continue
             if value is None or value == -9999:
                 continue
             if value > max_tc:
@@ -201,7 +200,7 @@ class SafetyMonitor:
             # Find the offending sensor
             offending_sensor = None
             for sensor_name, value in sensor_readings.items():
-                if sensor_name.startswith('TC_') and value is not None and value >= self.TEMP_OVERRIDE_LIMIT:
+                if value is not None and value >= self.TEMP_OVERRIDE_LIMIT:
                     offending_sensor = sensor_name
                     break
 

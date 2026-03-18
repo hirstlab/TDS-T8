@@ -17,7 +17,7 @@ from .temp_ramp_pid import PIDController, TempRampHistory
 
 # ── Module-level constants ─────────────────────────────────────────────────────
 
-TICK_INTERVAL_SEC    = 0.5      # PID update rate
+TICK_INTERVAL_SEC    = 2.0      # PID update rate — slow for W->SiC->W thermal mass
 MAX_VOLTAGE          = 6.0      # Keysight N5700 max output voltage
 MAX_CURRENT          = 180.0    # Keysight N5700 max output current
 DAC_MAX_VOLTS        = 5.0      # T8 DAC output ceiling (0–5 V)
@@ -27,7 +27,7 @@ PRACTICE_THERMAL_MASS   = 120.0  # Seconds for simulated temperature to respond
 # ── Debug / Safety Configuration ─────────────────────────────────────────────
 # Set DEBUG_TEMP_RAMP = True to print PID internals every tick to the terminal.
 # Set to False before real hardware runs if terminal output becomes too verbose.
-DEBUG_TEMP_RAMP = True
+DEBUG_TEMP_RAMP = False
 
 # Current limit fraction for DAC1 (Pin 10, Current Program) during a TempRamp run.
 #
@@ -270,7 +270,7 @@ class TempRampExecutor:
                 if tc_k is None:
                     consecutive_none_tc += 1
                     if consecutive_none_tc >= 5:
-                        # No TC for 5 consecutive ticks — abort safely
+                        # No TC for 5 consecutive ticks (10 s) — abort safely
                         self._running = False
                         if self._on_status:
                             self._on_status({
@@ -284,7 +284,9 @@ class TempRampExecutor:
                                 'tc_missing_error':  True,
                             })
                         break
-                    # Skip this tick but keep the loop alive
+                    # Freeze block timer so the setpoint doesn't race ahead
+                    # while the TC is missing — prevents overshoot on reconnect.
+                    block_start_time += TICK_INTERVAL_SEC
                     time.sleep(TICK_INTERVAL_SEC)
                     continue
                 else:
@@ -346,7 +348,7 @@ class TempRampExecutor:
             else:
                 consecutive_saturated = 0
 
-            saturated_warning = consecutive_saturated >= 30  # 15 seconds
+            saturated_warning = consecutive_saturated >= 15  # 30 seconds
             if saturated_warning and consecutive_saturated == 30:
                 print("[TempRampExecutor] WARNING: PID output saturated — "
                       "possible runaway. Check thermocouple.")
