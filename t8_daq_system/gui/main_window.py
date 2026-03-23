@@ -1091,7 +1091,8 @@ class MainWindow:
             parent_frame=self._programmer_panel_frame,
             preview_plot=self._programmer_preview_plot,
             get_initial_state_fn=lambda: (self._get_latest_tc_reading_k("TC_1"), self.daq.latest_voltage if self.daq else 0.0),
-            on_program_change=self._update_run_button_state
+            on_program_change=self._update_run_button_state,
+            tc_names=sorted(self._tc_names)
         )
         
         # Build manual nudge sub-panel
@@ -1111,44 +1112,9 @@ class MainWindow:
                 self._run_ramp_btn_visible = False
 
     def _update_programmer_preview(self):
-        if self._programmer_panel and self._programmer_preview_plot:
-            panel_mode = self._programmer_panel._mode
-
-            # Reset plot layout when switching away from TempRamp mode
-            if self._programmer_mode == "TempRamp" and panel_mode != "TempRamp":
-                self._programmer_preview_plot.reset_to_vi_mode()
-
-            self._programmer_mode = panel_mode
-            self._programmer_control_mode = panel_mode
-            self._programmer_blocks = list(self._programmer_panel._blocks)
-            if panel_mode == "TempRamp":
-                self._programmer_pid_tc = self._programmer_panel.get_selected_tc_name()
-
-            if panel_mode == "TempRamp":
-                if hasattr(self._programmer_panel, 'get_temp_preview_with_blocks'):
-                    times, temps_k, blocks = self._programmer_panel.get_temp_preview_with_blocks()
-                else:
-                    times, temps_k = self._programmer_panel._compute_temp_preview()
-                    blocks = None
-                self._programmer_preview_plot.update_temp_preview(times, temps_k, blocks)
-                self._programmer_preview_data = (times, temps_k, None)
-            else:
-                times, voltages, currents = self._programmer_panel.get_preview_data()
-                self._programmer_preview_plot.update_preview(times, voltages, currents)
-                self._programmer_preview_data = (times, voltages, currents)
-
-            # Show/hide the Run Ramp button and nudge panel
-            if (self._programmer_panel.get_profile_ready()
-                    and not self._run_ramp_btn_visible):
-                self.run_ramp_btn.pack(side=tk.LEFT, padx=5)
-                self._run_ramp_btn_visible = True
-            elif (not self._programmer_panel.get_profile_ready()
-                  and self._run_ramp_btn_visible):
-                self.run_ramp_btn.pack_forget()
-                self._run_ramp_btn_visible = False
-            
-            # Update nudge panel position/visibility
-            self._reposition_nudge_panel()
+        # The new ProgramPanel manages preview updates via its own Preview button.
+        # This method is retained for call-site compatibility but is otherwise a no-op.
+        pass
 
     def _deactivate_power_programmer(self):
         # SAFETY: If a ramp is currently running, stop it safely first
@@ -1157,13 +1123,11 @@ class MainWindow:
 
         # Save profile data before destroying panel
         if self._programmer_panel:
-            self._programmer_preview_data = self._programmer_panel.get_preview_data()
-            self._programmer_blocks = list(self._programmer_panel._blocks)
-            self._programmer_control_mode = self._programmer_panel._mode
-            self._programmer_mode = self._programmer_panel._mode
-            # PID Thermocouple selection
-            self._programmer_pid_tc = self._programmer_panel.get_selected_tc_name()
-        # (Otherwise keep whatever was already in self._programmer_blocks/mode)
+            self._programmer_blocks = list(self._programmer_panel.get_blocks())
+            self._programmer_preview_data = ([], [], [])
+            self._programmer_control_mode = "Program"
+            self._programmer_mode = "Program"
+        # (Otherwise keep whatever was already in self._programmer_blocks)
 
         # Destroy programmer UI
         if self._programmer_panel_frame:
@@ -1209,16 +1173,18 @@ class MainWindow:
 
     def _on_program_block_start(self, index, block):
         print(f"[Program] Starting block {index+1}: {block.block_type}")
-        self.status_var.set(f"Program: Block {index+1}")
+        self.root.after(0, lambda: self.status_var.set(f"Program: Block {index+1}"))
 
     def _on_program_block_complete(self, index):
         print(f"[Program] Block {index+1} complete")
 
     def _on_program_complete(self):
         print("[Program] All blocks complete")
-        self.status_var.set("Program Complete")
-        self._programmer_ramp_running = False
-        self.run_ramp_btn.config(text="Run Program")
+        def _gui_update():
+            self.status_var.set("Program Complete")
+            self._programmer_ramp_running = False
+            self.run_ramp_btn.config(text="Run Program")
+        self.root.after(0, _gui_update)
 
     def _on_program_status(self, status):
         # status = {'block_index': ..., 'block_type': ..., 'elapsed_sec': ..., 'current_temp_k': ..., 'voltage_v': ...}
@@ -1341,15 +1307,15 @@ class MainWindow:
         gains = self._temp_ramp_history.suggest_gains(target_rate)
         print(f"[TempRamp] Using gains: kp={gains['kp']}, ki={gains['ki']}, kd={gains['kd']}")
 
-        # Read safe test mode from programmer panel if available
+        # Read safe test mode from programmer panel if available (legacy API guard)
         _safe_test = (
             self._programmer_panel.get_safe_test_mode()
-            if self._programmer_panel is not None
+            if self._programmer_panel is not None and hasattr(self._programmer_panel, 'get_safe_test_mode')
             else False
         )
 
-        # Resolve which TC the PID should read
-        if self._programmer_panel is not None:
+        # Resolve which TC the PID should read (legacy API guard)
+        if self._programmer_panel is not None and hasattr(self._programmer_panel, 'get_selected_tc_name'):
             _selected_tc = self._programmer_panel.get_selected_tc_name()
         else:
             _selected_tc = self._programmer_pid_tc if self._programmer_pid_tc else ""
@@ -2622,7 +2588,7 @@ class MainWindow:
         # 1. Determine readiness
         ready = False
         if self._programmer_panel:
-            ready = self._programmer_panel.get_profile_ready()
+            ready = len(self._programmer_panel.get_blocks()) > 0
         elif self._programmer_blocks:
             ready = True 
         

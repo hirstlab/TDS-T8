@@ -26,42 +26,40 @@ class ProgrammerPreviewPlot:
         """
         self._parent = parent_frame
 
-        # Build figure with two y-axes
+        # Build figure — single temperature axis by default
         self.fig = Figure(figsize=(8, 4), dpi=100)
         self.fig.patch.set_facecolor('#f0f0f0')
 
         self._ax_v = self.fig.add_subplot(111)
+        # Twin axis kept for API compatibility but hidden — not used for temperature preview
         self._ax_a = self._ax_v.twinx()
+        self._ax_a.set_visible(False)
 
-        self._v_color = '#1f77b4'
+        self._v_color = '#e84118'   # temperature orange-red
         self._a_color = '#d62728'
         self._v_style = 'solid'
         self._a_style = 'dashed'
         self._v_width = 2
         self._a_width = 2
 
-        self._ax_v.set_xlabel('Time (s)')
-        self._ax_v.set_ylabel('Voltage (V)', color=self._v_color)
+        self._ax_v.set_xlabel('Time (min)')
+        self._ax_v.set_ylabel('Temperature (°C)', color=self._v_color)
         self._ax_v.tick_params(axis='y', labelcolor=self._v_color)
 
-        self._ax_a.set_ylabel('Current (A)', color=self._a_color, rotation=270, labelpad=15)
-        self._ax_a.yaxis.set_label_position('right')
-        self._ax_a.tick_params(axis='y', labelcolor=self._a_color)
-
-        self.fig.suptitle('Power Program Preview', fontsize=11, fontweight='bold')
+        self.fig.suptitle('Temperature Preview', fontsize=11, fontweight='bold')
         self._ax_v.grid(True, alpha=0.3)
-        self.fig.subplots_adjust(left=0.1, right=0.88, top=0.90, bottom=0.15)
+        self.fig.subplots_adjust(left=0.12, right=0.95, top=0.90, bottom=0.15)
 
         # Persistent line objects
         self._line_v = None
         self._line_a = None
-        self._line_temp = None  # green temperature line for TempRamp mode
-        self._temp_mode = False  # True when displaying TempRamp preview
+        self._line_temp = None
+        self._temp_mode = False
 
         # "No program" placeholder text
         self._placeholder = self._ax_v.text(
             0.5, 0.5,
-            "No program loaded — add blocks in the editor above",
+            "Add blocks and click Preview to see temperature profile",
             transform=self._ax_v.transAxes,
             ha='center', va='center',
             fontsize=10, color='gray', style='italic'
@@ -145,13 +143,14 @@ class ProgrammerPreviewPlot:
 
     def update_unified_preview(self, times, voltages, temps_k, blocks, boundaries):
         """
-        Render unified preview showing both voltage and temperature.
+        Render preview showing target temperature over time as a single clean line.
+        Voltage data is accepted but not displayed (used internally for PID feedforward hints).
         """
         import numpy as np
         self._ax_v.cla()
         if self._ax_a:
             self._ax_a.cla()
-            self._ax_a.set_visible(True)
+            self._ax_a.set_visible(False)
 
         if not times:
             self._placeholder.set_visible(True)
@@ -160,43 +159,24 @@ class ProgrammerPreviewPlot:
 
         self._placeholder.set_visible(False)
         t_min = np.array(times) / 60.0
-        v_arr = np.array(voltages)
         c_arr = np.array(temps_k) - 273.15
 
-        # Plot Voltage on left axis
-        self._ax_v.plot(t_min, v_arr, color='blue', linewidth=2.0, label='Voltage (V)')
-        self._ax_v.set_ylabel('Voltage (V)', color='blue')
-        self._ax_v.tick_params(axis='y', labelcolor='blue')
-
-        # Plot Temperature on right axis
-        self._ax_a.plot(t_min, c_arr, color='red', linewidth=2.0, label='Temp (°C)')
-        self._ax_a.set_ylabel('Temperature (°C)', color='red', rotation=270, labelpad=15)
-        self._ax_a.tick_params(axis='y', labelcolor='red')
-
+        # Single temperature line
+        self._ax_v.plot(t_min, c_arr, color='#e84118', linewidth=2.0, label='Target Temp (°C)')
+        self._ax_v.set_ylabel('Temperature (°C)', color='#e84118')
+        self._ax_v.tick_params(axis='y', labelcolor='#e84118')
         self._ax_v.set_xlabel('Time (min)')
         self._ax_v.grid(True, alpha=0.3)
 
-        # Block annotations
-        BLOCK_COLORS = {
-            'voltage_ramp': '#d1ecf1', # blueish
-            'stable_hold': '#fff3cd',  # yellowish
-            'temp_ramp': '#d4edda'     # greenish
-        }
-        
-        for i, block in enumerate(blocks):
-            if i + 1 < len(boundaries):
-                t_start = boundaries[i] / 60.0
-                t_end = boundaries[i+1] / 60.0
-                color = BLOCK_COLORS.get(block.block_type, '#eeeeee')
-                self._ax_v.axvspan(t_start, t_end, color=color, alpha=0.3)
-                
-                # Label
-                mid = (t_start + t_end) / 2
-                self._ax_v.text(mid, self._ax_v.get_ylim()[1], f"B{i+1}", 
-                               ha='center', va='top', fontsize=8, color='gray')
+        # Block boundary vertical lines
+        for b_time in boundaries[1:]:
+            self._ax_v.axvline(b_time / 60.0, color='gray', linewidth=0.8,
+                               linestyle='--', alpha=0.6)
 
-        self.fig.suptitle('Unified Program Preview', fontsize=10, fontweight='bold')
-        self.fig.subplots_adjust(left=0.1, right=0.88, top=0.90, bottom=0.15)
+        total_min = t_min[-1] if len(t_min) > 0 else 0
+        self.fig.suptitle(f'Temperature Preview  —  {total_min:.0f} min total',
+                          fontsize=10, fontweight='bold')
+        self.fig.subplots_adjust(left=0.12, right=0.95, top=0.90, bottom=0.15)
         self.canvas.draw()
 
     def update_temp_preview(self, times, temps_k, blocks=None):

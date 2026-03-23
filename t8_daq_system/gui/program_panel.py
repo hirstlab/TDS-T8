@@ -5,14 +5,15 @@ PURPOSE: Unified Program Mode UI for the block-based editor.
 
 import tkinter as tk
 from tkinter import ttk, messagebox
-from ..control.program_block import VoltageRampBlock, StableHoldBlock, TempRampBlock
+from ..control.program_block import StableHoldBlock, TempRampBlock
 from ..control.program_executor import ProgramExecutor
 
 class BlockEditDialog(tk.Toplevel):
-    def __init__(self, parent, block):
+    def __init__(self, parent, block, tc_names=None):
         super().__init__(parent)
         self.block = block
         self.result = None
+        self._tc_names = list(tc_names) if tc_names else ["TC_1"]
         self.title(f"Edit {block.block_type.replace('_', ' ').title()}")
         self.geometry("350x300")
         self.grab_set()
@@ -46,7 +47,7 @@ class BlockEditDialog(tk.Toplevel):
         elif self.block.block_type == "temp_ramp":
             self._add_entry(main_frame, "Rate (K/min):", "rate_k_per_min", self.block.rate_k_per_min)
             self._add_entry(main_frame, "End Temp (K):", "end_temp_k", self.block.end_temp_k)
-            self._add_entry(main_frame, "TC Name:", "tc_name", self.block.tc_name)
+            self._add_tc_dropdown(main_frame, "TC Name:", "tc_name", self.block.tc_name)
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
@@ -60,6 +61,15 @@ class BlockEditDialog(tk.Toplevel):
         ttk.Label(frame, text=label, width=20).pack(side=tk.LEFT)
         var = tk.StringVar(value=str(initial_val))
         ttk.Entry(frame, textvariable=var).pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self._vars[key] = var
+
+    def _add_tc_dropdown(self, parent, label, key, initial_val):
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X, pady=5)
+        ttk.Label(frame, text=label, width=20).pack(side=tk.LEFT)
+        var = tk.StringVar(value=str(initial_val))
+        cb = ttk.Combobox(frame, textvariable=var, values=self._tc_names, state="readonly")
+        cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self._vars[key] = var
 
     def _add_check(self, parent, label, key, initial_val):
@@ -90,42 +100,46 @@ class BlockEditDialog(tk.Toplevel):
             messagebox.showerror("Error", "Please enter valid numeric values")
 
 class ProgramPanel:
-    def __init__(self, parent_frame, preview_plot=None, get_initial_state_fn=None, on_program_change=None):
+    def __init__(self, parent_frame, preview_plot=None, get_initial_state_fn=None, on_program_change=None, tc_names=None):
         self.parent = parent_frame
         self.preview_plot = preview_plot
         self.get_initial_state_fn = get_initial_state_fn
         self._on_change = on_program_change
+        self._tc_names = list(tc_names) if tc_names else ["TC_1"]
         self._blocks = []
-        
-        # Block 1 is always VoltageRampBlock
-        self._blocks.append(VoltageRampBlock(0.0, 0.3, 300.0, pid_active=True))
+
+        # Block 1 is always a temperature ramp (PID drives voltage to hit the target)
+        default_tc = self._tc_names[0] if self._tc_names else "TC_1"
+        self._blocks.append(TempRampBlock(rate_k_per_min=1.0, end_temp_k=500.0, tc_name=default_tc))
         
         self._build_gui()
 
     def _build_gui(self):
-        main_frame = ttk.Frame(self.parent, padding=10)
+        main_frame = ttk.Frame(self.parent, padding=4)
         main_frame.pack(fill=tk.BOTH, expand=True)
 
         # Toolbar
         toolbar = ttk.Frame(main_frame)
-        toolbar.pack(fill=tk.X, pady=(0, 10))
-        
-        ttk.Label(toolbar, text="Program Blocks", font=('Arial', 12, 'bold')).pack(side=tk.LEFT)
-        
-        # Add Block dropdown
+        toolbar.pack(fill=tk.X, pady=(0, 4))
+
+        ttk.Label(toolbar, text="Program Blocks", font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=(0, 8))
+
+        # Add Block dropdown — on the LEFT
         self._add_type_var = tk.StringVar(value="Stable Hold")
-        add_cb = ttk.Combobox(toolbar, textvariable=self._add_type_var, 
+        add_cb = ttk.Combobox(toolbar, textvariable=self._add_type_var,
                               values=["Stable Hold", "Temp Ramp"], state="readonly", width=12)
-        add_cb.pack(side=tk.RIGHT, padx=5)
-        
-        ttk.Button(toolbar, text="Add Block", command=self._add_block).pack(side=tk.RIGHT, padx=5)
-        ttk.Button(toolbar, text="Preview", command=self._on_preview).pack(side=tk.RIGHT, padx=5)
+        add_cb.pack(side=tk.LEFT, padx=2)
+
+        ttk.Button(toolbar, text="Add Block", command=self._add_block).pack(side=tk.LEFT, padx=2)
+
+        # Preview button stays on the right
+        ttk.Button(toolbar, text="Preview", command=self._on_preview).pack(side=tk.RIGHT, padx=2)
 
         # Block list frame (scrollable)
         list_container = ttk.Frame(main_frame)
         list_container.pack(fill=tk.BOTH, expand=True)
-        
-        self._canvas = tk.Canvas(list_container, highlightthickness=0)
+
+        self._canvas = tk.Canvas(list_container, highlightthickness=0, height=110)
         self._scrollbar = ttk.Scrollbar(list_container, orient="vertical", command=self._canvas.yview)
         self._scrollable_frame = ttk.Frame(self._canvas)
 
@@ -147,20 +161,21 @@ class ProgramPanel:
         if btype == "Stable Hold":
             self._blocks.append(StableHoldBlock(293.15, 2.0, 60.0))
         else:
-            self._blocks.append(TempRampBlock(1.0, 500.0, "TC_1"))
+            default_tc = self._tc_names[0] if self._tc_names else "TC_1"
+            self._blocks.append(TempRampBlock(1.0, 500.0, default_tc))
         self._refresh_list()
         if self._on_change: self._on_change()
 
     def _delete_block(self, idx):
         if idx == 0:
-            messagebox.showwarning("Warning", "Block 1 (Voltage Ramp) cannot be deleted")
+            messagebox.showwarning("Warning", "Block 1 cannot be deleted")
             return
         del self._blocks[idx]
         self._refresh_list()
         if self._on_change: self._on_change()
 
     def _edit_block(self, idx):
-        dialog = BlockEditDialog(self.parent.winfo_toplevel(), self._blocks[idx])
+        dialog = BlockEditDialog(self.parent.winfo_toplevel(), self._blocks[idx], tc_names=self._tc_names)
         self.parent.wait_window(dialog)
         if dialog.result:
             self._blocks[idx] = dialog.result
