@@ -42,9 +42,9 @@ class PIDController:
     Output is a normalised 0–1 power fraction (not raw volts/amps).
     """
 
-    def __init__(self, kp=0.05, ki=0.002, kd=0.005,
-                 output_min=0.0, output_max=5.0,
-                 integral_windup_limit=5.0):
+    def __init__(self, kp=1.0, ki=0.05, kd=0.05,
+                 output_min=-4.0, output_max=4.0,
+                 integral_windup_limit=100.0):
         """
         Args:
             kp: Proportional gain (very small — power supply is high-current).
@@ -106,7 +106,7 @@ class PIDController:
 
         # Integral with anti-windup clamp
         self._integral += error * dt
-        self._integral = max(0.0, min(self._integral, 5.0))
+        self._integral = max(-self._windup_limit, min(self._integral, self._windup_limit))
 
         derivative = (error - self._prev_error) / dt
 
@@ -115,8 +115,8 @@ class PIDController:
         self._last_d_term = self._kd * derivative
         raw_output = self._last_p_term + self._last_i_term + self._last_d_term
 
-        # Clamp output to DAC range
-        clamped = max(0.0, min(raw_output, 5.0))
+        # Clamp output
+        clamped = max(self._output_min, min(raw_output, self._output_max))
 
         self._prev_error = error
         self._prev_time = current_time
@@ -276,8 +276,38 @@ class FeedforwardTable:
             self._averages = {k: float(v) for k, v in data.items()}
             print(f"[FeedforwardTable] Loaded {len(self._averages)} entries from {self.filepath}")
         except Exception as e:
-            print(f"[FeedforwardTable] Could not load feedforward table ({e}), defaulting to 0.0V")
+            print(f"[FeedforwardTable] Could not load feedforward table ({e}), seeding from empirical data.")
             self._averages = {}
+            self._seed_empirical_data()
+
+    def _seed_empirical_data(self):
+        """
+        Pre-seed the feedforward table from the 'Filament, New LJ Port'
+        manual heat ramp test data. These are measured (temp_C, voltage_V)
+        pairs at the Filament V2 geometry. The table will be refined by real
+        runs, but this gives the PID a head start on the first run.
+        Saves to disk immediately so subsequent startups load from file.
+        """
+        empirical = {
+            "30": 0.022, "40": 0.094, "60": 0.167, "90": 0.211,
+            "180": 0.336, "310": 0.502, "450": 0.835, "510": 0.960,
+            "520": 1.001, "550": 1.085, "570": 1.168, "610": 1.270,
+            "630": 1.334, "650": 1.414, "670": 1.501, "700": 1.625,
+            "720": 1.709, "740": 1.833, "760": 1.917, "770": 2.000,
+            "800": 2.125, "810": 2.208, "830": 2.333, "850": 2.416,
+            "870": 2.499, "900": 2.624, "920": 2.707, "930": 2.790,
+            "960": 2.915, "970": 2.998, "990": 3.123, "1000": 3.206,
+            "1020": 3.289, "1040": 3.414, "1050": 3.497, "1070": 3.622,
+            "1090": 3.746, "1100": 3.830, "1120": 3.996, "1150": 4.121,
+            "1160": 4.204, "1170": 4.328, "1180": 4.412, "1200": 4.495,
+            "1240": 4.619, "1260": 4.699, "1280": 4.816, "1320": 4.910,
+            "1350": 5.035, "1370": 5.118, "1390": 5.243, "1410": 5.326,
+            "1420": 5.420, "1450": 5.534, "1460": 5.617, "1470": 5.701,
+            "1490": 5.795, "1500": 5.909, "1510": 5.992
+        }
+        self._averages = empirical
+        self.save()
+        print(f"[FeedforwardTable] Seeded {len(empirical)} empirical entries and saved.")
 
     def save(self):
         try:

@@ -268,6 +268,7 @@ class MainWindow:
         # Initialize XGS-600 controller
         self.xgs600 = None
         self.frg702_reader = None
+        self.tc_reader = None
         profiler.checkpoint("XGS-600 variables initialized (not connected yet)")
 
         profiler.section("Analog Power Supply Controller")
@@ -1090,9 +1091,11 @@ class MainWindow:
         self._programmer_panel = ProgramPanel(
             parent_frame=self._programmer_panel_frame,
             preview_plot=self._programmer_preview_plot,
-            get_initial_state_fn=lambda: (self._get_latest_tc_reading_k("TC_1"), self.daq.latest_voltage if self.daq else 0.0),
+            get_initial_state_fn=lambda: (self._get_latest_tc_reading_k("TC_1"), (self.daq._last_all_readings.get('PS_Voltage') or 0.0) if self.daq else 0.0),
             on_program_change=self._update_run_button_state,
-            tc_names=sorted(self._tc_names)
+            tc_names=sorted(self._tc_names),
+            get_unit_fn=lambda: getattr(self, 't_unit_var', None) and self.t_unit_var.get() or 'K',
+            get_tc_temp_k_fn=self._get_latest_tc_reading_k,
         )
         
         # Build manual nudge sub-panel
@@ -1187,14 +1190,18 @@ class MainWindow:
         self.root.after(0, _gui_update)
 
     def _on_program_status(self, status):
-        # status = {'block_index': ..., 'block_type': ..., 'elapsed_sec': ..., 'current_temp_k': ..., 'voltage_v': ...}
         idx = status['block_index']
         btype = status['block_type'].replace('_', ' ').title()
         elapsed = status['elapsed_sec']
         temp = status['current_temp_k'] - 273.15
         volt = status['voltage_v']
-        
-        msg = f"B{idx+1} {btype}: {elapsed:.0f}s | {temp:.1f}C | {volt:.3f}V"
+        ff_v = status.get('ff_voltage', 0.0)
+        p = status.get('pid_p', 0.0)
+        i = status.get('pid_i', 0.0)
+        d = status.get('pid_d', 0.0)
+
+        msg = (f"B{idx+1} {btype}: {elapsed:.0f}s | {temp:.1f}°C | "
+               f"V={volt:.3f} (FF={ff_v:.3f} P={p:+.3f} I={i:+.3f} D={d:+.3f})")
         self.root.after(0, lambda: self.status_var.set(msg))
 
     def _on_programmer_profile_confirmed(self, times, voltages, currents):
@@ -1401,10 +1408,23 @@ class MainWindow:
 
         # Build status string
         warning_suffix = " [SAT WARN]" if status.get('saturated_warning') else ""
+
+        # Determine display unit from the global TC unit setting
+        _use_celsius = getattr(self, 't_unit_var', None) and self.t_unit_var.get() == 'C'
+
+        if _use_celsius:
+            _t_disp   = status['current_temp_k'] - 273.15
+            _sp_disp  = status['setpoint_k'] - 273.15
+            _unit_str = "\u00b0C"
+        else:
+            _t_disp   = status['current_temp_k']
+            _sp_disp  = status['setpoint_k']
+            _unit_str = "K"
+
         status_text = (
             f"TempRamp | Block {status['block_index']+1}/{status['total_blocks']} | "
-            f"T={status['current_temp_k']:.1f} K | "
-            f"SP={status['setpoint_k']:.1f} K | "
+            f"T={_t_disp:.1f} {_unit_str} | "
+            f"SP={_sp_disp:.1f} {_unit_str} | "
             f"PID={status['pid_output']:.3f}{warning_suffix}"
         )
 
@@ -2636,7 +2656,9 @@ class MainWindow:
             return
 
         ps = getattr(self, 'ps_controller', None)
+        print(f"[Nudge] direction={direction:+d}, ps={ps}, practice={self._practice_mode}")
         if ps is None:
+            print("[Nudge] ps_controller is None — cannot nudge")
             return
 
         current_v = ps.get_voltage_setpoint() or 0.0
@@ -2648,7 +2670,22 @@ class MainWindow:
             target_v = min(target_v, 1.0)
 
         target_v = max(0.0, min(target_v, 6.0))
-        ps.set_voltage(target_v)
+
+        # Ensure output is enabled and current limit is non-zero before writing voltage.
+        # DAC1 starts at 0V (= 0A limit) at power-on; without a non-zero ceiling the
+        # supply cannot source current even when the voltage setpoint is correct.
+        if hasattr(ps, 'is_output_on') and hasattr(ps, 'output_on'):
+            if not ps.is_output_on():
+                try:
+                    ps.output_on()
+                    max_amps = getattr(ps, 'current_limit', getattr(ps, 'rated_max_amps', 180.0))
+                    ps.set_current(max_amps)
+                    print(f"[Nudge] output_on + set_current({max_amps}A)")
+                except Exception as e:
+                    print(f"[Nudge] output_on/set_current failed: {e}")
+
+        result = ps.set_voltage(target_v)
+        print(f"[Nudge] set_voltage({target_v:.3f}) → {result}")
         self._nudge_v_var.set(f"{target_v:.3f} V")
 
     def _start_nudge_readback_loop(self):

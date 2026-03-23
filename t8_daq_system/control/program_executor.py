@@ -35,7 +35,7 @@ class ProgramExecutor:
 
         # Shared state between blocks
         self.current_voltage_setpoint = 0.0
-        self.current_current_limit = 5.0 # DAC1 value (volts)
+        self.current_current_limit = 180.0  # amps — full rated current for tungsten
         self.current_block_index = 0
         
         # Diagnostics
@@ -61,9 +61,26 @@ class ProgramExecutor:
             self._last_tick_time = time.time()
             
             if self.practice_mode:
-                temp = self._get_temp_k()
-                if temp:
-                    self._practice_temp_k = temp
+                try:
+                    fn = self._get_temp_k_provider("TC_1")
+                    temp = fn() if fn else None
+                    if temp:
+                        self._practice_temp_k = temp
+                except Exception:
+                    pass
+            else:
+                # Enable output and set current ceiling before starting.
+                # DAC1 starts at 0V (= 0A) at power-on; must set current_limit
+                # explicitly or the supply cannot source any current.
+                if self._ps is not None:
+                    try:
+                        self._ps.output_on()
+                        max_amps = getattr(self._ps, 'current_limit',
+                                           getattr(self._ps, 'rated_max_amps', 180.0))
+                        self._ps.set_current(max_amps)
+                        print(f"[ProgramExecutor] output_on + set_current({max_amps}A)")
+                    except Exception as e:
+                        print(f"[ProgramExecutor] Warning: output_on/set_current failed: {e}")
 
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
@@ -78,8 +95,7 @@ class ProgramExecutor:
         if self._ps:
             try:
                 self._ps.set_voltage(0.0)
-                # Keep current limit at default safe value
-                self._ps.set_current(5.0) 
+                self._ps.set_current(0.0)
             except:
                 pass
 
@@ -167,32 +183,46 @@ class ProgramExecutor:
             except:
                 pass
 
-        while self._running and self.current_block_index < len(self._blocks):
-            block = self._blocks[self.current_block_index]
-            
-            # Update TC channel if this is a temp ramp block
-            if block.block_type == "temp_ramp":
-                self._current_get_temp_k = self._get_temp_k_provider(block.tc_name)
-            
-            if self._on_block_start:
-                self._on_block_start(self.current_block_index, block)
-
-            # Block execution logic
-            success = self._execute_block(block)
-            
-            if not success:
-                # Block failed (e.g. safety or stop)
+        # Use the first temp_ramp block's TC name for the initial reading so
+        # the PID starts from the real measured temperature, not the 293.15 K default.
+        first_tc = "TC_1"
+        for b in self._blocks:
+            if hasattr(b, 'tc_name'):
+                first_tc = b.tc_name
                 break
+        self._current_get_temp_k = self._get_temp_k_provider(first_tc)
+        live_start_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
+        print(f"[ProgramExecutor] _run_loop started, {len(self._blocks)} block(s), practice={self.practice_mode}, ps={self._ps}, start_temp={live_start_k:.1f}K ({live_start_k-273.15:.1f}°C)")
+        try:
+            while self._running and self.current_block_index < len(self._blocks):
+                block = self._blocks[self.current_block_index]
+                print(f"[ProgramExecutor] Starting block {self.current_block_index}: {block.block_type}")
 
-            if self._on_block_complete:
-                self._on_block_complete(self.current_block_index)
-            
-            self.current_block_index += 1
-            # Note: self._last_tick_time is NOT reset here, but we update start values
-            # block_start_time = time.time()  # Not needed anymore
-            # block_start_temp_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
+                # Update TC channel if this is a temp ramp block
+                if block.block_type == "temp_ramp":
+                    self._current_get_temp_k = self._get_temp_k_provider(block.tc_name)
+
+                if self._on_block_start:
+                    self._on_block_start(self.current_block_index, block)
+
+                success = self._execute_block(block)
+
+                if not success:
+                    print(f"[ProgramExecutor] Block {self.current_block_index} returned failure/stopped")
+                    break
+
+                if self._on_block_complete:
+                    self._on_block_complete(self.current_block_index)
+
+                self.current_block_index += 1
+
+        except Exception as exc:
+            import traceback
+            print(f"[ProgramExecutor] EXCEPTION in run loop: {exc}")
+            traceback.print_exc()
 
         self._running = False
+        print("[ProgramExecutor] _run_loop finished")
         if self._on_program_complete:
             self._on_program_complete()
 
@@ -225,7 +255,7 @@ class ProgramExecutor:
                 if block.pid_active:
                     # Just run it to update internal state/diagnostics
                     # but we don't use the output
-                    self._pid.update(current_temp_k, current_temp_k, dt)
+                    self._pid.compute(current_temp_k, current_temp_k, now)
                 
                 if progress >= 1.0:
                     return True
@@ -233,7 +263,10 @@ class ProgramExecutor:
             elif block.block_type == "stable_hold":
                 # PID control to target_temp_k
                 setpoint_k = block.target_temp_k
-                v_out = self._pid.update(current_temp_k, setpoint_k, dt)
+                # FF from target temp: gives steady-state voltage for the hold point
+                ff_v = self._feedforward.lookup(setpoint_k - 273.15)
+                pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
+                v_out = max(0.0, min(ff_v + pid_correction, 6.0))
                 self.current_voltage_setpoint = v_out
                 
                 # Stability check
@@ -261,9 +294,12 @@ class ProgramExecutor:
                         setpoint_k = block.end_temp_k
                         is_finished = True
                 
-                v_out = self._pid.update(current_temp_k, setpoint_k, dt)
+                # FF from the ramping setpoint temp: grows as setpoint advances
+                ff_v = self._feedforward.lookup(setpoint_k - 273.15)
+                pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
+                v_out = max(0.0, min(ff_v + pid_correction, 6.0))
                 self.current_voltage_setpoint = v_out
-                
+
                 if is_finished:
                     return True
 
@@ -275,18 +311,23 @@ class ProgramExecutor:
                         print("[ProgramExecutor] Interlock active - skipping DAC write")
                     else:
                         self._ps.set_voltage(self.current_voltage_setpoint)
-                        # Ensure DAC1 is at max (180A) for tungsten
-                        self._ps.set_current(5.0) 
+                        # Maintain the software current limit (don't re-set every tick
+                        # to avoid hammering the DAC; only set if it changed)
                 except Exception as e:
                     print(f"[ProgramExecutor] DAC write error: {e}")
 
             if self._on_status:
+                pid_terms = self._pid.get_debug_terms()
                 self._on_status({
                     'block_index': self.current_block_index,
                     'block_type': block.block_type,
                     'elapsed_sec': elapsed,
                     'current_temp_k': current_temp_k,
-                    'voltage_v': self.current_voltage_setpoint
+                    'voltage_v': self.current_voltage_setpoint,
+                    'ff_voltage': self.current_voltage_setpoint - pid_terms['p_term'] - pid_terms['i_term'] - pid_terms['d_term'],
+                    'pid_p': pid_terms['p_term'],
+                    'pid_i': pid_terms['i_term'],
+                    'pid_d': pid_terms['d_term'],
                 })
 
             # Sleep to match TICK_INTERVAL (approx 0.5s or 1.0s)

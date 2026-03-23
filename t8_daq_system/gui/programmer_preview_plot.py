@@ -141,10 +141,12 @@ class ProgrammerPreviewPlot:
 
         self.canvas.draw_idle()
 
-    def update_unified_preview(self, times, voltages, temps_k, blocks, boundaries):
+    def update_unified_preview(self, times, voltages, temps_k, blocks, boundaries,
+                               display_unit='K'):
         """
         Render preview showing target temperature over time as a single clean line.
         Voltage data is accepted but not displayed (used internally for PID feedforward hints).
+        display_unit: 'C' for Celsius, 'K' for Kelvin.
         """
         import numpy as np
         self._ax_v.cla()
@@ -159,11 +161,19 @@ class ProgrammerPreviewPlot:
 
         self._placeholder.set_visible(False)
         t_min = np.array(times) / 60.0
-        c_arr = np.array(temps_k) - 273.15
+        t_arr = np.array(temps_k)
+
+        if display_unit == 'C':
+            disp_arr = t_arr - 273.15
+            unit_label = '\u00b0C'
+        else:
+            disp_arr = t_arr
+            unit_label = 'K'
 
         # Single temperature line
-        self._ax_v.plot(t_min, c_arr, color='#e84118', linewidth=2.0, label='Target Temp (°C)')
-        self._ax_v.set_ylabel('Temperature (°C)', color='#e84118')
+        self._ax_v.plot(t_min, disp_arr, color='#e84118', linewidth=2.0,
+                        label=f'Target Temp ({unit_label})')
+        self._ax_v.set_ylabel(f'Temperature ({unit_label})', color='#e84118')
         self._ax_v.tick_params(axis='y', labelcolor='#e84118')
         self._ax_v.set_xlabel('Time (min)')
         self._ax_v.grid(True, alpha=0.3)

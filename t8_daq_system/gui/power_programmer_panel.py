@@ -66,6 +66,10 @@ class PowerProgrammerPanel:
         self._mode = "Voltage"  # "Voltage" or "TempRamp"
         self._safe_test_mode = False  # Controlled by Safe Test Mode checkbox
 
+        self._entry_mode = "Rate"   # "Rate" or "TimeTarget"
+        self._start_temp_var = None  # tk.StringVar for the starting temperature entry
+        self._start_temp_frame = None
+
         self._table_frame = None  # kept as ref so _rebuild_table_columns can destroy/recreate
         self._tree = None
         self._tree_vsb = None
@@ -170,6 +174,33 @@ class PowerProgrammerPanel:
         )
         self._safe_mode_check.pack(side=tk.LEFT, padx=8)
 
+        # ── Row 2d: Entry mode row (TempRamp only — always built, shown conditionally) ─
+        self._entry_mode_bar = tk.Frame(self._parent)
+        # Not packed initially — shown only in TempRamp mode
+
+        tk.Label(self._entry_mode_bar, text="Block input:", font=("Arial", 9)).pack(side=tk.LEFT, padx=4)
+        self._entry_mode_var = tk.StringVar(value="Rate")
+        ttk.Radiobutton(
+            self._entry_mode_bar, text="Rate + Duration",
+            variable=self._entry_mode_var, value="Rate",
+            command=self._on_entry_mode_changed
+        ).pack(side=tk.LEFT, padx=4)
+        ttk.Radiobutton(
+            self._entry_mode_bar, text="Target Temp + Duration",
+            variable=self._entry_mode_var, value="TimeTarget",
+            command=self._on_entry_mode_changed
+        ).pack(side=tk.LEFT, padx=4)
+
+        # Starting temp row (only visible in TimeTarget mode)
+        self._start_temp_frame = tk.Frame(self._parent)
+        # Not packed initially
+
+        self._start_temp_var = tk.StringVar(value="25")
+        self._start_temp_var.trace_add("write", lambda *_: self._on_start_temp_changed())
+        tk.Label(self._start_temp_frame, text="Starting Temp (\u00b0C or K):", font=("Arial", 9)).pack(side=tk.LEFT, padx=4)
+        ttk.Entry(self._start_temp_frame, textvariable=self._start_temp_var, width=8).pack(side=tk.LEFT, padx=2)
+        tk.Label(self._start_temp_frame, text="(temperature before first block)", font=("Arial", 8), foreground='gray').pack(side=tk.LEFT, padx=4)
+
         # ── Row 3: Table ──────────────────────────────────────────────────
         self._table_frame = ttk.Frame(self._parent)
         self._table_frame.pack(fill=tk.BOTH, expand=True, padx=4, pady=2)
@@ -205,8 +236,12 @@ class PowerProgrammerPanel:
             widget.destroy()
 
         if self._mode == "TempRamp":
-            columns = ('#', 'Type', 'Duration (s)', 'Rate (K/min)')
-            col_widths = [30, 70, 90, 90]
+            if getattr(self, '_entry_mode', 'Rate') == "TimeTarget":
+                columns = ('#', 'Type', 'Duration (min)', 'Target Temp', 'Rate (auto)')
+                col_widths = [30, 70, 100, 110, 100]
+            else:
+                columns = ('#', 'Type', 'Duration (s)', 'Rate (\u00b0C or K)/min')
+                col_widths = [30, 70, 90, 120]
         else:
             columns = ('#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Current (A)')
             col_widths = [30, 70, 90, 70, 70, 80]
@@ -256,6 +291,15 @@ class PowerProgrammerPanel:
                                            before=self._table_frame)
             else:
                 self._safe_test_frame.pack_forget()
+
+        # Show entry mode bar only in TempRamp mode
+        if hasattr(self, '_entry_mode_bar'):
+            if mode == "TempRamp":
+                self._entry_mode_bar.pack(fill=tk.X, pady=2, before=self._table_frame)
+            else:
+                self._entry_mode_bar.pack_forget()
+                if self._start_temp_frame:
+                    self._start_temp_frame.pack_forget()
 
         # Show Safe Mode checkbox only in Voltage/Current mode
         if hasattr(self, '_safe_mode_frame'):
@@ -332,11 +376,26 @@ class PowerProgrammerPanel:
     def _add_block(self):
         """Append a default block and refresh."""
         if self._mode == "TempRamp":
-            default = {
-                "type": "Ramp",
-                "duration_sec": float(getattr(self._settings, 'pp_default_ramp_duration', 60)),
-                "rate_k_per_min": 1.0
-            }
+            if getattr(self, '_entry_mode', 'Rate') == "TimeTarget":
+                try:
+                    chain_temp = float(self._start_temp_var.get())
+                except (ValueError, TypeError):
+                    chain_temp = 25.0
+                for b in self._blocks:
+                    if b["type"] == "Ramp":
+                        chain_temp = b.get("target_temp_disp", chain_temp + b.get("rate_k_per_min", 1.0) * b.get("duration_sec", 60.0) / 60.0)
+                default = {
+                    "type": "Ramp",
+                    "duration_sec": float(getattr(self._settings, 'pp_default_ramp_duration', 60)),
+                    "rate_k_per_min": 1.0,
+                    "target_temp_disp": chain_temp + 100.0
+                }
+            else:
+                default = {
+                    "type": "Ramp",
+                    "duration_sec": float(getattr(self._settings, 'pp_default_ramp_duration', 60)),
+                    "rate_k_per_min": 1.0
+                }
         else:
             default = {
                 "type": "Ramp",
@@ -408,19 +467,37 @@ class PowerProgrammerPanel:
             self._tree.delete(item)
 
         if self._mode == "TempRamp":
-            for i, block in enumerate(self._blocks):
-                rate_display = (
-                    block.get("rate_k_per_min", 1.0)
-                    if block["type"] == "Ramp"
-                    else "—"
-                )
-                row = (
-                    i + 1,
-                    block["type"],
-                    block.get("duration_sec", 0.0),
-                    rate_display
-                )
-                self._tree.insert('', 'end', values=row)
+            if getattr(self, '_entry_mode', 'Rate') == "TimeTarget":
+                try:
+                    chain_temp = float(self._start_temp_var.get())
+                except (ValueError, TypeError, AttributeError):
+                    chain_temp = 25.0
+
+                for i, block in enumerate(self._blocks):
+                    dur_min = block.get("duration_sec", 60.0) / 60.0
+                    rate = block.get("rate_k_per_min", 0.0)
+                    target_temp = block.get("target_temp_disp", chain_temp + rate * dur_min)
+                    rate_auto = (
+                        f"{(target_temp - chain_temp) / dur_min:.2f}" if dur_min > 0 else "—"
+                    ) if block["type"] == "Ramp" else "—"
+                    row = (i + 1, block["type"], f"{dur_min:.1f}", f"{target_temp:.1f}", rate_auto)
+                    self._tree.insert('', 'end', values=row)
+                    if block["type"] == "Ramp":
+                        chain_temp = target_temp
+            else:
+                for i, block in enumerate(self._blocks):
+                    rate_display = (
+                        block.get("rate_k_per_min", 1.0)
+                        if block["type"] == "Ramp"
+                        else "—"
+                    )
+                    row = (
+                        i + 1,
+                        block["type"],
+                        block.get("duration_sec", 0.0),
+                        rate_display
+                    )
+                    self._tree.insert('', 'end', values=row)
         else:
             for i, block in enumerate(self._blocks):
                 row = (
@@ -493,9 +570,16 @@ class PowerProgrammerPanel:
             return
 
         if self._mode == "TempRamp":
-            col_names = ['#', 'Type', 'Duration (s)', 'Rate (K/min)']
-            col_name = col_names[col_index]
-            self._open_tempramp_cell_editor(row_index, col_name, block, bbox)
+            if getattr(self, '_entry_mode', 'Rate') == "TimeTarget":
+                col_names = ['#', 'Type', 'Duration (min)', 'Target Temp', 'Rate (auto)']
+                col_name = col_names[col_index] if col_index < len(col_names) else ''
+                if col_name == 'Rate (auto)':
+                    return  # read-only column
+                self._open_timetarget_cell_editor(row_index, col_name, block, bbox)
+            else:
+                col_names = ['#', 'Type', 'Duration (s)', 'Rate (\u00b0C or K)/min']
+                col_name = col_names[col_index] if col_index < len(col_names) else ''
+                self._open_tempramp_cell_editor(row_index, col_name, block, bbox)
         else:
             col_names = ['#', 'Type', 'Duration (s)', 'Start V', 'End V', 'Current (A)']
             col_name = col_names[col_index]
@@ -713,7 +797,7 @@ class PowerProgrammerPanel:
             
             h_entry.focus_set()
             h_entry.select_range(0, tk.END)
-        elif col_name == 'Rate (K/min)':
+        elif col_name in ('Rate (K/min)', 'Rate (\u00b0C or K)/min'):
             current_rate = str(block.get("rate_k_per_min", 1.0))
             edit_var.set(current_rate)
             widget = ttk.Combobox(
@@ -755,7 +839,7 @@ class PowerProgrammerPanel:
                     return
                 block["duration_sec"] = v
 
-            elif col_name == 'Rate (K/min)':
+            elif col_name in ('Rate (K/min)', 'Rate (\u00b0C or K)/min'):
                 if block["type"] == "Hold":
                     popup.destroy()
                     return
@@ -779,6 +863,136 @@ class PowerProgrammerPanel:
         ttk.Button(btn_frame, text="Cancel",
                    command=popup.destroy).pack(side=tk.LEFT, padx=4)
 
+        popup.bind('<Return>', lambda e: _apply())
+        popup.bind('<Escape>', lambda e: popup.destroy())
+
+    def _on_entry_mode_changed(self):
+        """Switch between Rate+Duration and TimeTarget+Duration block entry."""
+        self._entry_mode = self._entry_mode_var.get()
+
+        if self._entry_mode == "TimeTarget":
+            self._start_temp_frame.pack(fill=tk.X, pady=2, before=self._table_frame)
+        else:
+            self._start_temp_frame.pack_forget()
+
+        self._build_table_for_mode()
+        self._refresh_table()
+        self._refresh_status()
+
+    def _on_start_temp_changed(self):
+        """Triggered when starting temp entry changes in TimeTarget mode."""
+        if getattr(self, '_entry_mode', 'Rate') == "TimeTarget":
+            self._recompute_timetarget_rates()
+            self._refresh_table()
+
+    def _recompute_timetarget_rates(self):
+        """
+        Walk all blocks in TimeTarget mode and set rate_k_per_min from the
+        target_temp_disp chain. Safe to call when in Rate mode — does nothing.
+        """
+        if getattr(self, '_entry_mode', 'Rate') != "TimeTarget":
+            return
+        try:
+            chain_temp = float(self._start_temp_var.get())
+        except (ValueError, TypeError, AttributeError):
+            chain_temp = 25.0
+
+        for block in self._blocks:
+            dur_min = block.get("duration_sec", 60.0) / 60.0
+            if block["type"] == "Ramp":
+                target = block.get("target_temp_disp", chain_temp)
+                if dur_min > 0:
+                    block["rate_k_per_min"] = (target - chain_temp) / dur_min
+                else:
+                    block["rate_k_per_min"] = 0.0
+                chain_temp = target
+            else:
+                # Hold block: target stays at current temp
+                block["target_temp_disp"] = chain_temp
+
+    def _open_timetarget_cell_editor(self, row_index, col_name, block, bbox):
+        """
+        Popup editor for Time+Target mode blocks.
+        Edits Type, Duration (min), and Target Temp.
+        Recomputes rate_k_per_min from the full chain after apply.
+        """
+        popup = tk.Toplevel(self._parent)
+        popup.title(f"Edit {col_name}")
+        popup.resizable(False, False)
+        popup.grab_set()
+
+        x = self._tree.winfo_rootx() + bbox[0]
+        y = self._tree.winfo_rooty() + bbox[1]
+        popup.geometry(f"+{x}+{y}")
+
+        ttk.Label(popup, text=f"{col_name}:").grid(row=0, column=0, padx=6, pady=6, sticky='w')
+        edit_var = tk.StringVar()
+
+        if col_name == 'Type':
+            widget = ttk.Combobox(
+                popup, textvariable=edit_var,
+                values=["Ramp", "Hold"], state='readonly', width=10
+            )
+            edit_var.set(block["type"])
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
+
+        elif col_name == 'Duration (min)':
+            edit_var.set(f"{block.get('duration_sec', 60.0) / 60.0:.2f}")
+            widget = ttk.Entry(popup, textvariable=edit_var, width=10)
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
+            widget.select_range(0, tk.END)
+            ttk.Label(popup, text="minutes", font=("Arial", 8)).grid(row=0, column=2, padx=2)
+
+        elif col_name == 'Target Temp':
+            current_target = block.get("target_temp_disp", "")
+            edit_var.set(str(current_target) if current_target != "" else "")
+            widget = ttk.Entry(popup, textvariable=edit_var, width=10)
+            widget.grid(row=0, column=1, padx=6, pady=6)
+            widget.focus_set()
+            widget.select_range(0, tk.END)
+            ttk.Label(popup, text="\u00b0C or K", font=("Arial", 8)).grid(row=0, column=2, padx=2)
+
+        else:
+            popup.destroy()
+            return
+
+        def _apply():
+            val_str = edit_var.get().strip()
+            if col_name == 'Type':
+                if val_str not in ("Ramp", "Hold"):
+                    messagebox.showerror("Invalid", "Type must be Ramp or Hold.", parent=popup)
+                    return
+                block["type"] = val_str
+
+            elif col_name == 'Duration (min)':
+                try:
+                    dur_min = float(val_str)
+                    if dur_min <= 0:
+                        raise ValueError
+                except ValueError:
+                    messagebox.showerror("Invalid", "Duration must be a positive number of minutes.", parent=popup)
+                    return
+                block["duration_sec"] = dur_min * 60.0
+
+            elif col_name == 'Target Temp':
+                try:
+                    target = float(val_str)
+                except ValueError:
+                    messagebox.showerror("Invalid", "Target temperature must be a number.", parent=popup)
+                    return
+                block["target_temp_disp"] = target
+
+            self._recompute_timetarget_rates()
+            self._refresh_table()
+            self._refresh_status()
+            popup.destroy()
+
+        btn_frame = ttk.Frame(popup)
+        btn_frame.grid(row=1, column=0, columnspan=3, pady=4)
+        ttk.Button(btn_frame, text="OK", command=_apply).pack(side=tk.LEFT, padx=4)
+        ttk.Button(btn_frame, text="Cancel", command=popup.destroy).pack(side=tk.LEFT, padx=4)
         popup.bind('<Return>', lambda e: _apply())
         popup.bind('<Escape>', lambda e: popup.destroy())
 
