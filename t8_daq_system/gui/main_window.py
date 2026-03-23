@@ -630,10 +630,6 @@ class MainWindow:
                 if self.connection.connect():
                     print("[DEFERRED] T8 connected successfully")
 
-                    # Force AIN 4 and 5 to single-ended mode on startup
-                    print("[DEFERRED] Configuring AIN 4 and 5 to single-ended...")
-                    self.connection.configure_ain_single_ended([4, 5])
-
                     # Create thermocouple reader now that we're connected
                     if self.tc_reader is None:
                         if self._initialize_hardware_readers():
@@ -1349,9 +1345,9 @@ class MainWindow:
             block_start_v = float(block["start_v"])
             block_end_v = float(block["end_v"]) if block["type"] == "Ramp" else block_start_v
 
-            print(f"[BLOCK DEBUG] Block #{blocks.index(block) + 1}")
-            print(f"  From table: Start V={block_start_v}, End V={block_end_v}")
-            print(f"  From table: Current A={block_current_a}")
+            # print(f"[BLOCK DEBUG] Block #{blocks.index(block) + 1}")
+            # print(f"  From table: Start V={block_start_v}, End V={block_end_v}")
+            # print(f"  From table: Current A={block_current_a}")
 
             target_v = block_end_v
             step = RampStep(
@@ -1383,6 +1379,7 @@ class MainWindow:
                 self.status_var.set("Program Complete")
             self.root.after(0, _update)
 
+        self.ramp_executor.power_supply = self.ps_controller
         self.ramp_executor.on_complete(_on_voltage_ramp_complete)
 
         if not self.ramp_executor.start():

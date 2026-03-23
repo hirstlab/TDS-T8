@@ -393,12 +393,6 @@ class RampExecutor:
                     step_obj = step_info[1]
                     time_into_step = step_info[2]
                     progress = time_into_step / step_obj.duration_sec if step_obj.duration_sec > 0 else 1.0
-                    print(
-                        f"[BLOCK DEBUG] Block #{step_idx + 1}"
-                        f"  Start A={self._profile.start_current if step_idx == 0 else '...'}"
-                        f"  End A={step_obj.target_current}"
-                        f"  Progress={progress:.4f}"
-                    )
 
             # Notify step change
             if self._current_step_index != last_step_index:
@@ -420,6 +414,7 @@ class RampExecutor:
                     else:
                         # Voltage mode: ramp voltage AND interpolate current per-block
                         # current_setpoint = start_a + (end_a - start_a) * progress
+                        # print(f"[RAMP WRITE] set_voltage({self._current_setpoint:.4f}V), set_current({current_setpoint:.4f}A), ps={self.power_supply}")
                         self.power_supply.set_voltage(self._current_setpoint)
                         self.power_supply.set_current(current_setpoint)
                 except Exception as e:
