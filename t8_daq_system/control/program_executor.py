@@ -49,6 +49,11 @@ class ProgramExecutor:
         self._run_log = []   # [(elapsed, setpoint_k, actual_k, voltage_v), ...]
         self._last_run_record = None
 
+        # QMS confirmation gate
+        self._confirmation_event = threading.Event()
+        self._waiting_for_confirmation = False
+        self.on_waiting_for_confirmation = None   # callback(block_index)
+
     def set_power_supply(self, ps):
         with self._lock:
             self._ps = ps
@@ -95,8 +100,13 @@ class ProgramExecutor:
             self._thread.start()
             return True
 
+    def confirm_and_continue(self):
+        """Release the QMS confirmation hold and continue to the next block."""
+        self._confirmation_event.set()
+
     def stop(self):
         self._running = False
+        self._confirmation_event.set()  # Release any waiting confirmation
         if self._thread:
             self._thread.join(timeout=2.0)
         
@@ -222,6 +232,22 @@ class ProgramExecutor:
 
                 if self._on_block_complete:
                     self._on_block_complete(self.current_block_index)
+
+                # QMS confirmation pause: if this StableHold has qms_trigger=True
+                # and the next block is a TempRamp, wait for user confirmation.
+                next_idx = self.current_block_index + 1
+                if (getattr(block, 'qms_trigger', False) and
+                        next_idx < len(self._blocks) and
+                        self._blocks[next_idx].block_type == "temp_ramp"):
+                    self._waiting_for_confirmation = True
+                    self._confirmation_event.clear()
+                    print(f"[ProgramExecutor] Waiting for QMS confirmation before block {next_idx}")
+                    if self.on_waiting_for_confirmation:
+                        self.on_waiting_for_confirmation(self.current_block_index)
+                    while self._running and not self._confirmation_event.is_set():
+                        self._confirmation_event.wait(timeout=0.5)
+                    self._waiting_for_confirmation = False
+                    print(f"[ProgramExecutor] QMS confirmation received, continuing")
 
                 self.current_block_index += 1
 

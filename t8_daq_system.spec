@@ -234,6 +234,15 @@ hiddenimports = [
     'encodings.ascii',
     'encodings.latin_1',
 
+    # pyautogui — used via lazy import in main_window.py and settings_dialog.py
+    # (getWindowsWithTitle, click, press, position). Must be explicit because
+    # PyInstaller cannot detect runtime imports inside function bodies.
+    'pyautogui',
+    'pygetwindow',       # Windows window management used by pyautogui.getWindowsWithTitle
+    'pyscreeze',         # Screenshot support required by pyautogui
+    'pymsgbox',          # Message box support required by pyautogui
+    'pytweening',        # Tweening/easing functions required by pyautogui
+
     # zeroconf removed — network service discovery is disabled in frozen mode
     # to prevent background network scanning that degrades performance.
     # 'zeroconf',

@@ -202,6 +202,21 @@ class ProgrammerPreviewPlot:
             self._ax_v.axvline(b_time / 60.0, color='gray', linewidth=0.8,
                                linestyle='--', alpha=0.6)
 
+        # ── QMS trigger markers (purple dash-dot line + label) ─────────────
+        for i, block in enumerate(blocks):
+            if (getattr(block, 'qms_trigger', False) and
+                    i + 1 < len(blocks) and
+                    blocks[i + 1].block_type == 'temp_ramp' and
+                    i + 1 < len(boundaries)):
+                qms_t_min = boundaries[i + 1] / 60.0
+                self._ax_v.axvline(qms_t_min, color='#9b59b6', linewidth=1.5,
+                                   linestyle='-.', alpha=0.85, zorder=4)
+                self._ax_v.text(
+                    qms_t_min, 0.97, ' QMS',
+                    transform=self._ax_v.get_xaxis_transform(),
+                    color='#9b59b6', fontsize=8, va='top', zorder=4
+                )
+
         total_min = t_min[-1] if len(t_min) > 0 else 0
         self.fig.suptitle(f'Temperature Preview  —  {total_min:.0f} min total',
                           fontsize=10, fontweight='bold')

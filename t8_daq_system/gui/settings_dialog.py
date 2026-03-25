@@ -64,6 +64,7 @@ class SettingsDialog(tk.Toplevel):
         self._build_scales_tab(notebook)
         self._build_paths_tab(notebook)
         self._build_power_programmer_tab(notebook)
+        self._build_qms_trigger_tab(notebook)
 
         self._build_button_frame()
 
@@ -118,6 +119,109 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(pid_frame, text="Note: History may override these if 3+ matching runs exist.",
                   font=('Arial', 8), foreground='gray').grid(
             row=5, column=0, columnspan=2, sticky='w', padx=5, pady=(2, 0))
+
+    def _build_qms_trigger_tab(self, notebook):
+        """Tab for QMS Auto-Click configuration."""
+        tab = ttk.Frame(notebook, padding=15)
+        notebook.add(tab, text="QMS Trigger")
+
+        ttk.Label(tab, text="QMS Auto-Click Configuration",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 10))
+
+        ttk.Label(
+            tab,
+            text=("When enabled, a confirmation button appears after a Stable Hold block\n"
+                  "that has 'Pause for QMS trigger' enabled. Clicking confirm will\n"
+                  "automatically click the configured location (e.g. QMS start button)."),
+            foreground='gray', font=('Arial', 9)
+        ).pack(anchor='w', pady=(0, 10))
+
+        # Enable toggle
+        enable_frame = ttk.LabelFrame(tab, text="Enable", padding=10)
+        enable_frame.pack(fill=tk.X, pady=5)
+        self._qms_auto_click_enabled_var = tk.BooleanVar()
+        ttk.Checkbutton(enable_frame,
+                        text="Enable QMS auto-click on confirmation",
+                        variable=self._qms_auto_click_enabled_var).pack(anchor='w')
+
+        # Coordinates
+        coord_frame = ttk.LabelFrame(tab, text="Click Location", padding=10)
+        coord_frame.pack(fill=tk.X, pady=5)
+
+        self._qms_click_x_var = tk.StringVar(value="0")
+        self._qms_click_y_var = tk.StringVar(value="0")
+
+        xy_row = ttk.Frame(coord_frame)
+        xy_row.pack(fill=tk.X, pady=4)
+        ttk.Label(xy_row, text="X:", width=4).pack(side=tk.LEFT)
+        ttk.Entry(xy_row, textvariable=self._qms_click_x_var, width=8).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(xy_row, text="Y:", width=4).pack(side=tk.LEFT)
+        ttk.Entry(xy_row, textvariable=self._qms_click_y_var, width=8).pack(side=tk.LEFT)
+
+        self._qms_capture_label = ttk.Label(coord_frame, text="", foreground='gray')
+        self._qms_capture_label.pack(anchor='w', pady=(4, 0))
+
+        btn_row = ttk.Frame(coord_frame)
+        btn_row.pack(fill=tk.X, pady=(8, 0))
+        self._qms_capture_btn = ttk.Button(btn_row, text="Capture Location (3s)",
+                                           command=self._start_qms_capture)
+        self._qms_capture_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_row, text="Test Click",
+                   command=self._test_qms_click).pack(side=tk.LEFT)
+
+        ttk.Label(coord_frame,
+                  text="Tip: Click 'Capture Location', then move mouse to the QMS start button\n"
+                       "on your QMS monitor and wait 3 seconds.",
+                  foreground='gray', font=('Arial', 8)).pack(anchor='w', pady=(6, 0))
+
+    def _start_qms_capture(self):
+        """Count down 3 seconds then capture mouse position."""
+        self._qms_capture_countdown = 3
+        self._qms_capture_btn.config(state='disabled')
+        self._qms_capture_label.config(text=f"Move mouse to target... {self._qms_capture_countdown}",
+                                        foreground='orange')
+        self._do_qms_capture_tick()
+
+    def _do_qms_capture_tick(self):
+        if self._qms_capture_countdown > 0:
+            self._qms_capture_label.config(
+                text=f"Move mouse to target... {self._qms_capture_countdown}")
+            self._qms_capture_countdown -= 1
+            self.after(1000, self._do_qms_capture_tick)
+        else:
+            try:
+                import pyautogui
+                x, y = pyautogui.position()
+                self._qms_click_x_var.set(str(x))
+                self._qms_click_y_var.set(str(y))
+                self._qms_capture_label.config(
+                    text=f"Captured: ({x}, {y})", foreground='green')
+            except ImportError:
+                self._qms_capture_label.config(
+                    text="pyautogui not installed. Run: pip install pyautogui",
+                    foreground='red')
+            except Exception as e:
+                self._qms_capture_label.config(text=f"Error: {e}", foreground='red')
+            self._qms_capture_btn.config(state='normal')
+
+    def _test_qms_click(self):
+        """Perform a test click at the configured coordinates."""
+        try:
+            import pyautogui
+            x = int(self._qms_click_x_var.get())
+            y = int(self._qms_click_y_var.get())
+            pyautogui.click(x, y)
+            self._qms_capture_label.config(text=f"Test click sent to ({x}, {y})",
+                                            foreground='green')
+        except ImportError:
+            messagebox.showerror("Missing Library",
+                                 "pyautogui not installed.\nRun: pip install pyautogui",
+                                 parent=self)
+        except ValueError:
+            messagebox.showerror("Invalid Coordinates",
+                                 "X and Y must be integers.", parent=self)
+        except Exception as e:
+            messagebox.showerror("Click Error", str(e), parent=self)
 
     def _build_sensor_tab(self, notebook):
         """Tab for sensor configuration."""
@@ -312,8 +416,12 @@ class SettingsDialog(tk.Toplevel):
         canvas.bind('<Configure>', _on_canvas_configure)
 
         def _on_mousewheel(event):
-            canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+            try:
+                canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
+            except tk.TclError:
+                pass
         canvas.bind_all('<MouseWheel>', _on_mousewheel)
+        canvas.bind('<Destroy>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
         # ── Global axis mode ─────────────────────────────────────────────
         self._abs_scale_var = tk.BooleanVar()
@@ -815,6 +923,11 @@ class SettingsDialog(tk.Toplevel):
         self._pid_windup_var.set(str(s.pid_windup_limit))
         self._pid_output_max_var.set(str(s.pid_output_max))
 
+        # QMS Auto-Click
+        self._qms_auto_click_enabled_var.set(s.qms_auto_click_enabled)
+        self._qms_click_x_var.set(str(s.qms_auto_click_x))
+        self._qms_click_y_var.set(str(s.qms_auto_click_y))
+
     def _save_settings_from_gui(self):
         """Internal helper to read all GUI vars and write to AppSettings."""
         s = self._settings
@@ -887,6 +1000,10 @@ class SettingsDialog(tk.Toplevel):
             s.pid_kd = float(self._pid_kd_var.get())
             s.pid_windup_limit = float(self._pid_windup_var.get())
             s.pid_output_max = float(self._pid_output_max_var.get())
+            # QMS Auto-Click
+            s.qms_auto_click_enabled = self._qms_auto_click_enabled_var.get()
+            s.qms_auto_click_x = int(self._qms_click_x_var.get())
+            s.qms_auto_click_y = int(self._qms_click_y_var.get())
         except ValueError as exc:
             messagebox.showerror("Invalid Value",
                                 f"Please check your entries:\n{exc}", parent=self)

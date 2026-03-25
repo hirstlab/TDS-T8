@@ -311,6 +311,11 @@ class ProgramPanel:
             widget.destroy()
         for i, block in enumerate(self._blocks):
             self._build_block_row(i, block)
+            # After a StableHold that is followed by a TempRamp, show QMS toggle
+            if (block.block_type == "stable_hold" and
+                    i + 1 < len(self._blocks) and
+                    self._blocks[i + 1].block_type == "temp_ramp"):
+                self._build_qms_trigger_row(i, block)
 
     def _build_block_row(self, i, block):
         unit = self._get_unit()
@@ -338,6 +343,33 @@ class ProgramPanel:
 
         ttk.Button(row, text="Edit", width=6, command=lambda idx=i: self._edit_block(idx)).pack(side=tk.RIGHT, padx=2)
         ttk.Button(row, text="Del", width=6, command=lambda idx=i: self._delete_block(idx)).pack(side=tk.RIGHT, padx=2)
+
+    def _build_qms_trigger_row(self, i, block):
+        """Add a QMS trigger toggle row between StableHold and the next TempRamp."""
+        row = ttk.Frame(self._scrollable_frame, padding=(0, 1, 5, 1))
+        row.pack(fill=tk.X, expand=True)
+
+        # Indent marker
+        ttk.Label(row, text="  \u21b3", width=4, foreground='#9b59b6').pack(side=tk.LEFT)
+
+        var = tk.BooleanVar(value=getattr(block, 'qms_trigger', False))
+
+        def _on_toggle(b=block, v=var):
+            b.qms_trigger = v.get()
+            if self._on_change:
+                self._on_change()
+
+        ttk.Checkbutton(
+            row,
+            text="Pause for QMS trigger before next ramp",
+            variable=var,
+            command=_on_toggle,
+        ).pack(side=tk.LEFT, padx=4)
+
+        # Show indicator if active
+        if getattr(block, 'qms_trigger', False):
+            ttk.Label(row, text="[QMS \u25b6]", foreground='#9b59b6',
+                      font=('Arial', 8, 'bold')).pack(side=tk.LEFT, padx=4)
 
     def _recompute_all_blocks(self):
         """Re-calculate rates for any 'TimeTarget' blocks in the chain."""

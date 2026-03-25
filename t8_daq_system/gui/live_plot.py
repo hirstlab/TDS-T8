@@ -364,8 +364,12 @@ class LivePlot:
             else:
                 plot_data = {}
 
-        ws = window_seconds if window_seconds is not None else self.WINDOW_SECONDS
-        self._render(timestamps, plot_data, ws, data_units)
+        # Show all data from the file: pass right_edge so the X axis spans the
+        # file's own time range rather than datetime.now() (which would put old
+        # CSV data outside the visible window entirely).
+        ws = window_seconds  # None = no time-window filtering, show all rows
+        right_edge = timestamps[-1] if timestamps else None
+        self._render(timestamps, plot_data, ws, data_units, right_edge=right_edge)
 
     def set_absolute_scales(self, enabled=True, temp_range=None, press_range=None,
                             ps_v_range=None, ps_i_range=None):

@@ -92,6 +92,10 @@ _DEFAULTS = {
     "pid_kd":               ("float", 0.010),
     "pid_windup_limit":     ("float", 30.0),
     "pid_output_max":       ("float", 1.5),
+    # ── QMS Auto-Click settings ───────────────────────────────────────────
+    "qms_auto_click_enabled": ("bool", False),
+    "qms_auto_click_x":       ("int",  0),
+    "qms_auto_click_y":       ("int",  0),
 }
 
 
@@ -181,6 +185,10 @@ class AppSettings:
         self.pid_kd: float = 0.010
         self.pid_windup_limit: float = 30.0
         self.pid_output_max: float = 1.5
+        # QMS Auto-Click
+        self.qms_auto_click_enabled: bool = False
+        self.qms_auto_click_x: int = 0
+        self.qms_auto_click_y: int = 0
 
     # ──────────────────────────────────────────────────────────────────────────
     # Public API

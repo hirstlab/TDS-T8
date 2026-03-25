@@ -25,6 +25,7 @@ class StableHoldBlock:
     target_temp_k: float
     tolerance_k: float
     hold_duration_sec: float
+    qms_trigger: bool = False
     block_type: str = "stable_hold"
 
     def to_dict(self):

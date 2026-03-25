@@ -285,7 +285,9 @@ class MainWindow:
             on_program_complete=self._on_program_complete,
             on_status=self._on_program_status
         )
+        self._program_executor.on_waiting_for_confirmation = self._on_waiting_for_qms_confirmation
         self._program_panel = None
+        self._qms_confirm_frame = None   # Created/destroyed with programmer panel
 
         profiler.checkpoint("Creating SafetyMonitor...")
         self.safety_monitor = SafetyMonitor(auto_shutoff=True)
@@ -349,6 +351,8 @@ class MainWindow:
         self._practice_banner = None  # tk.Frame shown in practice mode
         self._loaded_data = None
         self._loaded_data_units = {'temp': 'C', 'press': 'PSI'}
+        self._loaded_tc_names = []
+        self._loaded_press_names = []
         self._programmer_mode_active = False
         self._programmer_ramp_running = False
         self._programmer_preview_data = ([], [], [])
@@ -1098,6 +1102,12 @@ class MainWindow:
         if self._programmer_blocks:
             self._programmer_panel.load_blocks(self._programmer_blocks)
 
+        # QMS confirmation frame (hidden; shown when executor pauses for QMS trigger)
+        self._qms_confirm_frame = ttk.LabelFrame(
+            self._programmer_panel_frame, text=" \u25b6 QMS Trigger Required "
+        )
+        # Not packed yet — shown by _on_waiting_for_qms_confirmation
+
         # Build manual nudge sub-panel
         self._reposition_nudge_panel()
 
@@ -1133,6 +1143,7 @@ class MainWindow:
         # (Otherwise keep whatever was already in self._programmer_blocks)
 
         # Destroy programmer UI
+        self._qms_confirm_frame = None   # Will be destroyed with _programmer_panel_frame
         if self._programmer_panel_frame:
             self._programmer_panel_frame.destroy()
             self._programmer_panel_frame = None
@@ -1191,6 +1202,69 @@ class MainWindow:
             if self._programmer_preview_plot is not None:
                 self._programmer_preview_plot.clear_progress_dot()
         self.root.after(0, _gui_update)
+
+    def _on_waiting_for_qms_confirmation(self, block_index):
+        """Called from executor thread when a QMS-triggered StableHold completes."""
+        def _show_banner():
+            frame = getattr(self, '_qms_confirm_frame', None)
+            if frame is None or not frame.winfo_exists():
+                return
+            # Clear any old content
+            for w in frame.winfo_children():
+                w.destroy()
+            ttk.Label(
+                frame,
+                text="Stable Hold complete — click to start QMS recording and continue to next ramp.",
+                font=('Arial', 10, 'bold'), foreground='#9b59b6'
+            ).pack(side=tk.LEFT, padx=8, pady=6, expand=True)
+            ttk.Button(
+                frame,
+                text="\u25b6  Start QMS + Continue Ramp",
+                command=self._on_qms_confirmation_click
+            ).pack(side=tk.RIGHT, padx=8, pady=6)
+            frame.pack(fill=tk.X, padx=4, pady=4)
+        self.root.after(0, _show_banner)
+
+    def _on_qms_confirmation_click(self):
+        """User clicked the QMS confirmation button."""
+        import datetime
+
+        # 1. Perform auto-click if enabled
+        settings = getattr(self, '_app_settings', None)
+        if settings and getattr(settings, 'qms_auto_click_enabled', False):
+            try:
+                import pyautogui
+                x = int(settings.qms_auto_click_x)
+                y = int(settings.qms_auto_click_y)
+                pyautogui.click(x, y)
+            except ImportError:
+                from tkinter import messagebox
+                messagebox.showerror(
+                    "Missing Library",
+                    "pyautogui is not installed. Run: pip install pyautogui\n"
+                    "Continuing without auto-click."
+                )
+            except Exception as e:
+                from tkinter import messagebox
+                messagebox.showwarning("Auto-Click Error",
+                                       f"Click failed: {e}\nContinuing anyway.")
+
+        # 2. Log QMS_TRIGGER event
+        ts = datetime.datetime.now().isoformat()
+        if hasattr(self, 'logger') and self.logger is not None:
+            if self.logger.is_logging():
+                self.logger.log_event("QMS_TRIGGER", ts)
+
+        # 3. Hide confirmation banner
+        frame = getattr(self, '_qms_confirm_frame', None)
+        if frame is not None and frame.winfo_exists():
+            frame.pack_forget()
+
+        # 4. Release executor
+        if self._program_executor:
+            self._program_executor.confirm_and_continue()
+
+        self.status_var.set("QMS triggered — ramp continuing")
 
     def _show_pid_run_summary(self):
         """Show a post-run PID performance summary and offer to update settings gains."""
@@ -1430,14 +1504,16 @@ class MainWindow:
                      if g.get('enabled', True)]
 
         if self._viewing_historical and self._loaded_data:
+            _hist_tc = self._loaded_tc_names or tc_names
+            _hist_press = self._loaded_press_names or frg_names
             if hasattr(self, 'plot_tc'):
                 self.plot_tc.update_from_loaded_data(
-                    self._loaded_data, tc_names,
+                    self._loaded_data, _hist_tc,
                     data_units=self._loaded_data_units
                 )
             if hasattr(self, 'plot_pressure'):
                 self.plot_pressure.update_from_loaded_data(
-                    self._loaded_data, frg_names,
+                    self._loaded_data, _hist_press,
                     data_units=self._loaded_data_units
                 )
             if hasattr(self, 'plot_ps'):
@@ -1457,7 +1533,7 @@ class MainWindow:
                 for name, value in last_readings.items():
                     if value is None:
                         display_last[name] = None
-                    elif name in self._tc_names:
+                    elif name in _hist_tc:
                         display_last[name] = convert_temperature(value, source_t_unit, t_unit)
                     else:
                         display_last[name] = value
@@ -1488,10 +1564,29 @@ class MainWindow:
             self._loaded_data = data
             self._viewing_historical = True
 
+            # Derive which columns are TCs vs pressure from the file itself so that
+            # old-format files (TC_1/P_1) and new-format files (1/2/FRG702_T1) both work.
+            all_names = [n for n in data if n != 'timestamps']
+            sensors_meta = metadata.get('sensors', []) if metadata else []
+            tc_count = metadata.get('tc_count', 0) if metadata else 0
+            frg_count = metadata.get('frg702_count', metadata.get('p_count', 0)) if metadata else 0
+
+            if sensors_meta and tc_count:
+                self._loaded_tc_names = [n for n in sensors_meta[:tc_count] if n in all_names]
+            else:
+                self._loaded_tc_names = [n for n in all_names if n.upper().startswith('TC')]
+
+            if sensors_meta and frg_count and tc_count:
+                self._loaded_press_names = [n for n in sensors_meta[tc_count:tc_count + frg_count]
+                                            if n in all_names]
+            else:
+                self._loaded_press_names = [n for n in all_names
+                                            if n.startswith('FRG702_') or n.startswith('P_')]
+
             if metadata:
                 self._loaded_data_units = {
                     'temp': metadata.get('tc_unit', 'C'),
-                    'press': metadata.get('p_unit', 'PSI')
+                    'press': metadata.get('p_unit') or metadata.get('frg702_unit', 'mbar')
                 }
                 # Sync internal vars for display-unit conversions; settings are not
                 # modified so the live config is preserved after returning to live view.
@@ -1501,10 +1596,11 @@ class MainWindow:
                     self.frg_count_var.set(str(metadata['frg702_count']))
                 if 'tc_unit' in metadata:
                     self.t_unit_var.set(metadata['tc_unit'])
-                if 'p_unit' in metadata:
-                    self.p_unit_var.set(metadata['p_unit'])
+                _press_unit = metadata.get('p_unit') or metadata.get('frg702_unit')
+                if _press_unit:
+                    self.p_unit_var.set(_press_unit)
                     if hasattr(self, 'sensor_panel'):
-                        self.sensor_panel.update_global_pressure_unit(metadata['p_unit'])
+                        self.sensor_panel.update_global_pressure_unit(_press_unit)
                 if 'sample_rate_ms' in metadata:
                     self.sample_rate_var.set(f"{metadata['sample_rate_ms']}ms")
 
@@ -1525,7 +1621,7 @@ class MainWindow:
                     if value is None:
                         display_last[name] = None
                         continue
-                    if name in self._tc_names:
+                    if name in self._loaded_tc_names:
                         display_last[name] = convert_temperature(value, source_t_unit, t_unit)
                     else:
                         display_last[name] = value
@@ -1551,6 +1647,8 @@ class MainWindow:
     def _return_to_live(self):
         self._viewing_historical = False
         self._loaded_data = None
+        self._loaded_tc_names = []
+        self._loaded_press_names = []
         self.historical_label.pack_forget()
 
         if hasattr(self, 'return_live_btn'):
