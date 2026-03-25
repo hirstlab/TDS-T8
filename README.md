@@ -1,341 +1,82 @@
-# LabJack T8 Data Acquisition System
+# TDS-T8 — Thermal Desorption Spectroscopy DAQ & Control System
 
-A Python-based data acquisition system for the LabJack T8, designed for real-time thermocouple and pressure gauge monitoring with live visualization and CSV data logging.
-
-## Features
-
-- **Always-On Acquisition** - Data collection starts automatically on hardware connection; no manual Start/Stop required
-- **Real-time Thermocouple Readings** - Support for Type B, E, J, K, N, R, S, T, and C thermocouples
-- **FRG-702 Vacuum Gauge Support** - Digital pressure readings via XGS-600 RS-232 controller
-- **Live Plotting** - Real-time matplotlib graphs with dual-mode timeline history slider
-- **Logging Resets Graphs** - Clicking "Start Logging" clears all graphs so each recording starts fresh
-- **CSV Data Logging** - Timestamped data export with session metadata
-- **JSON Configuration** - Easy sensor setup without code changes
-- **Practice Mode** - Simulate all sensors without hardware for testing and training
-- **Power Programmer** - Automated voltage/current ramp profiles for the Keysight N5761A
+A Python-based data acquisition and power-supply control application for **Thermal Desorption Spectroscopy (TDS)** experiments. The system resistively heats tungsten specimens via a **Keysight N5700 power supply** (6 V / 180 A), reads thermocouple temperatures and vacuum pressures, and executes programmed power ramps or closed-loop PID temperature ramps.
 
 ---
 
-## Hardware Requirements
+## Table of Contents
 
-| Component | Description                                |
-|-----------|--------------------------------------------|
-| **LabJack T8** | USB or Ethernet connected DAQ device       |
-| **Thermocouples** | Type K, J, T, B, E, N, R, S, and C sensors |
-| **XGS-600 Controller** | Agilent/Varian RS-232 vacuum gauge controller |
-| **FRG-702 Gauge** | Leybold FRG-702 full-range Pirani/Cold Cathode gauge |
-| **Keysight N5761A** | Optional: 6V/180A power supply (analog control via T8) |
-
----
-
-## Quick Start
-
-### 1. Install LabJack LJM Driver
-
-Download and install from: https://labjack.com/support/software/installers/ljm
-
-### 2. Clone and Install
-
-```bash
-git clone <repository-url>
-cd TDS-T8
-.venv\Scripts\activate        # Windows Command Prompt
-# OR
-.\.venv\Scripts\Activate.ps1  # Windows PowerShell
-
-pip install -r requirements.txt
-```
-
-### 3. Configure Sensors
-
-Edit `t8_daq_system/config/sensor_config.json` to match your hardware setup.
-
-### 4. Run the Application
-
-```bash
-python t8_daq_system/main.py
-```
-
-**Acquisition starts automatically** once the LabJack T8 connects. There is no Start button.
+1. [Hardware Overview](#hardware-overview)
+2. [Critical Physics — Why CV-Only for Tungsten](#critical-physics--why-cv-only-for-tungsten)
+3. [Software Architecture](#software-architecture)
+4. [Project Structure](#project-structure)
+5. [Key Files Quick Reference](#key-files-quick-reference)
+6. [Sensor Naming Convention](#sensor-naming-convention)
+7. [Control Modes](#control-modes)
+8. [Practice Mode](#practice-mode)
+9. [Safety System](#safety-system)
+10. [Hardware Wiring Reference](#hardware-wiring-reference)
+11. [Known Hardware Issues & Status](#known-hardware-issues--status)
+12. [Installation & Running](#installation--running)
+13. [Building a Standalone Executable](#building-a-standalone-executable)
+14. [Running Tests](#running-tests)
+15. [Resources](#resources)
+16. [License](#license)
 
 ---
 
-## User Interface
+## Hardware Overview
 
-```
-┌──────────────────────────────────────────────────────────────────────────────┐
-│  T8 DAQ System with Power Supply Control                        [—] [□] [×]  │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  [ Start Logging ]  [ Load CSV ]  [ Practice Mode: OFF ]  [ Settings ]  ...  │
-│                                                      Status: Running          │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐                     │
-│  │  TC_1    │  │  TC_2    │  │FRG702_1  │  │ PS Volts │                     │
-│  │ 25.3 °C  │  │ 28.1 °C  │  │ 1.5e-6   │  │  4.2 V   │                     │
-│  └──────────┘  └──────────┘  └──────────┘  └──────────┘                     │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  [TC Plot]            [Pressure Plot]         [Power Supply Plot]            │
-├──────────────────────────────────────────────────────────────────────────────┤
-│  Safety: ● OK  | Max Temp: 2200°C  | [ History % ] [════════════════▶] LIVE │
-└──────────────────────────────────────────────────────────────────────────────┘
-```
-
-### Control Buttons
-
-| Button | Function |
-|--------|----------|
-| **Start Logging** | Begin CSV recording. **Clears all graphs** and the data buffer first so each recording starts from zero. |
-| **Stop Logging** | End CSV recording and close the log file. |
-| **Load CSV** | View a previously saved log file in the plots. |
-| **Practice Mode** | Toggle simulated data mode. Acquisition starts automatically. |
-| **Settings** | Configure sensor count, units, sample rate, and display options. |
-| **Power Programmer** | Open automated voltage/current ramp profile editor. |
-
-### Timeline History Slider
-
-Located in the bottom safety bar, the slider lets you browse historical data:
-
-| Slider Position | Behaviour |
-|-----------------|-----------|
-| Far right (≥ 98%) | **LIVE** — plots auto-advance to show the most recent data |
-| Pulled left | **FROZEN** — plots show a historical position you choose |
-
-**Mode toggle button** (left of the slider):
-
-| Mode | Description |
-|------|-------------|
-| **History %** | Shows ALL data from the session start up to the slider position. Pull left to see the full recording zoomed out. |
-| **2-min Window** | Always shows exactly a 2-minute viewport. Slider scrubs through the timeline keeping the 2-min window. |
+| Device | Role | Interface |
+|--------|------|-----------|
+| **LabJack T8** | DAQ — reads thermocouples (AIN EF), monitors power supply (AIN), drives analog control signals (DAC) | USB (LJM library) |
+| **Keysight N5700** | DC power supply — 6 V / 180 A max — resistively heats specimen | Analog DB25 J1 connector via Phoenix Contact SUBCON-25 breakout board |
+| **Agilent XGS-600** | Vacuum gauge controller — reads FRG-702 pressure gauges | RS-232, COM4, OIKWAN FTDI USB-to-serial (straight-wired male DB9) |
+| **Leybold FRG-702** | Full-range (Pirani + cold cathode) vacuum gauges | Connected to XGS-600 |
+| **Thermocouples** | Temperature measurement — types K, J, T, E, R, S, B, N, C supported | T8 differential AIN channels via EF (extended feature) registers |
 
 ---
 
-## Wiring Diagrams
+## Critical Physics — Why CV-Only for Tungsten
 
-### Thermocouple Wiring (Differential Input)
+Tungsten has a **~17× cold-to-hot resistance ratio** (strong positive Temperature Coefficient of Resistance). This means:
 
-```
-                    ┌────────────────────────────────┐
-                    │         LabJack T8             │
-                    │                                │
-    ┌──────┐        │   AIN0+ ●──────────┐          │
-    │ Type │        │                    │          │
-    │  K   │ (+)────┼───────────────────►│          │
-    │  TC  │        │                    │          │
-    │      │ (-)────┼───────────────────►│          │
-    └──────┘        │   AIN0- ●──────────┘          │
-                    │                                │
-                    │   (Built-in Cold Junction      │
-                    │    Compensation)               │
-                    └────────────────────────────────┘
+- If you ramp **current** at constant voltage you will immediately overcurrent a cold specimen.
+- The correct strategy is always **Constant Voltage (CV) mode**: ramp `DAC0` (voltage setpoint) slowly while keeping `DAC1` (current ceiling) pinned at full scale (5 V → 180 A).
+- As tungsten heats, resistance rises naturally, causing current to self-limit — this is the "docile" positive-TCR control characteristic.
 
-    Channel Mapping:
-    ┌─────────┬─────────┬─────────┐
-    │ Channel │ AIN+    │ AIN-    │
-    ├─────────┼─────────┼─────────┤
-    │    0    │ AIN0+   │ AIN0-   │
-    │    1    │ AIN1+   │ AIN1-   │
-    │    2    │ AIN2+   │ AIN2-   │
-    │    3    │ AIN3+   │ AIN3-   │
-    └─────────┴─────────┴─────────┘
-```
-
-### FRG-702 via XGS-600 (RS-232 Digital)
-
-```
-    ┌─────────────────┐   RS-232    ┌──────────────────┐
-    │   Leybold       │◄───────────►│   Agilent        │
-    │   FRG-702       │             │   XGS-600        │
-    │   Gauge         │             │   Controller     │
-    └─────────────────┘             └─────────┬────────┘
-                                              │ USB-to-Serial
-                                              ▼
-                                        Windows COM port
-                                        (e.g. COM4)
-```
+**This is the most important design constraint in the entire system. Never independently ramp current for a tungsten specimen.**
 
 ---
 
-## Usage Workflow
-
-1. **Connect hardware** — LabJack T8 via USB and XGS-600 via RS-232
-2. **Launch the app** — `python t8_daq_system/main.py`
-3. **Acquisition starts automatically** — status bar shows "Running"
-4. **Click "Start Logging"** — enter a filename, graphs reset and CSV recording begins
-5. **Click "Stop Logging"** — recording ends, file is saved to `t8_daq_system/logs/`
-6. **Close the window** — acquisition stops cleanly
-
-### Practice Mode Workflow
-
-1. Click **Practice Mode: OFF** → it becomes **Practice Mode: ON**
-2. Simulated sensor data streams immediately — no hardware needed
-3. All features (logging, ramps, graphs) work identically to live mode
-4. Click again to exit practice mode
-
----
-
-## Sensor Configuration
-
-### Configuration File Location
+## Software Architecture
 
 ```
-t8_daq_system/config/sensor_config.json
+┌──────────────────────────────────────────────────────────┐
+│                     main_window.py                       │
+│    (Tkinter GUI — orchestrates all subsystems)           │
+└────────┬─────────────┬──────────────┬────────────────────┘
+         │             │              │
+    ┌────▼────┐  ┌─────▼─────┐  ┌────▼──────────────────┐
+    │ hardware│  │  control  │  │      data / core       │
+    │ layer   │  │  layer    │  │      layer             │
+    └────┬────┘  └─────┬─────┘  └────┬───────────────────┘
+         │             │              │
+  LabJack T8      ProgramExecutor  DataAcquisition
+  Keysight N5700  PIDController    DataBuffer
+  XGS-600         SafetyMonitor    DataLogger
+  FRG-702 gauges  RampExecutor
+  Thermocouples
 ```
 
-Settings are also stored in the app via **Settings dialog** (backed by Windows Registry / JSON file).
+**Data flow during a live run:**
 
-### Thermocouple Configuration
-
-```json
-{
-    "name": "TC_1",
-    "channel": 0,
-    "type": "K",
-    "units": "C",
-    "enabled": true
-}
-```
-
-| Field | Values | Description |
-|-------|--------|-------------|
-| `name` | string | Unique sensor identifier (must start with `TC_`) |
-| `channel` | 0–3 | T8 differential input channel pair |
-| `type` | B, E, J, K, N, R, S, T, C | Thermocouple type |
-| `units` | K, C, F | Temperature unit |
-| `enabled` | true/false | Enable/disable sensor |
-
-### FRG-702 Gauge Configuration
-
-```json
-{
-    "name": "FRG702_Chamber",
-    "sensor_code": "T1",
-    "units": "mbar",
-    "enabled": true
-}
-```
-
-| Field | Values | Description |
-|-------|--------|-------------|
-| `name` | string | Unique sensor identifier (must start with `FRG702_`) |
-| `sensor_code` | T1–T4 | XGS-600 convection gauge slot code |
-| `units` | mbar, Torr, Pa | Display unit |
-| `enabled` | true/false | Enable/disable sensor |
-
-### Complete Configuration Example
-
-```json
-{
-    "device": {
-        "type": "T8",
-        "connection": "USB",
-        "identifier": "ANY"
-    },
-    "thermocouples": [
-        {"name": "TC_1", "channel": 0, "type": "C", "units": "C", "enabled": true},
-        {"name": "TC_2", "channel": 1, "type": "C", "units": "C", "enabled": true}
-    ],
-    "frg702_gauges": [
-        {"name": "FRG702_Chamber", "sensor_code": "T1", "units": "mbar", "enabled": true}
-    ],
-    "xgs600": {
-        "enabled": true,
-        "port": "COM4",
-        "baudrate": 9600
-    },
-    "logging": {
-        "interval_ms": 1000,
-        "file_prefix": "data_log",
-        "auto_start": false
-    }
-}
-```
-
----
-
-## Troubleshooting
-
-| Problem | Possible Cause | Solution |
-|---------|----------------|----------|
-| "Device not found" | LJM driver not installed | Install LJM from labjack.com |
-| "Device not found" | T8 not connected | Check USB cable connection |
-| Temperature shows `-9999` | Thermocouple disconnected | Check wiring at AIN+/AIN- terminals |
-| Pressure reads `None` | XGS-600 not connected | Check RS-232 cable and COM port setting |
-| Pressure reads `None` | Wrong COM port | Update `xgs600.port` in sensor_config.json |
-| No data logging | Permission denied | Check write permissions on `logs/` folder |
-| GUI not updating | Thread crashed | Check console for error messages |
-| Import error | Missing packages | Run `pip install -r requirements.txt` |
-| App won't start | Wrong Python environment | Activate `.venv` first |
-
----
-
-## Running Unit Tests
-
-The project has a comprehensive test suite that runs **without any hardware connected** and **without a display**. All hardware dependencies are automatically mocked by `tests/conftest.py`.
-
-### Environment Setup
-
-```bash
-# Activate the virtual environment first
-.venv\Scripts\activate              # Command Prompt
-.\.venv\Scripts\Activate.ps1        # PowerShell
-```
-
-### Run Tests
-
-```bash
-# Run all tests (from project root TDS-T8/)
-.venv\Scripts\pytest
-
-# With verbose output
-.venv\Scripts\pytest -v
-
-# Run a specific test file
-.venv\Scripts\pytest tests/test_data_buffer.py
-
-# Run tests matching a keyword
-.venv\Scripts\pytest -k "ramp"
-
-# Stop on first failure
-.venv\Scripts\pytest -x
-```
-
-### Test Structure
-
-| Test File | What It Tests |
-|-----------|---------------|
-| `test_data_buffer.py` | Circular data buffer operations |
-| `test_data_logger.py` | CSV file logging |
-| `test_data_logger_extended.py` | Extended CSV logging (metadata, multi-sensor) |
-| `test_dialogs.py` | GUI dialog logic (filename sanitization, file discovery) |
-| `test_frg702_reader.py` | FRG-702 pressure conversion and XGS-600 integration |
-| `test_hardware.py` | LabJack connection and thermocouple batch reads |
-| `test_helpers.py` | Utility functions (temperature conversion, formatting) |
-| `test_integration.py` | MainWindow instantiation and auto-acquisition |
-| `test_live_plot.py` | Real-time plot axes, slider modes, and data loading |
-| `test_power_supply.py` | Keysight N5761A connection and SCPI commands |
-| `test_ramp_executor.py` | Ramp profile execution engine |
-| `test_ramp_profile.py` | Ramp step/profile definitions and validation |
-| `test_safety_monitor.py` | Temperature limits, emergency shutdown, interlocks |
-
-### How Mocking Works
-
-`tests/conftest.py` automatically mocks before any tests run:
-
-- **`labjack.ljm`** — LabJack hardware driver
-- **`pyvisa`** — VISA instrument communication
-- **`serial`** — RS-232 communication (XGS-600)
-- **`tkinter`** — GUI framework (no display needed)
-- **`matplotlib`** — Plotting library (no rendering needed)
-
----
-
-## Sensor Naming Convention
-
-| Prefix | Meaning | Example |
-|--------|---------|---------|
-| `TC_` | Thermocouple temperature | `TC_1`, `TC_2` |
-| `FRG702_` | FRG-702 vacuum pressure gauge | `FRG702_Chamber` |
-| `PS_` | Power supply reading | `PS_Voltage`, `PS_Current` |
+1. `DataAcquisition` runs in a background thread, calling `read_all_sensors()` on every tick.
+2. Readings are handed back to `main_window` via an `on_new_data` callback (always marshalled to the GUI thread via `root.after()`).
+3. `DataBuffer` holds the rolling in-memory time series; `DataLogger` writes CSV.
+4. `LivePlot` pulls from `DataBuffer` and redraws the matplotlib canvas.
+5. `ProgramExecutor` / `PIDController` sit in their own thread, writing DAC setpoints to the Keysight via `KeysightAnalogController`.
+6. `SafetyMonitor` checks every reading for over-temperature and triggers an emergency shutdown callback if limits are exceeded.
 
 ---
 
@@ -343,12 +84,15 @@ The project has a comprehensive test suite that runs **without any hardware conn
 
 ```
 TDS-T8/
-├── README.md                      # This file
-├── repo.md                        # Machine-readable project reference
-├── pytest.ini                     # Pytest configuration
-├── requirements.txt               # Python dependencies
-├── tests/                         # Unit test suite
-│   ├── conftest.py                # Shared mocks (labjack, pyvisa, serial, tkinter, matplotlib)
+├── README.md                       # This file
+├── AGENTS.md                       # Coding-agent instructions
+├── repo.md                         # Machine-readable project reference
+├── pytest.ini                      # Pytest configuration
+├── requirements.txt                # Python dependencies
+├── t8_daq_system.spec              # PyInstaller build spec
+├── LICENSE
+├── tests/                          # Unit test suite
+│   ├── conftest.py                 # Shared mocks (LJM, PyVISA, serial, tkinter, matplotlib)
 │   ├── test_data_buffer.py
 │   ├── test_data_logger.py
 │   ├── test_data_logger_extended.py
@@ -363,54 +107,240 @@ TDS-T8/
 │   ├── test_ramp_profile.py
 │   └── test_safety_monitor.py
 └── t8_daq_system/
-    ├── main.py                    # Application entry point
+    ├── main.py                     # Application entry point
     ├── config/
-    │   └── sensor_config.json     # Sensor definitions
-    ├── hardware/                  # Device communication
-    │   ├── labjack_connection.py  # LabJack T8 connection manager
-    │   ├── thermocouple_reader.py # Thermocouple reading via T8 EF registers
-    │   ├── xgs600_controller.py   # XGS-600 RS-232 vacuum gauge controller
-    │   ├── frg702_reader.py       # FRG-702 pressure reading (digital via XGS-600)
-    │   ├── keysight_connection.py # Keysight N5761A connection
-    │   └── keysight_analog_controller.py  # Analog V/I control via T8 DAC
-    ├── data/                      # Data handling
-    │   ├── data_buffer.py         # In-memory circular buffer
-    │   └── data_logger.py         # CSV file logging
-    ├── control/                   # Control logic
-    │   ├── ramp_profile.py        # Ramp step/profile definitions
-    │   ├── ramp_executor.py       # Ramp profile execution engine
-    │   └── safety_monitor.py      # Temperature limits & emergency shutdown
+    │   └── sensor_config.json      # Default sensor definitions
+    ├── hardware/                   # Device communication layer
+    │   ├── labjack_connection.py   # LabJack T8 USB connection manager
+    │   ├── thermocouple_reader.py  # TC reading via T8 AIN extended-feature registers
+    │   ├── xgs600_controller.py    # XGS-600 RS-232 protocol driver
+    │   ├── frg702_reader.py        # FRG-702 pressure reading via XGS-600
+    │   ├── keysight_connection.py  # Keysight connection (legacy VISA path)
+    │   └── keysight_analog_controller.py  # Analog V/I control via T8 DAC/AIN
+    ├── data/                       # Data handling
+    │   ├── data_buffer.py          # In-memory rolling circular buffer
+    │   └── data_logger.py          # CSV file writer with metadata header
+    ├── control/                    # Control logic (no GUI imports)
+    │   ├── ramp_profile.py         # RampProfile / RampStep data classes
+    │   ├── ramp_executor.py        # Voltage ramp profile execution engine
+    │   ├── safety_monitor.py       # Over-temperature watchdog & emergency shutdown
+    │   ├── temp_ramp_pid.py        # PIDController + PIDRunLogger (JSON history)
+    │   └── program_executor.py     # Unified block-based execution (V-ramp + TempRamp)
     ├── core/
-    │   └── data_acquisition.py    # Multi-threaded acquisition loop
-    ├── gui/                       # User interface
-    │   ├── main_window.py         # Main window & orchestration
-    │   ├── live_plot.py           # Real-time matplotlib graphs + slider
-    │   ├── sensor_panel.py        # Numeric sensor display tiles
-    │   ├── power_supply_panel.py  # Power supply status display
-    │   ├── ramp_panel.py          # Ramp profile execution panel
-    │   ├── power_programmer_panel.py  # Power programmer UI
-    │   ├── preflight_dialog.py    # Pre-run checklist dialog
-    │   ├── settings_dialog.py     # App settings dialog
-    │   ├── pinout_display.py      # T8 pinout visualization
-    │   └── dialogs.py             # File load / logging dialogs
+    │   └── data_acquisition.py     # Multi-threaded sensor polling loop
+    ├── gui/                        # Tkinter user interface
+    │   ├── main_window.py          # Main window — layout, callbacks, orchestration
+    │   ├── live_plot.py            # Real-time matplotlib graphs with timeline slider
+    │   ├── sensor_panel.py         # Numeric sensor readout tiles
+    │   ├── power_supply_panel.py   # Power supply status display
+    │   ├── ramp_panel.py           # Basic ramp profile panel
+    │   ├── power_programmer_panel.py  # Block-based power/temp programmer UI
+    │   ├── preflight_dialog.py     # Pre-run hardware checklist dialog
+    │   ├── settings_dialog.py      # App settings dialog (sensors, ports, units)
+    │   ├── pinout_display.py       # Live T8 pin-assignment & wiring diagram viewer
+    │   └── dialogs.py              # CSV file-load and logging dialogs
     ├── settings/
-    │   └── app_settings.py        # Persistent app settings (Registry/JSON)
-    ├── utils/
-    │   └── helpers.py             # Temperature/pressure unit conversion
-    └── logs/                      # CSV output files (auto-created)
+    │   └── app_settings.py         # Persistent settings (Windows Registry / JSON)
+    └── utils/
+        └── helpers.py              # Temperature & pressure unit conversion utilities
 ```
+
+---
+
+## Key Files Quick Reference
+
+| File | What it does |
+|------|-------------|
+| `keysight_analog_controller.py` | All Keysight control: set voltage (`DAC0`), current ceiling (`DAC1`), enable/disable output (`FIO1`), read back V and I via `AIN4`/`AIN5`. Contains SW1 dip-switch documentation. |
+| `temp_ramp_pid.py` | `PIDController` class (anti-windup, derivative-on-measurement) + `PIDRunLogger` (saves run metrics to `logs/pid_runs.json` with auto-generated tuning suggestions). |
+| `program_executor.py` | `ProgramExecutor` — runs lists of blocks (Voltage Ramp, Stable Hold, Temperature Ramp) in a background thread. Provides soft-start (Phase 1) before handing off to PID. |
+| `data_acquisition.py` | `DataAcquisition` — the main polling loop. Reads TCs, pressure gauges, and power supply in one pass; feeds `SafetyMonitor`; fires `on_new_data` callback. |
+| `safety_monitor.py` | `SafetyMonitor` — registers per-sensor temperature limits; triggers warning → limit-exceeded → emergency-shutdown callback chain; supports controlled ramp-down before hard cut. |
+| `app_settings.py` | Persists all user settings to the Windows Registry under `HKCU\Software\T8_DAQ_System`. Survives restarts. |
+| `data_logger.py` | Writes timestamped CSV with a metadata header block; supports `load_csv_with_metadata()` for post-run replay. |
+| `main_window.py` | Central orchestrator — builds all hardware objects, wires callbacks, manages run/stop/log state, and routes GUI events. ~2 000 lines. |
+| `pinout_display.py` | Floating window showing live T8 pin assignments, raw voltages, and a wiring diagram canvas. Useful for hardware bring-up verification. |
+
+---
+
+## Sensor Naming Convention
+
+| Prefix | Meaning | Example |
+|--------|---------|---------|
+| `TC_` | Thermocouple temperature | `TC_1`, `TC_AIN0_K` |
+| `FRG702_` | FRG-702 vacuum pressure gauge | `FRG702_Chamber` |
+| `PS_` | Power supply reading or setpoint | `PS_Voltage`, `PS_Current`, `PS_Voltage_Setpoint`, `PS_CC_Limit` |
+
+Custom names for TCs and FRG gauges can be set in **Settings → Sensors**; they are stored in `AppSettings` and used consistently across the GUI, CSV header, and live plots.
+
+---
+
+## Control Modes
+
+### 1. Voltage / Current Programmer
+The **Power Programmer Panel** lets you build a list of blocks:
+
+| Block type | What happens |
+|-----------|-------------|
+| `Ramp` | Linearly interpolates voltage from `Start V` to `End V` over `Duration` seconds. Current ceiling (`current_a`) stays fixed. |
+| `Hold` | Stays at `Start V` for `Duration` seconds. |
+
+Blocks are validated against the 6 V / 180 A hardware limits before execution. In **Safe Mode** (checkbox in the panel) all voltages are clamped to ≤ 1 V and currents to ≤ 10 A — use this when testing wiring on the bench.
+
+### 2. Temperature Ramp (PID)
+Each block specifies a `rate_k_per_min`. `ProgramExecutor` runs a soft-start phase first (ramps voltage slowly until the specimen reaches ~150 °C), then hands control to `PIDController` which drives voltage to track the requested ramp rate.
+
+**Phase 1 — Soft-Start constants** (in `temp_ramp_pid.py`):
+- Threshold: 150 °C
+- Voltage step per tick: 0.010 V
+- Current pause limit: 120 A
+- Rate ceiling: 3 K/min
+
+**PID — slew-rate limiter:** max 0.050 V change per tick to prevent voltage spikes.
+
+Profile JSON files (`.json`) can be saved and loaded from the programmer panel.
+
+---
+
+## Practice Mode
+
+Practice mode generates **simulated sensor data** without any hardware connected. Use it to:
+- Validate GUI layout and controls
+- Verify CSV column headers and data formats before a real run
+- Test PID logic by watching the simulated temperature track a ramp profile
+
+**Always validate practice-mode CSV output before connecting real hardware.** Blank columns, locked TC channels, or wrong current readings in practice mode indicate a bug that will also show up live.
+
+Enable practice mode from the startup dialog or command line.
+
+---
+
+## Safety System
+
+`SafetyMonitor` provides a layered shutdown response:
+
+1. **Warning** — temperature approaches limit (configurable threshold, default 90 %). GUI status bar turns yellow.
+2. **Limit exceeded** — temperature hits the set limit. GUI turns red.
+3. **Emergency shutdown** — power supply output is disabled via `FIO1` and `program_executor` is stopped. A "Reset Safety" button appears in the GUI — only click it after resolving the root cause.
+
+Additional interlock: `DataAcquisition` monitors chamber pressure and can fire an interlock callback if vacuum drops below a safe level during a run.
+
+**Restart lock**: After an emergency shutdown, `SafetyMonitor.is_restart_locked` is `True`. The system will refuse to start a new ramp until the user explicitly resets.
+
+---
+
+## Hardware Wiring Reference
+
+### Keysight N5700 — DB25 J1 Analog Connector
+
+| J1 Pin | Signal | T8 Connection | Direction |
+|--------|--------|---------------|-----------|
+| 3 | DAC0 — voltage setpoint (0–5 V = 0–6 V out) | `DAC0` | T8 → Keysight |
+| 4 | DAC1 — current ceiling (0–5 V = 0–180 A) | `DAC1` | T8 → Keysight |
+| 15 | Shut-Off (FIO1) — active logic depends on SW1-5 | `FIO1` | T8 → Keysight |
+| 11 | Voltage monitor (0–5 V = 0–6 V) | `AIN4` | Keysight → T8 |
+| 24 | Current monitor (0–5 V = 0–180 A) | `AIN5` | Keysight → T8 |
+| 22, 23 | Analog GND | T8 GND | — |
+| 12 | Monitor reference | `AIN4−` / `AIN5−` (differential negative) | — |
+
+> ⚠️ **Ground loop warning**: Pin 12 goes to `AIN4−`/`AIN5−` as the differential reference. **Never wire Pin 12 directly to T8 GND** — this creates a ground loop and gives wrong current readings.
+
+### Keysight SW1 Dip Switch (rear panel)
+
+| Switch | Required position | Effect |
+|--------|------------------|--------|
+| 1 | **UP** | Enables analog voltage programming |
+| 2 | **UP** | Enables analog current programming |
+| 3 | DOWN | Sets 0–5 V programming range |
+| 4 | DOWN | Sets 0–5 V monitor range |
+| 5 | **UP** | Shutdown polarity: FIO1 = 0 → OFF (matches code's `output_on()`) |
+
+### XGS-600 — RS-232
+
+- Port: `COM4` (OIKWAN FTDI USB-to-serial)
+- Cable: **Straight-wired male DB9** (PC = DTE, XGS-600 = DCE)
+- Baud: 9600, 8N1, no flow control
+- Poll rate: max once per 200 ms (`_MIN_COMMAND_INTERVAL = 0.20`)
+- Address byte: `00` (RS-232 default)
+
+> ⚠️ Do **not** use a null-modem cable or DB9 gender changer — they cancel each other and break communication.
+
+---
+
+## Known Hardware Issues & Status
+
+| Issue | Status | Notes |
+|-------|--------|-------|
+| Keysight shows "SO" (Shut-Off) immediately on run | **Active** | Root causes: SW1 switches 1 & 2 not UP (analog interface disabled), and/or SW1-5 polarity mismatch. See SW1 table above. |
+| FIO vs EIO pin mismatch | **Active** | Code uses `EIO0`/`EIO1` in some places; physical wiring is on `FIO0`/`FIO1`. Must be reconciled consistently. |
+| PID tuning | **Untested on hardware** | `PIDController` defaults: Kp=1.0, Ki=0.05, Kd=0.05. PID run history (JSON) system is implemented. Gains need real-hardware tuning. |
+
+---
+
+## Installation & Running
+
+### Prerequisites
+
+- Python 3.9+
+- [LabJack LJM library](https://labjack.com/support/software/installers/ljm) installed on the system
+- Windows (Registry-backed settings; Linux/Mac possible but untested)
+
+### Install dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+Key dependencies: `labjack-ljm`, `pyserial`, `matplotlib`, `tkinter` (stdlib on Windows).
+
+### Run
+
+```bash
+python -m t8_daq_system.main
+```
+
+Or in practice mode:
+
+```bash
+python -m t8_daq_system.main --practice
+```
+
+---
+
+## Building a Standalone Executable
+
+```bash
+pyinstaller t8_daq_system.spec --clean
+```
+
+Output: `dist/T8_DAQ_System/` folder. Ship the whole folder (zip it). The `.exe` inside is what users run.
+
+> **PyInstaller performance note**: On non-development machines, matplotlib font scanning and PyVISA resource enumeration are the two most common causes of slow startup. The spec file includes mitigations for both.
+
+---
+
+## Running Tests
+
+```bash
+pytest
+```
+
+All hardware calls (LJM, PyVISA, PySerial, tkinter, matplotlib canvas) are mocked in `tests/conftest.py` so the test suite runs without any hardware connected.
 
 ---
 
 ## Resources
 
-- [LabJack LJM Library Download](https://labjack.com/support/software/installers/ljm)
-- [LabJack LJM Python Library](https://github.com/labjack/labjack-ljm-python)
+- [LabJack LJM Library](https://labjack.com/support/software/installers/ljm)
+- [LabJack LJM Python](https://github.com/labjack/labjack-ljm-python)
 - [T8 Datasheet](https://support.labjack.com/docs/t-series-datasheet)
-- [Thermocouple Application Note](https://support.labjack.com/docs/using-a-thermocouple-with-the-t8)
+- [T8 Thermocouple Application Note](https://support.labjack.com/docs/using-a-thermocouple-with-the-t8)
+- Keysight N5700 User Guide — `keysightpowersupplyuserguide.pdf` (project docs)
+- XGS-600 Instruction Manual — `xgs600.pdf` (project docs)
+- FRG-700/702 User Manual — `Inverted_Magnetron_Pirani_Gauge_FRG700_FRG702.pdf` (project docs)
 
 ---
 
 ## License
 
-See LICENSE file for details.
+MIT — see `LICENSE` file.
