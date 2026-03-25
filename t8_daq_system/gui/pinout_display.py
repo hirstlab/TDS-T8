@@ -227,6 +227,8 @@ class PinoutDisplay(tk.Toplevel):
         self._build_xgs_section()
         self._separator()
         self._build_ps_section()
+        self._separator()
+        self._build_stripe_mapping_section()
 
     # ── Thermocouples ─────────────────────────────────────────────────────────
 
@@ -484,6 +486,47 @@ class PinoutDisplay(tk.Toplevel):
                       font=_BOLD).pack(side=tk.LEFT, padx=2)
             ttk.Label(r, text=str(value), anchor='w',
                       font=_MONO).pack(side=tk.LEFT)
+
+    def _build_stripe_mapping_section(self):
+        """Constructs the static table showing how the striped ribbon cable
+        is mapped from the Keysight DB25 J1 connector to the T8 terminals."""
+        self._section("Cable Stripe Mappings (Keysight J1 to LabJack T8)")
+
+        f = ttk.Frame(self._content_frame)
+        f.pack(fill=tk.X, padx=12, pady=2)
+
+        # Header row
+        hdr_row = ttk.Frame(f)
+        hdr_row.pack(fill=tk.X)
+        col_defs = [
+            ("Stripe #", 10),
+            ("Keysight Pin", 15),
+            ("Function", 35),
+            ("LabJack Terminal", 18),
+        ]
+        for txt, w in col_defs:
+            ttk.Label(hdr_row, text=txt, font=_BOLD, width=w, anchor='w').pack(side=tk.LEFT, padx=2)
+
+        ttk.Separator(f, orient='horizontal').pack(fill=tk.X, pady=2)
+
+        # Data rows
+        mappings = [
+            ("1", "Pin 12", "Signal Common (GND reference)", "GND"),
+            ("2", "Pin 11", "Voltage Monitor output",        "AIN4+"),
+            ("3", "Pin 24", "Current Monitor output",        "AIN5+"),
+            ("4", "Pin 9",  "Voltage Program",               "DAC0"),
+            ("5", "Pin 22", "Voltage Program Return",        "GND"),
+            ("6", "Pin 10", "Current Program",               "DAC1"),
+            ("7", "Pin 23", "Current Program Return",        "GND"),
+            ("8", "Pin 8",  "Local/Analog Enable",           "FIO0"),
+            ("9", "Pin 15", "Shut off",                      "FIO1"),
+        ]
+
+        for stripe, pin, func, terminal in mappings:
+            row = ttk.Frame(f)
+            row.pack(fill=tk.X, pady=1)
+            for val, w in zip([stripe, pin, func, terminal], [10, 15, 35, 18]):
+                ttk.Label(row, text=val, width=w, anchor='w', font=_MONO).pack(side=tk.LEFT, padx=2)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Wiring Diagram tab

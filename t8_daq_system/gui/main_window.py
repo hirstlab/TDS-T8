@@ -310,7 +310,7 @@ class MainWindow:
             base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
         # Use registry-persisted log folder if set, otherwise default to base_dir/logs
-        _custom_log = settings.log_folder if settings.log_folder else ""
+        _custom_log = settings.log_folder if isinstance(settings.log_folder, str) and settings.log_folder else ""
         self.log_folder = _custom_log if _custom_log else os.path.join(base_dir, 'logs')
         self.profiles_folder = os.path.join(base_dir, 'config', 'profiles')
 
@@ -1094,9 +1094,13 @@ class MainWindow:
             get_tc_temp_k_fn=self._get_latest_tc_reading_k,
         )
         
+        # Restore saved blocks from before the programmer was last closed
+        if self._programmer_blocks:
+            self._programmer_panel.load_blocks(self._programmer_blocks)
+
         # Build manual nudge sub-panel
         self._reposition_nudge_panel()
-        
+
         # Show run button
         self._update_run_button_state()
 
@@ -1184,6 +1188,8 @@ class MainWindow:
             self._programmer_ramp_running = False
             self.run_ramp_btn.config(text="Run Program")
             self._show_pid_run_summary()
+            if self._programmer_preview_plot is not None:
+                self._programmer_preview_plot.clear_progress_dot()
         self.root.after(0, _gui_update)
 
     def _show_pid_run_summary(self):
@@ -1249,7 +1255,11 @@ class MainWindow:
 
         msg = (f"B{idx+1} {btype}: {elapsed:.0f}s | {temp:.1f}°C | "
                f"V={volt:.3f} (FF={ff_v:.3f} P={p:+.3f} I={i:+.3f} D={d:+.3f})")
-        self.root.after(0, lambda: self.status_var.set(msg))
+        def _update_status_and_dot():
+            self.status_var.set(msg)
+            if self._programmer_preview_plot is not None:
+                self._programmer_preview_plot.set_progress_time(elapsed)
+        self.root.after(0, _update_status_and_dot)
 
     def _on_programmer_profile_confirmed(self, times, voltages, currents):
         self._programmer_preview_data = (times, voltages, currents)
@@ -1337,6 +1347,8 @@ class MainWindow:
         self._programmer_ramp_running = False
         self.run_ramp_btn.config(text="Run Program")
         self.status_var.set("Program Stopped")
+        if self._programmer_preview_plot is not None:
+            self._programmer_preview_plot.clear_progress_dot()
         # Restore default legend if it was modified during a run
         if hasattr(self, 'plot_ps'):
             self.plot_ps.set_legend_label_overrides({})

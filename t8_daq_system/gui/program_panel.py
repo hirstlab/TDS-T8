@@ -30,7 +30,8 @@ class BlockEditDialog(tk.Toplevel):
         self.block = block
         self.result = None
         self._tc_names = list(tc_names) if tc_names else ["TC_1"]
-        self._entry_mode = entry_mode      # 'Rate' or 'TimeTarget'
+        # Use block's own mode if it's a temp ramp, otherwise fall back to panel default
+        self._entry_mode = getattr(block, 'entry_mode', entry_mode)
         self._start_temp_k = start_temp_k  # chain temp at start of this block
         self._unit = display_unit           # 'C' or 'K'
         self.title(f"Edit {block.block_type.replace('_', ' ').title()}")
@@ -69,30 +70,49 @@ class BlockEditDialog(tk.Toplevel):
                             self.block.hold_duration_sec)
 
         elif self.block.block_type == "temp_ramp":
-            if self._entry_mode == 'TimeTarget':
-                # Show: Target Temp + Duration (min) → rate computed on OK
-                disp_end, _ = _k_to_disp(self.block.end_temp_k, self._unit)
-                self._add_entry(main_frame, f"Target Temp ({unit_str}):", "_end_temp_disp",
-                                round(disp_end, 2))
-                # Duration hint: derive from current rate and temp delta if possible
-                delta = abs(self.block.end_temp_k - self._start_temp_k)
-                rate = max(abs(self.block.rate_k_per_min), 0.01)
-                hint_min = round(delta / rate, 2) if delta > 0 else 10.0
-                self._add_entry(main_frame, "Duration (min):", "_duration_min", hint_min)
-                self._add_tc_dropdown(main_frame, "TC Name:", "tc_name", self.block.tc_name)
-            else:
-                self._add_entry(main_frame, "Rate (K/min):", "rate_k_per_min",
-                                self.block.rate_k_per_min)
-                disp_end, _ = _k_to_disp(self.block.end_temp_k, self._unit)
-                self._add_entry(main_frame, f"End Temp ({unit_str}):", "_end_temp_disp",
-                                round(disp_end, 2))
-                self._add_tc_dropdown(main_frame, "TC Name:", "tc_name", self.block.tc_name)
+            self._add_mode_selector(main_frame, "Input Mode:", "entry_mode", self._entry_mode)
+            
+            self.dynamic_container = ttk.Frame(main_frame)
+            self.dynamic_container.pack(fill=tk.X)
+            
+            disp_end, _ = _k_to_disp(self.block.end_temp_k, self._unit)
+            self._add_entry(main_frame, f"Target Temp ({unit_str}):", "_end_temp_disp",
+                            round(disp_end, 2))
+            self._add_tc_dropdown(main_frame, "TC Name:", "tc_name", self.block.tc_name)
+            
+            self._update_temp_ramp_fields()
 
         btn_frame = ttk.Frame(main_frame)
         btn_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(20, 0))
 
         ttk.Button(btn_frame, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=5)
         ttk.Button(btn_frame, text="OK", command=self._on_ok).pack(side=tk.RIGHT, padx=5)
+
+    def _add_mode_selector(self, parent, label, key, initial_val):
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X, pady=5)
+        ttk.Label(frame, text=label, width=22).pack(side=tk.LEFT)
+        var = tk.StringVar(value=initial_val)
+        cb = ttk.Combobox(frame, textvariable=var, values=["Rate", "TimeTarget"], state="readonly")
+        cb.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        cb.bind("<<ComboboxSelected>>", lambda e: self._update_temp_ramp_fields())
+        self._vars[key] = var
+
+    def _update_temp_ramp_fields(self):
+        for w in self.dynamic_container.winfo_children():
+            w.destroy()
+        
+        mode = self._vars["entry_mode"].get()
+        if mode == "Rate":
+            self._add_entry(self.dynamic_container, "Rate (K/min):", "rate_k_per_min", self.block.rate_k_per_min)
+        else:
+            # Duration hint
+            delta = abs(self.block.end_temp_k - self._start_temp_k)
+            rate = max(abs(self.block.rate_k_per_min), 0.01)
+            hint_min = getattr(self.block, 'duration_min', 0.0)
+            if hint_min <= 0:
+                hint_min = round(delta / rate, 2) if delta > 0 else 10.0
+            self._add_entry(self.dynamic_container, "Duration (min):", "_duration_min", hint_min)
 
     def _add_entry(self, parent, label, key, initial_val):
         frame = ttk.Frame(parent)
@@ -137,14 +157,22 @@ class BlockEditDialog(tk.Toplevel):
                 end_disp = float(self._vars["_end_temp_disp"].get())
                 self.block.end_temp_k = _disp_to_k(end_disp, self._unit)
 
-                if self._entry_mode == 'TimeTarget':
+                mode = self._vars["entry_mode"].get()
+                self.block.entry_mode = mode
+
+                if mode == 'TimeTarget':
                     dur_min = float(self._vars["_duration_min"].get())
                     if dur_min <= 0:
                         raise ValueError("Duration must be positive")
+                    self.block.duration_min = dur_min
                     delta_k = self.block.end_temp_k - self._start_temp_k
                     self.block.rate_k_per_min = delta_k / dur_min
                 else:
                     self.block.rate_k_per_min = float(self._vars["rate_k_per_min"].get())
+                    # Optionally compute duration_min for consistency
+                    delta_k = abs(self.block.end_temp_k - self._start_temp_k)
+                    rate = abs(self.block.rate_k_per_min)
+                    self.block.duration_min = delta_k / rate if rate > 0 else 0.0
 
             self.result = self.block
             self.destroy()
@@ -165,7 +193,6 @@ class ProgramPanel:
         self._tc_names = list(tc_names) if tc_names else ["TC_1"]
         self._get_unit = get_unit_fn or (lambda: 'K')
         self._blocks = []
-        self._entry_mode = 'Rate'  # 'Rate' or 'TimeTarget'
 
         self._build_gui()
 
@@ -186,19 +213,6 @@ class ProgramPanel:
 
         ttk.Button(toolbar, text="Add Block", command=self._add_block).pack(side=tk.LEFT, padx=2)
         ttk.Button(toolbar, text="Preview", command=self._on_preview).pack(side=tk.RIGHT, padx=2)
-
-        # Toolbar row 2: entry mode toggle
-        mode_bar = ttk.Frame(main_frame)
-        mode_bar.pack(fill=tk.X, pady=(0, 4))
-
-        ttk.Label(mode_bar, text="Ramp input:", font=("Arial", 9)).pack(side=tk.LEFT, padx=(0, 4))
-        self._entry_mode_var = tk.StringVar(value="Rate")
-        ttk.Radiobutton(mode_bar, text="Rate + End Temp",
-                        variable=self._entry_mode_var, value="Rate",
-                        command=self._on_entry_mode_changed).pack(side=tk.LEFT, padx=4)
-        ttk.Radiobutton(mode_bar, text="Target Temp + Duration",
-                        variable=self._entry_mode_var, value="TimeTarget",
-                        command=self._on_entry_mode_changed).pack(side=tk.LEFT, padx=4)
 
         # Block list frame (scrollable)
         list_container = ttk.Frame(main_frame)
@@ -237,9 +251,6 @@ class ProgramPanel:
         self._refresh_list()
         self._update_pid_status()
 
-    def _on_entry_mode_changed(self):
-        self._entry_mode = self._entry_mode_var.get()
-
     def _chain_start_temp_k(self, up_to_idx):
         """Return the start temperature (K) at block up_to_idx based on prior blocks."""
         if self.get_initial_state_fn:
@@ -262,6 +273,7 @@ class ProgramPanel:
         else:
             default_tc = self._tc_names[0] if self._tc_names else "TC_1"
             self._blocks.append(TempRampBlock(1.0, 500.0, default_tc))
+        self._recompute_all_blocks()
         self._refresh_list()
         self._update_pid_status()
         if self._on_change:
@@ -269,6 +281,7 @@ class ProgramPanel:
 
     def _delete_block(self, idx):
         del self._blocks[idx]
+        self._recompute_all_blocks()
         self._refresh_list()
         self._update_pid_status()
         if self._on_change:
@@ -281,13 +294,13 @@ class ProgramPanel:
             self.parent.winfo_toplevel(),
             self._blocks[idx],
             tc_names=self._tc_names,
-            entry_mode=self._entry_mode,
             start_temp_k=start_k,
             display_unit=unit
         )
         self.parent.wait_window(dialog)
         if dialog.result:
             self._blocks[idx] = dialog.result
+            self._recompute_all_blocks()
             self._refresh_list()
             self._update_pid_status()
             if self._on_change:
@@ -316,12 +329,34 @@ class ProgramPanel:
             summary = f"Hold {disp:.1f}{unit_str} (\u00b1{block.tolerance_k}{unit_str}) for {block.hold_duration_sec}s"
         elif block.block_type == "temp_ramp":
             disp_end, unit_str = _k_to_disp(block.end_temp_k, unit)
-            summary = f"Ramp {block.rate_k_per_min:.2f}K/min to {disp_end:.1f}{unit_str} (using {block.tc_name})"
+            if getattr(block, 'entry_mode', 'Rate') == 'TimeTarget':
+                summary = f"Ramp {block.duration_min:.1f}min to {disp_end:.1f}{unit_str} (using {block.tc_name})"
+            else:
+                summary = f"Ramp {block.rate_k_per_min:.2f}K/min to {disp_end:.1f}{unit_str} (using {block.tc_name})"
 
         ttk.Label(row, text=summary).pack(side=tk.LEFT, padx=10, fill=tk.X, expand=True)
 
         ttk.Button(row, text="Edit", width=6, command=lambda idx=i: self._edit_block(idx)).pack(side=tk.RIGHT, padx=2)
         ttk.Button(row, text="Del", width=6, command=lambda idx=i: self._delete_block(idx)).pack(side=tk.RIGHT, padx=2)
+
+    def _recompute_all_blocks(self):
+        """Re-calculate rates for any 'TimeTarget' blocks in the chain."""
+        # Get start temp from live or initial state
+        curr_t = 293.15
+        if self.get_initial_state_fn:
+            curr_t = self.get_initial_state_fn()[0] or 293.15
+        
+        for block in self._blocks:
+            if block.block_type == "temp_ramp":
+                if getattr(block, 'entry_mode', 'Rate') == 'TimeTarget':
+                    dur = getattr(block, 'duration_min', 10.0)
+                    if dur > 0:
+                        delta = block.end_temp_k - curr_t
+                        block.rate_k_per_min = delta / dur
+                curr_t = block.end_temp_k
+            elif block.block_type == "stable_hold":
+                curr_t = block.target_temp_k
+            # voltage_ramp doesn't change temperature chain
 
     def _on_preview(self):
         if not self.preview_plot:
@@ -386,3 +421,9 @@ class ProgramPanel:
 
     def get_blocks(self):
         return self._blocks
+
+    def load_blocks(self, blocks):
+        """Restore a previously saved list of block objects."""
+        self._blocks = list(blocks)
+        self._refresh_list()
+        self._update_pid_status()

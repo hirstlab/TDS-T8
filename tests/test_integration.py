@@ -14,7 +14,28 @@ class TestIntegration(unittest.TestCase):
         pass
 
     def tearDown(self):
-        pass
+        # Clean up any log or profile folders created during tests
+        # These are usually created relative to the project root in the tests
+        base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        log_dir = os.path.join(base_dir, 'logs')
+        profiles_dir = os.path.join(base_dir, 'config', 'profiles')
+        
+        import shutil
+        if os.path.exists(log_dir):
+            # Only remove if it's empty or we are sure it's from tests
+            # For integration tests, we'll be aggressive but careful
+            try:
+                if not os.listdir(log_dir):
+                    os.rmdir(log_dir)
+            except OSError:
+                pass
+                
+        if os.path.exists(profiles_dir):
+            try:
+                if not os.listdir(profiles_dir):
+                    os.rmdir(profiles_dir)
+            except OSError:
+                pass
 
     def _make_mock_settings(self, mock_settings_cls):
         """Return a fully-configured mock AppSettings object."""
@@ -35,6 +56,7 @@ class TestIntegration(unittest.TestCase):
         mock_settings.visa_resource = ""
         mock_settings.frg_interface = "XGS600"
         mock_settings.ps_interface = "Analog"
+        mock_settings.log_folder = ""
         return mock_settings
 
     @patch('t8_daq_system.gui.main_window.tk.Tk')

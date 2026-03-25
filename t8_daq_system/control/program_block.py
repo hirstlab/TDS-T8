@@ -40,6 +40,8 @@ class TempRampBlock:
     end_temp_k: float
     tc_name: str
     block_type: str = "temp_ramp"
+    entry_mode: str = "Rate"
+    duration_min: float = 0.0
 
     def to_dict(self):
         return asdict(self)
