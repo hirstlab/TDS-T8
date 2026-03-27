@@ -338,13 +338,13 @@ class ProgramExecutor:
                 pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
                 v_out = max(0.0, min(ff_v + pid_correction, 6.0))
 
-                # Cold-tungsten current protection: if current exceeds 120A,
+                # Cold-tungsten current protection: if current exceeds 180A,
                 # hold voltage steady (don't increase) until current drops.
                 # Tungsten resistance is ~17x lower cold than at operating temp;
                 # without this guard the PID could command voltage that draws
-                # >180A before the Keysight's CC mode kicks in.
+                # excessive current before the Keysight's CC mode kicks in.
                 # Compare v_out to the PREVIOUS tick's setpoint (before reassignment).
-                cold_start_limit = 120.0  # amps
+                cold_start_limit = 180.0  # amps
                 if not self.practice_mode and self._ps is not None:
                     try:
                         measured_current = self._ps.get_current() or 0.0

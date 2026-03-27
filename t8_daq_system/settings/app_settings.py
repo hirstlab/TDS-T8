@@ -86,7 +86,7 @@ _DEFAULTS = {
     "pp_voltage_line_width": ("str", "2"),
     # ── Two-phase PID / Soft-Start settings ──────────────────────────────
     "soft_start_threshold_c":    ("float", 200.0),   # °C — phase switch point
-    "soft_start_current_limit_a": ("float", 120.0),  # A — Phase 1 current ceiling
+    "soft_start_current_limit_a": ("float", 180.0),  # A — Phase 1 current ceiling
     "pid_kp":               ("float", 0.02),
     "pid_ki":               ("float", 0.001),
     "pid_kd":               ("float", 0.010),
@@ -179,7 +179,7 @@ class AppSettings:
         self.pp_voltage_line_width: str  = "2"
         # Two-phase PID / Soft-Start
         self.soft_start_threshold_c: float = 200.0   # °C — phase switch point
-        self.soft_start_current_limit_a: float = 120.0  # A — Phase 1 current ceiling
+        self.soft_start_current_limit_a: float = 180.0  # A — Phase 1 current ceiling
         self.pid_kp: float = 0.02
         self.pid_ki: float = 0.001
         self.pid_kd: float = 0.010
