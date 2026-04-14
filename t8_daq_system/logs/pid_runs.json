@@ -1,0 +1,17 @@
+[
+  {
+    "timestamp": "2026-03-24T12:45:52.019920",
+    "target_rate_k_per_min": 25.970000000000006,
+    "achieved_mean_rate_k_per_min": 23.412270305513104,
+    "overshoot_k": 0.0,
+    "settling_time_sec": null,
+    "oscillation_count": 0,
+    "duration_sec": 281.1679480075836,
+    "kp_used": 0.02,
+    "ki_used": 0.001,
+    "kd_used": 0.01,
+    "suggestions": [
+      "Temperature never settled within \u00b12 K \u2014 gains may need significant re-tuning or the ramp rate exceeds what the heater can follow."
+    ]
+  }
+]

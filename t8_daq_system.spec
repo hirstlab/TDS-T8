@@ -326,7 +326,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,  # Add .ico file path here if you have an icon
+    icon='tds_t8.ico',  # Add .ico file path here if you have an icon
 )
 
 # ============================================================================

@@ -173,6 +173,36 @@ class LivePlot:
         """Handle scrollbar movement (can be called externally)."""
         val = float(value)
         self._scroll_var.set(val)
+
+        # In CSV mode the slider always navigates within the file's own time
+        # range — it never reverts to live mode (which uses datetime.now()).
+        if self._loaded_timestamps:
+            self._is_live = False
+            ts = self._loaded_timestamps
+            oldest = ts[0]
+            newest = ts[-1]
+            span = (newest - oldest).total_seconds()
+            if span > 0:
+                self._frozen_right_edge = oldest + timedelta(seconds=val * span)
+                # Clamp to the actual data range
+                if self._frozen_right_edge > newest:
+                    self._frozen_right_edge = newest
+            else:
+                self._frozen_right_edge = newest
+            if self._slider_mode == 'window_2min':
+                window_start = self._frozen_right_edge - timedelta(seconds=self.WINDOW_SECONDS)
+                self._mode_label.config(
+                    text=f"{window_start.strftime('%H:%M:%S')} → {self._frozen_right_edge.strftime('%H:%M:%S')}",
+                    foreground='blue'
+                )
+            else:
+                self._mode_label.config(
+                    text=f"{oldest.strftime('%H:%M:%S')} → {self._frozen_right_edge.strftime('%H:%M:%S')}",
+                    foreground='blue'
+                )
+            self._do_update_frozen()
+            return
+
         if val > 0.98:
             # Transition (back) to live mode
             if not self._is_live:
@@ -418,6 +448,14 @@ class LivePlot:
         self.ax.grid(True, alpha=0.3)
         self.ax.set_xlabel('Time')
         self.ax.xaxis.set_major_formatter(mdates.DateFormatter('%H:%M:%S'))
+
+        # Reset CSV state so sync_scroll reverts to live-buffer behaviour
+        self._loaded_timestamps = []
+        self._loaded_plot_data = {}
+        self._is_live = True
+        self._frozen_right_edge = None
+        if self._mode_label is not None:
+            self._mode_label.config(text="● LIVE", foreground='green')
 
         # Reset overlay line (removed by ax.clear())
         self._overlay_line_v = None
@@ -683,16 +721,27 @@ class LivePlot:
         for t, v in zip(timestamps, values):
             if v is None:
                 continue
+            # Always exclude points after the right edge (important for history_pct mode)
+            if right_edge is not None and t > right_edge:
+                continue
             if window_seconds and now and (now - t).total_seconds() > window_seconds:
                 continue
             valid_times.append(t)
             valid_vals.append(v)
 
-        # Plot decimation (Task 6b): keep only last 600 points
+        # Plot decimation: keep at most 600 points.
+        # For windowed mode (window_seconds set) take the newest points.
+        # For full-history mode (window_seconds None) stride-sample evenly so
+        # the whole visible range is represented, not just the tail.
         MAX_PLOT_POINTS = 600
         if len(valid_times) > MAX_PLOT_POINTS:
-            valid_times = valid_times[-MAX_PLOT_POINTS:]
-            valid_vals = valid_vals[-MAX_PLOT_POINTS:]
+            if window_seconds:
+                valid_times = valid_times[-MAX_PLOT_POINTS:]
+                valid_vals = valid_vals[-MAX_PLOT_POINTS:]
+            else:
+                step = len(valid_times) // MAX_PLOT_POINTS
+                valid_times = valid_times[::step]
+                valid_vals = valid_vals[::step]
 
         return valid_times, valid_vals
 

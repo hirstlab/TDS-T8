@@ -1644,6 +1644,9 @@ class MainWindow:
                     self.sample_rate_var.set(f"{metadata['sample_rate_ms']}ms")
 
             self._update_plot_settings()
+            # Reset master timeline slider to the end of the CSV (rightmost)
+            if hasattr(self, 'master_scroll_var'):
+                self.master_scroll_var.set(1.0)
             self.historical_label.pack(side=tk.RIGHT, padx=10)
 
             if data['timestamps']:
