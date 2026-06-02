@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.unit
+
 """
 Unit tests for LivePlot class - dynamic axes and absolute scales
 """

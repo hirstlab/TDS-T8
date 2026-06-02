@@ -5,6 +5,9 @@ import tempfile
 import csv
 from t8_daq_system.data.data_logger import DataLogger
 
+import pytest
+pytestmark = pytest.mark.unit
+
 class TestDataLogger(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()

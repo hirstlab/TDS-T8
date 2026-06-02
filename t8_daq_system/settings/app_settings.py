@@ -37,6 +37,10 @@ _DEFAULTS = {
     "ps_i_range_min":     ("float", 0.0),
     "ps_i_range_max":     ("float", 180.0),
     "log_folder":         ("str",   ""),
+    "camera_index":       ("int",   0),
+    "camera_buttons_overlay": ("bool", False),
+    "timelapse_interval_s":   ("int",  60),
+    "timelapse_export_fps":   ("int",  10),
     "xgs600_port":        ("str",   "COM4"),
     "xgs600_baudrate":    ("int",   9600),
     "xgs600_timeout":     ("float", 1.0),
@@ -136,6 +140,10 @@ class AppSettings:
         self.ps_i_range_min: float   = 0.0
         self.ps_i_range_max: float   = 180.0
         self.log_folder: str         = ""
+        self.camera_index: int       = 0
+        self.camera_buttons_overlay: bool = False
+        self.timelapse_interval_s: int = 60
+        self.timelapse_export_fps: int = 10
         self.xgs600_port: str        = "COM4"
         self.xgs600_baudrate: int    = 9600
         self.xgs600_timeout: float   = 1.0

@@ -1,4 +1,5 @@
 import unittest
+import pytest
 from datetime import datetime
 from t8_daq_system.utils.helpers import (
     format_timestamp,
@@ -7,6 +8,8 @@ from t8_daq_system.utils.helpers import (
     linear_scale,
     clamp
 )
+
+pytestmark = pytest.mark.unit
 
 class TestHelpers(unittest.TestCase):
     def test_format_timestamp(self):

@@ -245,6 +245,17 @@ hiddenimports = [
     'pymsgbox',          # Message box support required by pyautogui
     'pytweening',        # Tweening/easing functions required by pyautogui
 
+    # Camera — Logitech C920s via OpenCV + PIL display + imageio-ffmpeg export
+    'cv2',
+    'PIL',
+    'PIL.Image',
+    'PIL.ImageTk',
+    'PIL._tkinter_finder',
+    'imageio',
+    'imageio_ffmpeg',
+    'imageio.plugins',
+    'imageio.plugins.ffmpeg',
+
     # zeroconf removed — network service discovery is disabled in frozen mode
     # to prevent background network scanning that degrades performance.
     # 'zeroconf',

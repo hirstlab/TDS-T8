@@ -92,6 +92,7 @@ from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
 from t8_daq_system.data.data_buffer import DataBuffer
 from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
 from t8_daq_system.gui.live_plot import LivePlot
+from t8_daq_system.gui.camera_panel import CameraPanel
 from t8_daq_system.gui.sensor_panel import SensorPanel
 from t8_daq_system.utils.helpers import convert_temperature
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
@@ -286,7 +287,8 @@ class MainWindow:
             on_status=self._on_program_status
         )
         self._program_executor.on_waiting_for_confirmation = self._on_waiting_for_qms_confirmation
-        self._program_panel = None
+        self._program_panel  = None
+        self._camera_panel   = None
         self._qms_confirm_frame = None   # Created/destroyed with programmer panel
 
         profiler.checkpoint("Creating SafetyMonitor...")
@@ -556,6 +558,18 @@ class MainWindow:
         # Apply appearance settings to all live plots
         self._apply_appearance_to_plots()
 
+        # Apply camera button placement mode
+        self._apply_camera_button_mode()
+
+        # If camera index changed, switch the camera
+        if self._camera_panel is not None:
+            new_idx = getattr(s, 'camera_index', 0)
+            if new_idx != self._camera_panel._camera_index:
+                self._camera_panel.change_camera_index(new_idx)
+            # Update timelapse settings (take effect on next timelapse start)
+            self._camera_panel._timelapse_interval_s = getattr(s, 'timelapse_interval_s', 60)
+            self._camera_panel._timelapse_export_fps = getattr(s, 'timelapse_export_fps', 10)
+
         # Refresh pinout display if open
         if hasattr(self, '_pinout_window') and self._pinout_window is not None:
             try:
@@ -613,6 +627,45 @@ class MainWindow:
             except tk.TclError:
                 pass
         self._pinout_window = PinoutDisplay(self.root, self.config, self._app_settings)
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Camera button helpers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _on_cam_snapshot(self):
+        if self._camera_panel is not None:
+            self._camera_panel._take_snapshot()
+
+    def _on_cam_timelapse(self):
+        if self._camera_panel is not None:
+            self._camera_panel._toggle_timelapse()
+
+    def _apply_camera_button_mode(self):
+        """
+        Show/hide camera buttons according to the camera_buttons_overlay setting.
+        Status-bar mode (default): buttons in bottom status bar, no overlay.
+        Overlay mode: buttons overlaid on camera panel, status-bar buttons hidden.
+        """
+        if self._camera_panel is None:
+            return
+        use_overlay = getattr(self._app_settings, 'camera_buttons_overlay', False)
+        if use_overlay:
+            # Hide status-bar buttons
+            self._cam_snapshot_statusbar_btn.pack_forget()
+            self._cam_timelapse_statusbar_btn.pack_forget()
+            # Show overlay on camera panel
+            self._camera_panel.show_overlay_buttons()
+        else:
+            # Hide any existing overlay
+            self._camera_panel.hide_overlay_buttons()
+            # Register status-bar buttons with the camera panel for state sync
+            self._camera_panel.register_external_controls(
+                self._cam_snapshot_statusbar_btn,
+                self._cam_timelapse_statusbar_btn
+            )
+            # Re-pack status-bar buttons if they were hidden
+            self._cam_snapshot_statusbar_btn.pack(side=tk.RIGHT, padx=(2, 0))
+            self._cam_timelapse_statusbar_btn.pack(side=tk.RIGHT, padx=(0, 2))
 
     def _deferred_hardware_init(self):
         """
@@ -890,6 +943,19 @@ class MainWindow:
         )
         self.master_scrollbar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
+        # ── Camera buttons (far right of status bar) ─────────────────────────
+        ttk.Separator(safety_frame, orient='vertical').pack(side=tk.RIGHT, padx=5, fill='y')
+        self._cam_timelapse_statusbar_btn = ttk.Button(
+            safety_frame, text='\u23fa Timelapse',
+            command=self._on_cam_timelapse, state='disabled', width=12
+        )
+        self._cam_timelapse_statusbar_btn.pack(side=tk.RIGHT, padx=(0, 2))
+        self._cam_snapshot_statusbar_btn = ttk.Button(
+            safety_frame, text='\U0001f4f7 Snapshot',
+            command=self._on_cam_snapshot, state='disabled', width=10
+        )
+        self._cam_snapshot_statusbar_btn.pack(side=tk.RIGHT, padx=(2, 0))
+
         profiler.checkpoint("Safety status bar created")
 
         profiler.checkpoint("Creating main content area with PanedWindow...")
@@ -966,17 +1032,25 @@ class MainWindow:
             _p._loaded_timestamps = []
             _p._loaded_plot_data = {}
 
-        # Row 1, Col 1 — Placeholder (future camera / IR)
-        placeholder_frame = ttk.LabelFrame(parent, text="Camera / IR")
-        placeholder_frame.grid(row=1, column=1, sticky='nsew', padx=2, pady=2)
-        placeholder_lbl = ttk.Label(
-            placeholder_frame,
-            text="Camera / IR — Coming Soon",
-            foreground='gray',
-            font=('Arial', 12)
+        # Row 1, Col 1 — Camera feed (Logitech C920s)
+        camera_frame = ttk.LabelFrame(parent, text="Camera / IR")
+        camera_frame.grid(row=1, column=1, sticky='nsew', padx=2, pady=2)
+        camera_frame.grid_rowconfigure(0, weight=1)
+        camera_frame.grid_columnconfigure(0, weight=1)
+        camera_index = self._app_settings.camera_index if hasattr(self._app_settings, 'camera_index') else 0
+        self._camera_panel = CameraPanel(
+            camera_frame,
+            log_folder=self.log_folder,
+            camera_index=camera_index,
+            show_internal_buttons=False,
+            timelapse_interval_s=getattr(self._app_settings, 'timelapse_interval_s', 60),
+            timelapse_export_fps=getattr(self._app_settings, 'timelapse_export_fps', 10)
         )
-        placeholder_lbl.place(relx=0.5, rely=0.5, anchor='center')
-        profiler.checkpoint("Placeholder frame created")
+        self._camera_panel.grid(row=0, column=0, sticky='nsew')
+        profiler.checkpoint("Camera panel created")
+
+        # Wire camera buttons to their placement based on the current setting
+        self._apply_camera_button_mode()
 
         profiler.checkpoint("Updating plot settings...")
         self._update_plot_settings()
@@ -2830,6 +2904,13 @@ class MainWindow:
 
     def _on_close(self):
         self.is_running = False
+
+        # Stop camera feed and timelapse before destroying widgets
+        if self._camera_panel is not None:
+            try:
+                self._camera_panel.stop_camera()
+            except Exception:
+                pass
 
         if self.daq:
             self.daq.stop_fast_acquisition()

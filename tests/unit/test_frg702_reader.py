@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.unit
+
 """
 Unit tests for FRG702Reader class - logarithmic voltage-to-pressure conversion.
 Tests the conversion logic without requiring hardware dependencies.

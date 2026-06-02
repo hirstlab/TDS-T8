@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.unit
+
 """
 Extended unit tests for DataLogger class - metadata, custom names, CSV loading
 """

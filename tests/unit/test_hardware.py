@@ -11,6 +11,9 @@ mock_ljm = sys.modules['labjack'].ljm
 from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
 
+import pytest
+pytestmark = pytest.mark.unit
+
 class TestHardware(unittest.TestCase):
     def setUp(self):
         mock_ljm.reset_mock()

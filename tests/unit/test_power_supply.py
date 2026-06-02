@@ -8,6 +8,9 @@ mock_ljm = sys.modules['labjack'].ljm
 from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 
 
+import pytest
+pytestmark = pytest.mark.unit
+
 class TestKeysightAnalogController(unittest.TestCase):
     """Tests for KeysightAnalogController — the LJM-based analog PS interface."""
 

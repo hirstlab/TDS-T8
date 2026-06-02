@@ -2,6 +2,9 @@ import unittest
 from t8_daq_system.data.data_buffer import DataBuffer
 import time
 
+import pytest
+pytestmark = pytest.mark.unit
+
 class TestDataBuffer(unittest.TestCase):
     def test_buffer_initialization(self):
         buffer = DataBuffer(max_seconds=10, sample_rate_ms=1000)

@@ -8,6 +8,9 @@ import tempfile
 # conftest.py handles mocking of labjack, pyvisa, serial, tkinter, matplotlib
 from t8_daq_system.gui.main_window import MainWindow
 
+import pytest
+pytestmark = pytest.mark.unit
+
 class TestIntegration(unittest.TestCase):
     def setUp(self):
         # We no longer need temp config files as MainWindow uses AppSettings (Registry-backed)

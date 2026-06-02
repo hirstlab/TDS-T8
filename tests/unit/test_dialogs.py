@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.unit
+
 """
 Unit tests for dialog classes - testing core logic without GUI
 """

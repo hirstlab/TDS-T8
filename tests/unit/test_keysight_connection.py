@@ -1,3 +1,6 @@
+import pytest
+pytestmark = pytest.mark.unit
+
 """Test Keysight power supply ethernet connection"""
 import pyvisa
 

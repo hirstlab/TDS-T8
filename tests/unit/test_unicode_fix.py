@@ -1,6 +1,8 @@
 import pytest
 from t8_daq_system.core.data_acquisition import DataAcquisition
 
+pytestmark = pytest.mark.unit
+
 def test_acquisition_print_strings_encodable():
     """
     Test that the strings used in data_acquisition.py print calls 

@@ -28,8 +28,8 @@ class SettingsDialog(tk.Toplevel):
     def __init__(self, parent, settings, on_save_callback=None):
         super().__init__(parent)
         self.title("Settings")
-        self.geometry("550x900")
-        self.minsize(550, 900)
+        self.geometry("625x900")
+        self.minsize(625, 900)
         self.resizable(True, True)
         self.grab_set()
         self.transient(parent)
@@ -65,6 +65,7 @@ class SettingsDialog(tk.Toplevel):
         self._build_paths_tab(notebook)
         self._build_power_programmer_tab(notebook)
         self._build_qms_trigger_tab(notebook)
+        self._build_camera_tab(notebook)
 
         self._build_button_frame()
 
@@ -222,6 +223,80 @@ class SettingsDialog(tk.Toplevel):
                                  "X and Y must be integers.", parent=self)
         except Exception as e:
             messagebox.showerror("Click Error", str(e), parent=self)
+
+    def _build_camera_tab(self, notebook):
+        """Tab for camera configuration."""
+        tab = ttk.Frame(notebook, padding=15)
+        notebook.add(tab, text="Camera")
+
+        ttk.Label(tab, text="Camera Configuration",
+                  font=('Arial', 11, 'bold')).pack(anchor='w', pady=(0, 10))
+
+        # Camera device
+        device_frame = ttk.LabelFrame(tab, text="Camera Device", padding=10)
+        device_frame.pack(fill=tk.X, pady=5)
+
+        cam_row = ttk.Frame(device_frame)
+        cam_row.pack(fill=tk.X, pady=4)
+        ttk.Label(cam_row, text="Camera Index:", width=16).pack(side=tk.LEFT)
+        self._camera_index_var = tk.StringVar()
+        ttk.Spinbox(cam_row, textvariable=self._camera_index_var,
+                    from_=0, to=9, width=6).pack(side=tk.LEFT, padx=5)
+        ttk.Label(cam_row, text="(0 = first USB camera, 1 = second, …)",
+                  foreground='gray', font=('Arial', 8)).pack(side=tk.LEFT, padx=5)
+
+        ttk.Label(device_frame,
+                  text="Changes take effect on restart or via the Refresh GUI button.",
+                  foreground='gray', font=('Arial', 8)).pack(anchor='w', pady=(4, 0))
+
+        # Timelapse interval
+        tl_frame = ttk.LabelFrame(tab, text="Timelapse", padding=10)
+        tl_frame.pack(fill=tk.X, pady=5)
+
+        ivl_row = ttk.Frame(tl_frame)
+        ivl_row.pack(fill=tk.X, pady=4)
+        ttk.Label(ivl_row, text="Interval between frames:", width=24).pack(side=tk.LEFT)
+        self._timelapse_interval_s_var = tk.StringVar()
+        ttk.Spinbox(ivl_row, textvariable=self._timelapse_interval_s_var,
+                    from_=2, to=3600, increment=1, width=7).pack(side=tk.LEFT, padx=5)
+        ttk.Label(ivl_row, text="seconds", foreground='gray').pack(side=tk.LEFT)
+
+        fps_row = ttk.Frame(tl_frame)
+        fps_row.pack(fill=tk.X, pady=4)
+        ttk.Label(fps_row, text="Export video FPS:", width=24).pack(side=tk.LEFT)
+        self._timelapse_export_fps_var = tk.StringVar()
+        ttk.Spinbox(fps_row, textvariable=self._timelapse_export_fps_var,
+                    from_=1, to=60, increment=1, width=7).pack(side=tk.LEFT, padx=5)
+        ttk.Label(fps_row, text="fps", foreground='gray').pack(side=tk.LEFT)
+
+        ttk.Label(tl_frame,
+                  text="Minimum 2 s (camera limit: 30 fps).\n"
+                       "Examples: 2 s = max rate,  60 s = 1 frame/min (default),  300 s = 1 frame/5 min.\n"
+                       "Export FPS: how fast the stitched MP4 plays back (default 10 fps).\n"
+                       "Takes effect on the next timelapse start.",
+                  foreground='gray', font=('Arial', 8)).pack(anchor='w', pady=(4, 0))
+
+        # Button placement
+        placement_frame = ttk.LabelFrame(tab, text="Snapshot & Timelapse Button Placement", padding=10)
+        placement_frame.pack(fill=tk.X, pady=10)
+
+        self._camera_buttons_overlay_var = tk.BooleanVar()
+        ttk.Radiobutton(
+            placement_frame,
+            text="Show in status bar (far right of the bottom bar)  — default",
+            variable=self._camera_buttons_overlay_var,
+            value=False
+        ).pack(anchor='w', pady=3)
+        ttk.Radiobutton(
+            placement_frame,
+            text="Overlay on camera panel (bottom-left corner of the video feed)",
+            variable=self._camera_buttons_overlay_var,
+            value=True
+        ).pack(anchor='w', pady=3)
+
+        ttk.Label(placement_frame,
+                  text="Changes apply immediately after Save / Apply.",
+                  foreground='gray', font=('Arial', 8)).pack(anchor='w', pady=(6, 0))
 
     def _build_sensor_tab(self, notebook):
         """Tab for sensor configuration."""
@@ -937,6 +1012,12 @@ class SettingsDialog(tk.Toplevel):
         self._qms_click_x_var.set(str(s.qms_auto_click_x))
         self._qms_click_y_var.set(str(s.qms_auto_click_y))
 
+        # Camera
+        self._camera_index_var.set(str(s.camera_index))
+        self._camera_buttons_overlay_var.set(s.camera_buttons_overlay)
+        self._timelapse_interval_s_var.set(str(s.timelapse_interval_s))
+        self._timelapse_export_fps_var.set(str(getattr(s, 'timelapse_export_fps', 10)))
+
     def _save_settings_from_gui(self):
         """Internal helper to read all GUI vars and write to AppSettings."""
         s = self._settings
@@ -1014,6 +1095,17 @@ class SettingsDialog(tk.Toplevel):
             s.qms_auto_click_enabled = self._qms_auto_click_enabled_var.get()
             s.qms_auto_click_x = int(self._qms_click_x_var.get())
             s.qms_auto_click_y = int(self._qms_click_y_var.get())
+            # Camera
+            s.camera_index = int(self._camera_index_var.get())
+            s.camera_buttons_overlay = self._camera_buttons_overlay_var.get()
+            ivl = int(self._timelapse_interval_s_var.get())
+            if ivl < 2:
+                raise ValueError("Timelapse interval must be at least 2 seconds (camera limit: 30 fps).")
+            s.timelapse_interval_s = ivl
+            export_fps = int(self._timelapse_export_fps_var.get())
+            if export_fps < 1 or export_fps > 60:
+                raise ValueError("Export FPS must be between 1 and 60.")
+            s.timelapse_export_fps = export_fps
         except ValueError as exc:
             messagebox.showerror("Invalid Value",
                                 f"Please check your entries:\n{exc}", parent=self)

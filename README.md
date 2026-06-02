@@ -37,38 +37,6 @@ A Python-based data acquisition and power-supply control application for **Therm
 
 ---
 
-## Critical Physics — Why CV-Only for Tungsten
-
-Tungsten has a **~17× cold-to-hot resistance ratio** (strong positive Temperature Coefficient of Resistance). This means:
-
-- If you ramp **current** at constant voltage you will immediately overcurrent a cold specimen.
-- The correct strategy is always **Constant Voltage (CV) mode**: ramp `DAC0` (voltage setpoint) slowly while keeping `DAC1` (current ceiling) pinned at full scale (5 V → 180 A).
-- As tungsten heats, resistance rises naturally, causing current to self-limit — this is the "docile" positive-TCR control characteristic.
-
-**This is the most important design constraint in the entire system. Never independently ramp current for a tungsten specimen.**
-
----
-
-## Software Architecture
-
-```
-┌──────────────────────────────────────────────────────────┐
-│                     main_window.py                       │
-│    (Tkinter GUI — orchestrates all subsystems)           │
-└────────┬─────────────┬──────────────┬────────────────────┘
-         │             │              │
-    ┌────▼────┐  ┌─────▼─────┐  ┌────▼──────────────────┐
-    │ hardware│  │  control  │  │      data / core       │
-    │ layer   │  │  layer    │  │      layer             │
-    └────┬────┘  └─────┬─────┘  └────┬───────────────────┘
-         │             │              │
-  LabJack T8      ProgramExecutor  DataAcquisition
-  Keysight N5700  PIDController    DataBuffer
-  XGS-600         SafetyMonitor    DataLogger
-  FRG-702 gauges
-  Thermocouples
-```
-
 **Data flow during a live run:**
 
 1. `DataAcquisition` runs in a background thread, calling `read_all_sensors()` on every tick.
@@ -144,22 +112,6 @@ TDS-T8/
     └── utils/
         └── helpers.py              # Temperature & pressure unit conversion utilities
 ```
-
----
-
-## Key Files Quick Reference
-
-| File | What it does |
-|------|-------------|
-| `keysight_analog_controller.py` | All Keysight control: set voltage (`DAC0`), current ceiling (`DAC1`), enable/disable output (`FIO1`), read back V and I via `AIN4`/`AIN5`. Contains SW1 dip-switch documentation. |
-| `temp_ramp_pid.py` | `PIDController` class (anti-windup, derivative-on-measurement) + `PIDRunLogger` (saves run metrics to `logs/pid_runs.json` with auto-generated tuning suggestions). |
-| `program_executor.py` | `ProgramExecutor` — runs lists of blocks (Voltage Ramp, Stable Hold, Temperature Ramp) in a background thread. Provides soft-start (Phase 1) before handing off to PID. |
-| `data_acquisition.py` | `DataAcquisition` — the main polling loop. Reads TCs, pressure gauges, and power supply in one pass; feeds `SafetyMonitor`; fires `on_new_data` callback. |
-| `safety_monitor.py` | `SafetyMonitor` — registers per-sensor temperature limits; triggers warning → limit-exceeded → emergency-shutdown callback chain; supports controlled ramp-down before hard cut. |
-| `app_settings.py` | Persists all user settings to the Windows Registry under `HKCU\Software\T8_DAQ_System`. Survives restarts. |
-| `data_logger.py` | Writes timestamped CSV with a metadata header block; supports `load_csv_with_metadata()` for post-run replay. |
-| `main_window.py` | Central orchestrator — builds all hardware objects, wires callbacks, manages run/stop/log state, and routes GUI events. ~2 000 lines. |
-| `pinout_display.py` | Floating window showing live T8 pin assignments, raw voltages, and a wiring diagram canvas. Useful for hardware bring-up verification. |
 
 ---
 
@@ -257,17 +209,6 @@ Additional interlock: `DataAcquisition` monitors chamber pressure and can fire a
 | 22, 23 | Analog GND | T8 GND | — |
 | 12 | Monitor reference | `AIN4−` / `AIN5−` (differential negative) | — |
 
-> ⚠️ **Ground loop warning**: Pin 12 goes to `AIN4−`/`AIN5−` as the differential reference. **Never wire Pin 12 directly to T8 GND** — this creates a ground loop and gives wrong current readings.
-
-### Keysight SW1 Dip Switch (rear panel)
-
-| Switch | Required position | Effect |
-|--------|------------------|--------|
-| 1 | **UP** | Enables analog voltage programming |
-| 2 | **UP** | Enables analog current programming |
-| 3 | DOWN | Sets 0–5 V programming range |
-| 4 | DOWN | Sets 0–5 V monitor range |
-| 5 | **UP** | Shutdown polarity: FIO1 = 0 → OFF (matches code's `output_on()`) |
 
 ### XGS-600 — RS-232
 
@@ -276,18 +217,6 @@ Additional interlock: `DataAcquisition` monitors chamber pressure and can fire a
 - Baud: 9600, 8N1, no flow control
 - Poll rate: max once per 200 ms (`_MIN_COMMAND_INTERVAL = 0.20`)
 - Address byte: `00` (RS-232 default)
-
-> ⚠️ Do **not** use a null-modem cable or DB9 gender changer — they cancel each other and break communication.
-
----
-
-## Known Hardware Issues & Status
-
-| Issue | Status | Notes |
-|-------|--------|-------|
-| Keysight shows "SO" (Shut-Off) immediately on run | **Active** | Root causes: SW1 switches 1 & 2 not UP (analog interface disabled), and/or SW1-5 polarity mismatch. See SW1 table above. |
-| FIO vs EIO pin mismatch | **Active** | Code uses `EIO0`/`EIO1` in some places; physical wiring is on `FIO0`/`FIO1`. Must be reconciled consistently. |
-| PID tuning | **Untested on hardware** | `PIDController` defaults: Kp=1.0, Ki=0.05, Kd=0.05. PID run history (JSON) system is implemented. Gains need real-hardware tuning. |
 
 ---
 
@@ -318,20 +247,6 @@ Or in practice mode:
 ```bash
 python -m t8_daq_system.main --practice
 ```
-
----
-
-## Building a Standalone Executable
-
-```bash
-pyinstaller t8_daq_system.spec --clean
-```
-
-Output: `dist/T8_DAQ_System/` folder. Ship the whole folder (zip it). The `.exe` inside is what users run.
-
-> **PyInstaller performance note**: On non-development machines, matplotlib font scanning and PyVISA resource enumeration are the two most common causes of slow startup. The spec file includes mitigations for both.
-
----
 
 ## Running Tests
 
