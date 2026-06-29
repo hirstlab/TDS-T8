@@ -8,3 +8,5 @@ opencv-python
 Pillow
 imageio
 imageio-ffmpeg
+PyQt5>=5.15.0
+pyvisa>=1.13.0
