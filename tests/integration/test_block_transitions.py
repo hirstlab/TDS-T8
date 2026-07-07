@@ -165,6 +165,51 @@ def make_block(code, temp_k=300.0):
         return TempRampBlock(rate_k_per_min=600.0, end_temp_k=600.0, tc_name="TC_1")
 
 
+# ── Between-block power-continuity regression ─────────────────────────────────
+
+def test_no_power_dropout_between_blocks(mock_ps):
+    """
+    BUG REGRESSION: the power supply must NOT switch off between blocks.
+
+    Two back-to-back closed-loop blocks with the measured temperature held far
+    below setpoint, so the PID commands a substantial positive voltage the whole
+    time. Previously each block boundary hard-reset the PID, and because
+    compute() returns 0.0 on its first call the DAC dropped to ~0 V for a tick or
+    more — the supply visibly turned off and back on. The bumpless transfer must
+    keep the commanded voltage continuous across the boundary.
+    """
+    ticks = []  # (block_index, voltage_v)
+
+    def on_status(s):
+        ticks.append((s['block_index'], s['voltage_v']))
+
+    blocks = [
+        TempRampBlock(rate_k_per_min=6000.0, end_temp_k=500.0, tc_name="TC_1"),
+        TempRampBlock(rate_k_per_min=6000.0, end_temp_k=900.0, tc_name="TC_1"),
+    ]
+    with fast_executor_time():
+        # Temp fixed well below setpoint => persistent positive error => PID
+        # holds a high output on both blocks.
+        provider = lambda tc_name: (lambda: 300.0)
+        ex = ProgramExecutor(mock_ps, provider, on_status=on_status)
+        run_program(ex, blocks)
+
+    b0 = [v for (bi, v) in ticks if bi == 0]
+    b1 = [v for (bi, v) in ticks if bi == 1]
+    assert b0, "block 0 produced no status ticks"
+    assert b1, "block 1 produced no status ticks"
+
+    end_b0 = b0[-1]
+    assert end_b0 > 0.5, f"precondition: block 0 should command >0.5 V, got {end_b0:.3f}"
+
+    # The first few ticks of block 1 must not collapse toward 0 V.
+    first_b1_min = min(b1[:3])
+    assert first_b1_min > end_b0 * 0.5, (
+        f"power dropped at block boundary: block 0 ended at {end_b0:.3f} V but "
+        f"block 1 started at {b1[:3]} V (min {first_b1_min:.3f} V)"
+    )
+
+
 @pytest.mark.parametrize("a,b,c", [
     (a, b, c)
     for a in BLOCK_TYPES

@@ -89,6 +89,48 @@ class PIDController:
         self._last_i_term = 0.0
         self._last_d_term = 0.0
 
+    def reset_bumpless(self, seed_output: float, current_time: float = None):
+        """
+        Re-initialise for a new block WITHOUT dropping the output to zero.
+
+        Unlike reset(), which zeros the integrator (and, because compute()
+        returns 0.0 on its first call, forces the output to 0 for a tick or
+        more), this seeds the integrator so the controller's next output
+        equals ``seed_output`` — the voltage already being commanded. That
+        gives a bumpless transfer across block boundaries: no visible
+        power-off/power-on glitch, so the heater and PID stay continuous.
+
+        Stale derivative and timing history are still cleared so the new
+        block does not inherit a rate-of-change term from the previous one.
+
+        Args:
+            seed_output:  Output value (volts) to hold across the transition —
+                          normally the last commanded voltage.
+            current_time: Monotonic timestamp to prime the loop timer with.
+                          Priming it (instead of leaving it None) is what
+                          stops compute()'s first call from returning 0.0.
+        """
+        seed = max(self._output_min, min(seed_output, self._output_max))
+
+        # Seed the integrator so the I-term alone reproduces the held output,
+        # respecting the same windup clamp compute() enforces.
+        if self._ki > 1e-12:
+            integral = seed / self._ki
+            integral_limit = self._windup_limit / self._ki
+            self._integral = max(-integral_limit, min(integral, integral_limit))
+        else:
+            self._integral = 0.0
+
+        self._prev_error = 0.0
+        self._prev_measurement = None
+        self._prev_time = current_time
+        self._prev_output = seed
+        self._temp_buffer = []
+        self._last_smoothed_temp = None
+        self._last_p_term = 0.0
+        self._last_i_term = self._ki * self._integral
+        self._last_d_term = 0.0
+
     def compute(self, setpoint_k: float, measured_k: float,
                 current_time: float) -> float:
         """
