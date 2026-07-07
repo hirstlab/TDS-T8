@@ -207,13 +207,16 @@ class ProgramExecutor:
         self._current_get_temp_k = self._get_temp_k_provider("TC_1")
         block_start_temp_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
         
-        # Seed from actual PS output if supply is already live,
-        # so that starting a continuation program does not snap back to 0 V.
-        last_voltage = 0.0
+        # Seed the shared voltage setpoint from the live supply output if the
+        # supply is already energised, so that starting a continuation program
+        # does not snap back to 0 V. The first block's bumpless PID transfer
+        # builds on this value. (Previously this was computed into a local that
+        # was never used, so continuation runs still snapped to 0 V.)
         if self._ps:
             try:
                 _measured_v = self._ps.get_voltage()
-                last_voltage = _measured_v if _measured_v > 0.1 else 0.0
+                if _measured_v and _measured_v > 0.1:
+                    self.current_voltage_setpoint = _measured_v
             except Exception:
                 pass
 
@@ -280,13 +283,23 @@ class ProgramExecutor:
         start_time = time.time()
         start_temp_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
 
-        # FIX-1 START — Reset PID integrator between blocks
-        # A wound-up integral from a prior hold fights cooldown ramps by
-        # commanding positive voltage when negative correction is needed.
-        # Reset only for closed-loop blocks; voltage_ramp is open-loop.
+        # Bumpless PID re-init between blocks.
+        # A hard self._pid.reset() here zeros the integrator, and because
+        # PIDController.compute() returns 0.0 on its first call, the DAC was
+        # driven to 0 V for one or more ticks at EVERY block boundary. To the
+        # operator the power supply visibly switched off and back on between
+        # blocks, wrecking the PID and sending the temperature out of control.
+        #
+        # Instead, re-seed the controller so its first output equals the
+        # voltage we are already commanding: the output stays continuous
+        # across the boundary while stale derivative/timing history is still
+        # cleared. This also preserves the original intent of not letting a
+        # wound-up integral fight a following cooldown — the integral is set
+        # to exactly hold the current output, then unwinds naturally once the
+        # error flips sign on the way down. Reset only for closed-loop blocks;
+        # voltage_ramp is open-loop and drives the DAC directly.
         if block.block_type in ("temp_ramp", "stable_hold"):
-            self._pid.reset()
-        # FIX-1 END
+            self._pid.reset_bumpless(self.current_voltage_setpoint, start_time)
 
         # For StableHold stability tracking
         stability_start = None
