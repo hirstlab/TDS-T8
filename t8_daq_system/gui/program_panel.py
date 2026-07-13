@@ -183,7 +183,7 @@ class BlockEditDialog(tk.Toplevel):
 class ProgramPanel:
     def __init__(self, parent_frame, preview_plot=None, get_initial_state_fn=None,
                  on_program_change=None, tc_names=None, get_unit_fn=None,
-                 get_tc_temp_k_fn=None):
+                 get_tc_temp_k_fn=None, ff_map=None):
         self.parent = parent_frame
         self.preview_plot = preview_plot
         self.get_initial_state_fn = get_initial_state_fn
@@ -192,6 +192,7 @@ class ProgramPanel:
         self._on_change = on_program_change
         self._tc_names = list(tc_names) if tc_names else ["TC_1"]
         self._get_unit = get_unit_fn or (lambda: 'K')
+        self._ff_map = ff_map  # FF-10 — feedforward map for preview trajectory
         self._blocks = []
 
         self._build_gui()
@@ -418,9 +419,56 @@ class ProgramPanel:
             self._blocks, start_temp_k=start_t, start_voltage=start_v
         )
 
+        # FF-10 START — compute feedforward voltage trajectory and zone bar data
+        ff_voltages = None
+        zones_info = None
+        if self._ff_map is not None and times:
+            ff_arr = [0.0] * len(times)
+            zones_list = []
+
+            for i, block in enumerate(self._blocks):
+                if block.block_type != 'temp_ramp':
+                    continue
+                b_start = boundaries[i] if i < len(boundaries) else 0.0
+                b_end = (boundaries[i + 1] if (i + 1) < len(boundaries)
+                         else (times[-1] if times else 0.0))
+                rate = getattr(block, 'rate_k_per_min', 0.0)
+                if rate <= 0:
+                    continue
+                # Fill FF voltage for each time sample in this block's range
+                tc_start = None
+                for j, (t, tk) in enumerate(zip(times, temps_k)):
+                    if b_start <= t <= b_end:
+                        tc = tk - 273.15
+                        ff_arr[j] = self._ff_map.voltage_for(rate, tc)
+                        if tc_start is None:
+                            tc_start = tc
+                # Zone bar entry for this block
+                t_end_c = getattr(block, 'end_temp_k', 1273.15) - 273.15
+                zones = self._ff_map.zones_for(
+                    rate,
+                    tc_start if tc_start is not None else 0.0,
+                    t_end_c,
+                )
+                if zones and tc_start is not None:
+                    zones_list.append({
+                        't_start_min': b_start / 60.0,
+                        't_end_min': b_end / 60.0,
+                        'tc_start': tc_start,
+                        'rate_k_per_min': rate,
+                        'zones': zones,
+                    })
+
+            if any(v > 0 for v in ff_arr):
+                ff_voltages = ff_arr
+            if zones_list:
+                zones_info = zones_list
+        # FF-10 END
+
         unit = self._get_unit()
         self.preview_plot.update_unified_preview(times, voltages, temps_k, self._blocks, boundaries,
-                                                 display_unit=unit)
+                                                 display_unit=unit, ff_voltages=ff_voltages,
+                                                 zones_info=zones_info)
 
     def _update_pid_status(self):
         """Refresh the PID-ready indicator and live TC reading."""

@@ -977,7 +977,7 @@ class MainWindow:
         )
         self._cam_snapshot_statusbar_btn.pack(side=tk.RIGHT, padx=(2, 0))
         self._cam_toggle_btn = ttk.Button(
-            safety_frame, text='Cam Off',
+            safety_frame, text='Cam On',
             command=self._on_cam_toggle, width=8
         )
         self._cam_toggle_btn.pack(side=tk.RIGHT, padx=(2, 0))
@@ -1200,6 +1200,7 @@ class MainWindow:
             tc_names=sorted(self._tc_names),
             get_unit_fn=lambda: getattr(self, 't_unit_var', None) and self.t_unit_var.get() or 'K',
             get_tc_temp_k_fn=self._get_latest_tc_reading_k,
+            ff_map=getattr(self._program_executor, '_ff_map', None),  # FF-10
         )
         
         # Restore saved blocks from before the programmer was last closed

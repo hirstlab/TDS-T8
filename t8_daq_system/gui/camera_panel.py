@@ -151,9 +151,10 @@ class CameraPanel(ttk.Frame):
         self._pulse_phase    = False   # alternates True/False each tick
         self._init_recording_styles()
 
-        # ── Build UI then init camera after widget is mapped ──────────────────
+        # ── Build UI; camera starts OFF by default ────────────────────────────
         self._build_ui()
-        self.after(100, self._init_camera)
+        self.grid_propagate(False)  # prevent video frames from resizing the panel
+        self._video_label.config(text='Camera off', foreground='gray')
 
     # ──────────────────────────────────────────────────────────────────────────
 
@@ -166,7 +167,7 @@ class CameraPanel(ttk.Frame):
         self._video_label = tk.Label(
             self,
             background='black',
-            text='Initializing camera...',
+            text='Camera off',
             foreground='gray',
             font=('Arial', 10)
         )

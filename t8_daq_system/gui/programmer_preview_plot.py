@@ -13,6 +13,51 @@ import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
+# FF-10 — zone bar colours (index = zone number 0-based)
+_ZONE_COLORS = ['#aed6f1', '#a9dfbf', '#f9e79f', '#f1948a']
+
+
+def _draw_zone_bar(ax, zones_info):
+    """Draw coloured gain-scheduling zone segments on *ax*.
+
+    zones_info: list of dicts, one per temp_ramp block:
+        t_start_min   – block start time (minutes)
+        t_end_min     – block end time (minutes)
+        tc_start      – temperature at block start (°C)
+        rate_k_per_min– ramp rate (K/min)
+        zones         – list of Zone(t_lo, t_hi, mean_slope) in °C
+    """
+    for entry in zones_info:
+        t0 = entry['t_start_min']
+        t_end = entry['t_end_min']
+        tc0 = entry['tc_start']
+        rate = entry['rate_k_per_min']
+        zones = entry['zones']
+        if rate <= 0 or not zones:
+            continue
+        for z_idx, zone in enumerate(zones):
+            color = _ZONE_COLORS[min(z_idx, len(_ZONE_COLORS) - 1)]
+            z_t_start = t0 + (zone.t_lo - tc0) / rate
+            z_t_end   = t0 + (zone.t_hi - tc0) / rate
+            z_t_start = max(t0, z_t_start)
+            z_t_end   = min(t_end, z_t_end)
+            if z_t_end <= z_t_start:
+                continue
+            ax.broken_barh(
+                [(z_t_start, z_t_end - z_t_start)], (0, 1),
+                facecolors=color, edgecolor='none', alpha=0.8
+            )
+            mid_t = (z_t_start + z_t_end) / 2.0
+            ax.text(mid_t, 0.5, f'Z{z_idx + 1}',
+                    ha='center', va='center', fontsize=7,
+                    color='#333333', fontweight='bold')
+
+    ax.set_ylim(0, 1)
+    ax.set_yticks([])
+    ax.yaxis.set_visible(False)
+    ax.tick_params(axis='x', labelsize=7)
+    ax.set_ylabel('Zones', fontsize=7, rotation=0, labelpad=30, va='center')
+
 
 class ProgrammerPreviewPlot:
     """
@@ -76,6 +121,9 @@ class ProgrammerPreviewPlot:
         self._dot_volt  = None   # scatter on right axis (voltage)
         # ──────────────────────────────────────────────────────────────────
 
+        # FF-10 — zone bar axes (created on demand, removed when not needed)
+        self._ax_zone = None
+
         self.canvas = FigureCanvasTkAgg(self.fig, master=parent_frame)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         self.canvas.draw()
@@ -133,14 +181,22 @@ class ProgrammerPreviewPlot:
         self.canvas.draw_idle()
 
     def update_unified_preview(self, times, voltages, temps_k, blocks, boundaries,
-                               display_unit='K'):
+                               display_unit='K', ff_voltages=None, zones_info=None):
         """
         Render the unified temperature-over-time preview.
 
-        If any of the blocks is a voltage_ramp the right y-axis is shown with
-        the voltage profile so the user can see both temperature and voltage
-        in the same view.
+        If any block is a voltage_ramp the right y-axis shows the voltage profile.
+        If ff_voltages is provided (list of predicted FF voltages, same length as times)
+        it is drawn on the right axis as the expected feedforward trajectory.
+        If zones_info is provided a thin coloured zone bar is rendered below the main plot.
+
+        zones_info: list of dicts with keys:
+            t_start_min, t_end_min, tc_start, rate_k_per_min, zones (list of Zone)
         """
+        # FF-10 START — clear zone bar before redraw
+        self._clear_zone_bar()
+        # FF-10 END
+
         self._ax_v.cla()
         self._ax_a.cla()
         self._ax_a.set_visible(False)
@@ -184,18 +240,36 @@ class ProgrammerPreviewPlot:
         self._ax_v.set_xlabel('Time (min)')
         self._ax_v.grid(True, alpha=0.3)
 
-        # ── Right axis: voltage (only when voltage ramp blocks exist) ──────
+        # ── Right axis: voltage ramp or FF trajectory ─────────────────────
+        has_right_axis = has_voltage_ramp or (ff_voltages is not None)
         if has_voltage_ramp:
             self._ax_a.set_visible(True)
-            # Mask NaN-safe: only draw where voltage actually changes
             self._ax_a.plot(t_min, v_arr, color='#2980b9', linewidth=1.8,
                             linestyle='--', label='Voltage (V)', zorder=2)
             self._ax_a.set_ylabel('Voltage (V)', color='#2980b9',
                                    rotation=270, labelpad=15)
             self._ax_a.tick_params(axis='y', labelcolor='#2980b9')
-            right_margin = 0.88
-        else:
-            right_margin = 0.95
+
+        # FF-10 START — predicted feedforward voltage trajectory
+        if ff_voltages is not None:
+            ff_arr = np.array(ff_voltages)
+            # Only show where FF is non-zero (temp_ramp segments)
+            ff_mask = ff_arr > 0.02
+            if ff_mask.any():
+                self._ax_a.set_visible(True)
+                self._ax_a.plot(
+                    t_min[ff_mask], ff_arr[ff_mask],
+                    color='#8e44ad', linewidth=1.5, linestyle=':', alpha=0.85,
+                    label='Predicted FF Voltage (V)', zorder=3
+                )
+                if not has_voltage_ramp:
+                    self._ax_a.set_ylabel('Feedforward V', color='#8e44ad',
+                                           rotation=270, labelpad=15)
+                    self._ax_a.yaxis.set_label_position('right')
+                    self._ax_a.tick_params(axis='y', labelcolor='#8e44ad')
+        # FF-10 END
+
+        right_margin = 0.88 if has_right_axis else 0.95
 
         # ── Block boundary lines ───────────────────────────────────────────
         for b_time in boundaries[1:]:
@@ -220,7 +294,27 @@ class ProgrammerPreviewPlot:
         total_min = t_min[-1] if len(t_min) > 0 else 0
         self.fig.suptitle(f'Temperature Preview  —  {total_min:.0f} min total',
                           fontsize=10, fontweight='bold')
-        self.fig.subplots_adjust(left=0.12, right=right_margin, top=0.90, bottom=0.15)
+
+        # FF-10 START — zone bar beneath the main plot
+        if zones_info:
+            bottom_margin = 0.22
+            self.fig.subplots_adjust(left=0.12, right=right_margin, top=0.90, bottom=bottom_margin)
+            bar_h = 0.10
+            bar_b = 0.07
+            bar_w = right_margin - 0.12
+            self._ax_zone = self.fig.add_axes(
+                [0.12, bar_b, bar_w, bar_h], sharex=self._ax_v
+            )
+            self._ax_zone.set_yticks([])
+            self._ax_zone.tick_params(labelleft=False, left=False)
+            self._ax_zone.set_xlabel('Time (min)', fontsize=8)
+            self._ax_zone.set_xlim(self._ax_v.get_xlim())
+            self._ax_v.set_xlabel('')
+            self._ax_v.tick_params(labelbottom=False)
+            _draw_zone_bar(self._ax_zone, zones_info)
+        else:
+            self.fig.subplots_adjust(left=0.12, right=right_margin, top=0.90, bottom=0.15)
+        # FF-10 END
 
         # ── Dot indicators (start at t=0, hidden until programme runs) ────
         dot_t0 = t_min[0]
@@ -292,6 +386,7 @@ class ProgrammerPreviewPlot:
         Render TempRamp preview with full phase annotations.
         (Used by the legacy PowerProgrammerPanel — kept for compatibility.)
         """
+        self._clear_zone_bar()  # FF-10
         self._ax_v.cla()
         self._ax_a.cla()
         self._ax_a.set_visible(False)
@@ -454,6 +549,17 @@ class ProgrammerPreviewPlot:
     # ──────────────────────────────────────────────────────────────────────
     # Internal helpers
     # ──────────────────────────────────────────────────────────────────────
+
+    # FF-10 START — zone bar helpers
+    def _clear_zone_bar(self):
+        """Remove the zone bar axes if it exists."""
+        if self._ax_zone is not None:
+            try:
+                self.fig.delaxes(self._ax_zone)
+            except Exception:
+                pass
+            self._ax_zone = None
+    # FF-10 END
 
     @staticmethod
     def _find_block_boundaries(times, voltages, currents):
