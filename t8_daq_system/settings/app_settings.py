@@ -236,6 +236,10 @@ class AppSettings:
         finally:
             winreg.CloseKey(key)
 
+        # Migrate unsupported temperature unit: F is no longer selectable
+        if getattr(self, 'tc_unit', 'C') == 'F':
+            self.tc_unit = 'C'
+
         return self
 
     def save(self) -> None:

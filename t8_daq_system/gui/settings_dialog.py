@@ -312,7 +312,7 @@ class SettingsDialog(tk.Toplevel):
         self._create_option_row(tc_frame, "Count:", "tc_count",
                                ["0", "1", "2", "3", "4", "5", "6", "7"], row=0)
         self._create_option_row(tc_frame, "Unit:", "tc_unit",
-                               ["C", "F", "K"], row=1)
+                               ["C", "K"], row=1)
 
         # Rebuild per-TC type/pin rows whenever the count changes
         self._tc_type_vars = []

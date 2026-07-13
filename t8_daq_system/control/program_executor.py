@@ -383,19 +383,20 @@ class ProgramExecutor:
                     stability_start = None
 
             elif block.block_type == "temp_ramp":
-                # PID control with ramping setpoint
+                # PID control with plain ramping setpoint at the requested rate.
+                current_temp_c = current_temp_k - 273.15
                 rate_k_per_sec = block.rate_k_per_min / 60.0
                 setpoint_k = start_temp_k + rate_k_per_sec * elapsed
 
-                # Cap setpoint at end_temp_k
+                # Cap at end_temp_k and detect completion
                 is_finished = False
                 if rate_k_per_sec > 0:
+                    setpoint_k = min(setpoint_k, block.end_temp_k)
                     if setpoint_k >= block.end_temp_k:
-                        setpoint_k = block.end_temp_k
                         is_finished = True
                 else:
+                    setpoint_k = max(setpoint_k, block.end_temp_k)
                     if setpoint_k <= block.end_temp_k:
-                        setpoint_k = block.end_temp_k
                         is_finished = True
 
                 # FIX-2 START — Suppress is_finished during the warmup window
@@ -409,8 +410,7 @@ class ProgramExecutor:
                     is_finished = False
                 # FIX-2 END
 
-                # FF-7 START — rate-indexed feedforward voltage
-                current_temp_c = current_temp_k - 273.15
+                # FF-7 START — feedforward voltage from steady-state backbone
                 ff_v = self._ff_map.voltage_for(self._block_rate_k_per_min, current_temp_c)
                 # FF-7 END
                 pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
@@ -569,6 +569,14 @@ class ProgramExecutor:
     def get_pid_logger(self) -> 'PIDRunLogger':
         """Return the PIDRunLogger so the GUI can display the run history."""
         return self._pid_logger
+
+    def validate_program(self, blocks) -> list:
+        """
+        Check blocks for power-envelope violations.
+
+        Returns a list of warning strings; empty means no issues found.
+        """
+        return list(self._ff_map.validate_program(blocks))
 
     # FF-7 START — per-block feedforward/gain resolver
     def _resolve_block_control(self, block):

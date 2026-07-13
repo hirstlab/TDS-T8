@@ -7,6 +7,7 @@ No GUI / tkinter imports — pure control/logic module.
 
 import json
 import os
+import sys
 
 
 # ── Soft-Start / Phase 1 constants ────────────────────────────────────────────
@@ -17,7 +18,6 @@ SOFT_START_RATE_CEILING   = 3.0     # K/min — cut voltage if heating too fast 
 
 # ── PID slew-rate limiter ─────────────────────────────────────────────────────
 PID_MAX_VOLTAGE_STEP_V    = 0.050   # V per tick — max DAC0 change per PID update
-
 
 # ── Temperature conversion utilities ──────────────────────────────────────────
 
@@ -71,9 +71,6 @@ class PIDController:
         self._temp_filter_size = 12   # ~6 seconds at 500 ms sample rate
         self._temp_buffer = []
         self._last_smoothed_temp = None
-
-        # Fix 4: feedforward table for gain scheduling
-        self._ff_table = self._load_ff_table()
 
         # Debug: last computed P, I, D contributions
         self._last_p_term = 0.0
@@ -199,48 +196,6 @@ class PIDController:
 
         return clamped
 
-    def _load_ff_table(self) -> list:
-        """Retired FF-6 — superseded by FeedforwardMap. Kept for rollback safety."""
-        try:
-            table_path = os.path.join(
-                os.path.dirname(__file__), '..', 'config', 'pid_feedforward_table.json'
-            )
-            with open(table_path, 'r') as f:
-                data = json.load(f)
-            return [(entry[0], entry[1]) for entry in data]
-        except Exception:
-            return []
-
-    def _get_dvdt_scale(self, temp_k: float, ff_table: list) -> float:
-        """
-        Retired FF-6 — superseded by FeedforwardMap.voltage_for(). Kept for rollback safety.
-        Previously returned a gain scale factor relative to a reference temperature.
-        """
-        if len(ff_table) < 2:
-            return 1.0
-
-        REFERENCE_TEMP_K = 1473.0
-
-        def interp_dvdt(t_k):
-            for i in range(len(ff_table) - 1):
-                v0, t0 = ff_table[i][0],   ff_table[i][1]
-                v1, t1 = ff_table[i + 1][0], ff_table[i + 1][1]
-                if t0 <= t_k <= t1:
-                    dt = t1 - t0
-                    if dt < 1.0:
-                        return (v1 - v0) / 1.0
-                    return (v1 - v0) / dt
-            # Extrapolate from last segment
-            v0, t0 = ff_table[-2][0], ff_table[-2][1]
-            v1, t1 = ff_table[-1][0], ff_table[-1][1]
-            return (v1 - v0) / max(t1 - t0, 1.0)
-
-        dvdt_now = interp_dvdt(temp_k)
-        dvdt_ref = interp_dvdt(REFERENCE_TEMP_K)
-        if dvdt_ref < 1e-9:
-            return 1.0
-        return dvdt_now / dvdt_ref
-
     def get_debug_terms(self) -> dict:
         """Return the P, I, D contributions from the most recent compute() call.
 
@@ -278,11 +233,23 @@ class PIDRunLogger:
     display it without any extra configuration.
     """
 
-    LOG_FILE = "logs/pid_runs.json"
+    LOG_FILENAME = "pid_runs.json"
     MAX_RUNS = 100  # keep the last N runs
 
+    @staticmethod
+    def _default_log_file() -> str:
+        """Resolve logs/pid_runs.json relative to the exe (frozen) or project root (dev)."""
+        if getattr(sys, 'frozen', False):
+            appdata = os.environ.get('APPDATA', os.path.dirname(sys.executable))
+            logs_dir = os.path.join(appdata, 'T8_DAQ_System', 'logs')
+        else:
+            # Two levels up from this file: t8_daq_system/control/ → project root
+            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            logs_dir = os.path.join(project_root, 'logs')
+        return os.path.join(logs_dir, PIDRunLogger.LOG_FILENAME)
+
     def __init__(self, log_file: str = None):
-        self.log_file = log_file or self.LOG_FILE
+        self.log_file = log_file or self._default_log_file()
         self._runs = []
         self._load()
 

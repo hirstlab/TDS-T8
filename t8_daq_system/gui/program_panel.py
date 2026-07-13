@@ -71,15 +71,15 @@ class BlockEditDialog(tk.Toplevel):
 
         elif self.block.block_type == "temp_ramp":
             self._add_mode_selector(main_frame, "Input Mode:", "entry_mode", self._entry_mode)
-            
+
             self.dynamic_container = ttk.Frame(main_frame)
             self.dynamic_container.pack(fill=tk.X)
-            
+
             disp_end, _ = _k_to_disp(self.block.end_temp_k, self._unit)
             self._add_entry(main_frame, f"Target Temp ({unit_str}):", "_end_temp_disp",
                             round(disp_end, 2))
             self._add_tc_dropdown(main_frame, "TC Name:", "tc_name", self.block.tc_name)
-            
+
             self._update_temp_ramp_fields()
 
         btn_frame = ttk.Frame(main_frame)
@@ -153,7 +153,7 @@ class BlockEditDialog(tk.Toplevel):
                 self.block.hold_duration_sec = float(self._vars["hold_duration_sec"].get())
 
             elif self.block.block_type == "temp_ramp":
-                self.block.tc_name = self._vars["tc_name"].get()
+                self.block.tc_name     = self._vars["tc_name"].get()
                 end_disp = float(self._vars["_end_temp_disp"].get())
                 self.block.end_temp_k = _disp_to_k(end_disp, self._unit)
 
@@ -248,6 +248,11 @@ class ProgramPanel:
             status_bar, text="", foreground='gray', font=('Arial', 9)
         )
         self._tc_live_label.pack(side=tk.LEFT)
+
+        self._warn_label = ttk.Label(
+            status_bar, text="", foreground='#cc7700', font=('Arial', 8)
+        )
+        self._warn_label.pack(side=tk.LEFT, padx=(8, 0))
 
         self._refresh_list()
         self._update_pid_status()
@@ -419,12 +424,10 @@ class ProgramPanel:
             self._blocks, start_temp_k=start_t, start_voltage=start_v
         )
 
-        # FF-10 START — compute feedforward voltage trajectory and zone bar data
+        # FF-10 START — compute feedforward voltage trajectory
         ff_voltages = None
-        zones_info = None
         if self._ff_map is not None and times:
             ff_arr = [0.0] * len(times)
-            zones_list = []
 
             for i, block in enumerate(self._blocks):
                 if block.block_type != 'temp_ramp':
@@ -435,49 +438,28 @@ class ProgramPanel:
                 rate = getattr(block, 'rate_k_per_min', 0.0)
                 if rate <= 0:
                     continue
-                # Fill FF voltage for each time sample in this block's range
-                tc_start = None
                 for j, (t, tk) in enumerate(zip(times, temps_k)):
                     if b_start <= t <= b_end:
-                        tc = tk - 273.15
-                        ff_arr[j] = self._ff_map.voltage_for(rate, tc)
-                        if tc_start is None:
-                            tc_start = tc
-                # Zone bar entry for this block
-                t_end_c = getattr(block, 'end_temp_k', 1273.15) - 273.15
-                zones = self._ff_map.zones_for(
-                    rate,
-                    tc_start if tc_start is not None else 0.0,
-                    t_end_c,
-                )
-                if zones and tc_start is not None:
-                    zones_list.append({
-                        't_start_min': b_start / 60.0,
-                        't_end_min': b_end / 60.0,
-                        'tc_start': tc_start,
-                        'rate_k_per_min': rate,
-                        'zones': zones,
-                    })
+                        ff_arr[j] = self._ff_map.voltage_for(rate, tk - 273.15)
 
             if any(v > 0 for v in ff_arr):
                 ff_voltages = ff_arr
-            if zones_list:
-                zones_info = zones_list
         # FF-10 END
 
         unit = self._get_unit()
         self.preview_plot.update_unified_preview(times, voltages, temps_k, self._blocks, boundaries,
                                                  display_unit=unit, ff_voltages=ff_voltages,
-                                                 zones_info=zones_info)
+                                                 zones_info=None)
 
     def _update_pid_status(self):
-        """Refresh the PID-ready indicator and live TC reading."""
+        """Refresh the PID-ready indicator, live TC reading, and feasibility warnings."""
         if not self._blocks:
             self._pid_status_label.config(text="Program: Not Ready — no blocks", foreground='red')
             self._tc_live_label.config(text="")
+            self._warn_label.config(text="")
             return
 
-        # Show live readings for any TC used by temp_ramp blocks (optional)
+        # Live TC readings for temp_ramp blocks
         tc_names_used = [b.tc_name for b in self._blocks if hasattr(b, 'tc_name')]
         live_parts = []
         if tc_names_used and self._get_tc_temp_k is not None:
@@ -486,7 +468,7 @@ class ProgramPanel:
                     temp_k = self._get_tc_temp_k(tc)
                     unit = self._get_unit()
                     if unit == 'C':
-                        disp = f"{temp_k - 273.15:.1f}°C"
+                        disp = f"{temp_k - 273.15:.1f}\u00b0C"
                     else:
                         disp = f"{temp_k:.1f} K"
                     live_parts.append(f"{tc}: {disp}")
@@ -494,9 +476,21 @@ class ProgramPanel:
                     live_parts.append(f"{tc}: ---")
 
         block_summary = f"{len(self._blocks)} block{'s' if len(self._blocks) != 1 else ''}"
-        self._pid_status_label.config(text=f"Program Ready — {block_summary}", foreground='green')
+        self._pid_status_label.config(text=f"Program Ready \u2014 {block_summary}", foreground='green')
         self._tc_live_label.config(
             text=("  " + "  |  ".join(live_parts)) if live_parts else ""
+        )
+
+        # Power-ceiling feasibility warnings via FF map
+        warn_parts = []
+        if self._ff_map is not None:
+            try:
+                ff_warns = self._ff_map.validate_program(self._blocks)
+                warn_parts.extend(ff_warns)
+            except Exception:
+                pass
+        self._warn_label.config(
+            text="  \u26a0 " + warn_parts[0] if warn_parts else ""
         )
 
     def get_blocks(self):

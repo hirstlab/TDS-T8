@@ -1599,7 +1599,7 @@ class MainWindow:
 
         t_unit = self.t_unit_var.get() if hasattr(self, 't_unit_var') else 'C'
 
-        temp_symbols = {'C': '\u00b0C', 'F': '\u00b0F', 'K': 'K'}
+        temp_symbols = {'C': '\u00b0C', 'K': 'K'}
         temp_unit_display = temp_symbols.get(t_unit, '\u00b0C')
 
         if not hasattr(self, '_temp_range'):
@@ -1735,7 +1735,7 @@ class MainWindow:
                 if 'frg702_count' in metadata:
                     self.frg_count_var.set(str(metadata['frg702_count']))
                 if 'tc_unit' in metadata:
-                    self.t_unit_var.set(metadata['tc_unit'])
+                    self.t_unit_var.set('C' if metadata['tc_unit'] == 'F' else metadata['tc_unit'])
                 _press_unit = metadata.get('p_unit') or metadata.get('frg702_unit')
                 if _press_unit:
                     self.p_unit_var.set(_press_unit)
