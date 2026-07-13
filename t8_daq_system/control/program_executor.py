@@ -10,6 +10,7 @@ import datetime
 import math
 import random
 from .temp_ramp_pid import PIDController, PIDRunLogger
+from .feedforward_map import FeedforwardMap  # FF-5
 
 class ProgramExecutor:
     def __init__(self, power_supply, get_temp_k_fn_provider,
@@ -37,6 +38,12 @@ class ProgramExecutor:
 
         self._pid = PIDController()
         self._pid_logger = PIDRunLogger()
+
+        # FF-7 START — rate-indexed feedforward map
+        self._ff_map = FeedforwardMap()
+        self._ff_map.load()
+        self._block_rate_k_per_min = 0.0   # rate of the currently executing block
+        # FF-7 END
 
         # Shared state between blocks
         self.current_voltage_setpoint = 0.0
@@ -248,6 +255,10 @@ class ProgramExecutor:
                 if block.block_type == "temp_ramp":
                     self._current_get_temp_k = self._get_temp_k_provider(block.tc_name)
 
+                # FF-7 START — per-block feedforward/gain resolution
+                self._resolve_block_control(block)
+                # FF-7 END
+
                 if self._on_block_start:
                     self._on_block_start(self.current_block_index, block)
 
@@ -398,7 +409,10 @@ class ProgramExecutor:
                     is_finished = False
                 # FIX-2 END
 
-                ff_v = 0.0
+                # FF-7 START — rate-indexed feedforward voltage
+                current_temp_c = current_temp_k - 273.15
+                ff_v = self._ff_map.voltage_for(self._block_rate_k_per_min, current_temp_c)
+                # FF-7 END
                 pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
                 v_out = max(0.0, min(ff_v + pid_correction, 6.0))
                 # FF-3 START — update scheduler state
@@ -545,9 +559,31 @@ class ProgramExecutor:
         self._last_run_record = record
         self._pid_logger.save_run(record)
 
+        # FF-8 START — append completed run data to feedforward map
+        try:
+            self._ff_map.append_run(self._run_log, target_rate)
+        except Exception as _ff_exc:
+            print(f"[ProgramExecutor] FF map append_run error: {_ff_exc}")
+        # FF-8 END
+
     def get_pid_logger(self) -> 'PIDRunLogger':
         """Return the PIDRunLogger so the GUI can display the run history."""
         return self._pid_logger
+
+    # FF-7 START — per-block feedforward/gain resolver
+    def _resolve_block_control(self, block):
+        """
+        Called once at each block transition before _execute_block.
+
+        Stores the block rate so the tick loop can query FeedforwardMap.voltage_for.
+        Gain updates (suggest_gains per-block) are a Phase 3 extension; for now
+        the gains set by main_window before start() carry through unchanged.
+        """
+        if block.block_type == "temp_ramp":
+            self._block_rate_k_per_min = getattr(block, 'rate_k_per_min', 0.0)
+        else:
+            self._block_rate_k_per_min = 0.0
+    # FF-7 END
 
     # FF-3 START — scheduler state getter for CSV logging
     def get_sched_state(self) -> dict:

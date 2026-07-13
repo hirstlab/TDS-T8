@@ -664,6 +664,46 @@ class CameraPanel(ttk.Frame):
                 f'Duration: {duration_s:.0f}s @ {export_fps} fps'
             )
 
+    def toggle_feed(self) -> bool:
+        """
+        Start or stop the live camera feed without destroying the widget.
+
+        Returns True if the camera is now starting, False if it has been stopped.
+        Designed to be called from the main thread (it schedules _init_camera via after()).
+        """
+        if self._camera_active:
+            # --- Stop ---
+            if self._timelapse_running:
+                self._stop_timelapse()
+
+            self._camera_active = False
+            if self._feed_after_id is not None:
+                try:
+                    self.after_cancel(self._feed_after_id)
+                except Exception:
+                    pass
+                self._feed_after_id = None
+
+            self._stop_capture.set()
+            if self._capture_thread is not None:
+                self._capture_thread.join(timeout=2.0)
+                self._capture_thread = None
+            if self._cap is not None:
+                self._cap.release()
+                self._cap = None
+
+            self._snapshot_btn.config(state='disabled')
+            self._timelapse_btn.config(state='disabled')
+            self._sync_ext_buttons()
+            self._video_label.config(text='Camera off', image='', foreground='gray')
+            self._stop_capture.clear()
+            return False
+        else:
+            # --- Start ---
+            self._video_label.config(text='Starting camera...', image='', foreground='gray')
+            self.after(100, self._init_camera)
+            return True
+
     def stop_camera(self):
         """
         Gracefully stop timelapse, display loop, capture thread, and release

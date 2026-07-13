@@ -185,10 +185,9 @@ class PIDController:
         self._last_d_term = self._kd * derivative
         raw_output = self._last_p_term + self._last_i_term + self._last_d_term
 
-        # Fix 4: gain scheduling — scale PID output by local process-gain ratio.
-        gain_scale = self._get_dvdt_scale(measured_k, self._ff_table)
-        gain_scale = max(0.5, min(2.5, gain_scale))
-        raw_output *= gain_scale
+        # FF-6 START — per-tick dvdt gain scaling retired; feedforward handled by executor
+        # (FeedforwardMap.voltage_for is added to v_out in program_executor._execute_block)
+        # FF-6 END
 
         # Clamp output (0 to output_max — voltage must never go negative)
         clamped = max(self._output_min, min(raw_output, self._output_max))
@@ -201,7 +200,7 @@ class PIDController:
         return clamped
 
     def _load_ff_table(self) -> list:
-        """Load the feedforward (voltage, temp_K) table from config JSON."""
+        """Retired FF-6 — superseded by FeedforwardMap. Kept for rollback safety."""
         try:
             table_path = os.path.join(
                 os.path.dirname(__file__), '..', 'config', 'pid_feedforward_table.json'
@@ -214,9 +213,8 @@ class PIDController:
 
     def _get_dvdt_scale(self, temp_k: float, ff_table: list) -> float:
         """
-        Returns a gain scale factor relative to a reference temperature.
-        ff_table: list of (voltage, temp_k) tuples sorted by temp_k.
-        Reference point is fixed at ~1473 K (1200°C) — the bottom of our TDS ramp.
+        Retired FF-6 — superseded by FeedforwardMap.voltage_for(). Kept for rollback safety.
+        Previously returned a gain scale factor relative to a reference temperature.
         """
         if len(ff_table) < 2:
             return 1.0

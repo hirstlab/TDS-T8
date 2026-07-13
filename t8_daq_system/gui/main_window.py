@@ -640,6 +640,16 @@ class MainWindow:
         if self._camera_panel is not None:
             self._camera_panel._toggle_timelapse()
 
+    def _on_cam_toggle(self):
+        """Toggle the camera feed on or off."""
+        if self._camera_panel is None:
+            return
+        now_starting = self._camera_panel.toggle_feed()
+        if now_starting:
+            self._cam_toggle_btn.config(text='Cam Off')
+        else:
+            self._cam_toggle_btn.config(text='Cam On')
+
     def _apply_camera_button_mode(self):
         """
         Show/hide camera buttons according to the camera_buttons_overlay setting.
@@ -717,6 +727,17 @@ class MainWindow:
 
             print("[DEFERRED] Hardware initialization complete")
             self._hardware_init_attempted = True
+
+            # FF-8 START — seed feedforward map from historical CSVs in background
+            import threading as _threading
+            def _ff_ingest_thread():
+                try:
+                    self._program_executor._ff_map.scan_log_folder(self.log_folder)
+                except Exception as _exc:
+                    print(f"[FF-ingest] Background scan error (non-fatal): {_exc}")
+            _threading.Thread(target=_ff_ingest_thread, daemon=True,
+                              name='FF-LogIngest').start()
+            # FF-8 END
 
         except Exception as exc:
             print(f"[DEFERRED] Hardware init error (non-fatal): {exc}")
@@ -955,6 +976,11 @@ class MainWindow:
             command=self._on_cam_snapshot, state='disabled', width=10
         )
         self._cam_snapshot_statusbar_btn.pack(side=tk.RIGHT, padx=(2, 0))
+        self._cam_toggle_btn = ttk.Button(
+            safety_frame, text='Cam Off',
+            command=self._on_cam_toggle, width=8
+        )
+        self._cam_toggle_btn.pack(side=tk.RIGHT, padx=(2, 0))
 
         profiler.checkpoint("Safety status bar created")
 
