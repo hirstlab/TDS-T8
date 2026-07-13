@@ -38,18 +38,22 @@ class PIDController:
     Output is a normalised 0–1 power fraction (not raw volts/amps).
     """
 
-    def __init__(self, kp=1.0, ki=0.05, kd=0.05,
+    # FF-1 START — reconcile gain source of truth
+    def __init__(self, kp=0.02, ki=0.0013, kd=0.005,
                  output_min=0.0, output_max=6.0,
                  integral_windup_limit=30.0):
         """
+        Base gains are the authoritative values in AppSettings; this default is a fallback only.
+
         Args:
             kp: Proportional gain (very small — power supply is high-current).
             ki: Integral gain.
-            kd: Derivative gain.
+            kd: Derivative gain (0.005 — best oscillation result, 2026-06-30 run).
             output_min: Minimum clamped output (fraction of full power).
             output_max: Maximum clamped output (fraction of full power).
             integral_windup_limit: Clamp integral accumulator to ±this (K·s).
         """
+        # FF-1 END
         self._kp = kp
         self._ki = ki
         self._kd = kd

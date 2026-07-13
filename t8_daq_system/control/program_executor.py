@@ -52,6 +52,15 @@ class ProgramExecutor:
         self._run_log = []   # [(elapsed, setpoint_k, actual_k, voltage_v), ...]
         self._last_run_record = None
 
+        # FF-3 START — scheduler state exposed for CSV logging (read by on_new_data)
+        self._sched_kp = 0.0
+        self._sched_ki = 0.0
+        self._sched_kd = 0.0
+        self._sched_zone = 0
+        self._ff_voltage = 0.0
+        self._pid_correction = 0.0
+        # FF-3 END
+
         # QMS confirmation gate
         self._confirmation_event = threading.Event()
         self._waiting_for_confirmation = False
@@ -344,7 +353,15 @@ class ProgramExecutor:
                 pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
                 v_out = max(0.0, min(ff_v + pid_correction, 6.0))
                 self.current_voltage_setpoint = v_out
-                
+                # FF-3 START — update scheduler state
+                self._ff_voltage = ff_v
+                self._pid_correction = pid_correction
+                self._sched_kp = self._pid._kp
+                self._sched_ki = self._pid._ki
+                self._sched_kd = self._pid._kd
+                self._sched_zone = 0
+                # FF-3 END
+
                 # Stability check
                 if abs(current_temp_k - setpoint_k) <= block.tolerance_k:
                     if stability_start is None:
@@ -384,6 +401,14 @@ class ProgramExecutor:
                 ff_v = 0.0
                 pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
                 v_out = max(0.0, min(ff_v + pid_correction, 6.0))
+                # FF-3 START — update scheduler state
+                self._ff_voltage = ff_v
+                self._pid_correction = pid_correction
+                self._sched_kp = self._pid._kp
+                self._sched_ki = self._pid._ki
+                self._sched_kd = self._pid._kd
+                self._sched_zone = 0
+                # FF-3 END
 
                 if self.practice_mode:
                     # Override with a demo voltage that rises realistically with
@@ -523,3 +548,20 @@ class ProgramExecutor:
     def get_pid_logger(self) -> 'PIDRunLogger':
         """Return the PIDRunLogger so the GUI can display the run history."""
         return self._pid_logger
+
+    # FF-3 START — scheduler state getter for CSV logging
+    def get_sched_state(self) -> dict:
+        """Return a snapshot of the current scheduler state for CSV logging.
+
+        Thread-safe for simple attribute reads under the Python GIL.
+        Returns None-valued dict when no block is active.
+        """
+        return {
+            'Sched_Kp':       self._sched_kp,
+            'Sched_Ki':       self._sched_ki,
+            'Sched_Kd':       self._sched_kd,
+            'Sched_Zone':     self._sched_zone,
+            'FF_Voltage':     self._ff_voltage,
+            'PID_Correction': self._pid_correction,
+        }
+    # FF-3 END

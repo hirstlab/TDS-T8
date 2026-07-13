@@ -2139,6 +2139,18 @@ class MainWindow:
 
                 if raw_voltages:
                     log_readings.update(raw_voltages)
+
+                # FF-3 START — append scheduler state to each logged row
+                _exec = getattr(self, '_program_executor', None)
+                if _exec and _exec.is_running():
+                    log_readings.update(_exec.get_sched_state())
+                else:
+                    log_readings.update({
+                        'Sched_Kp': None, 'Sched_Ki': None, 'Sched_Kd': None,
+                        'Sched_Zone': None, 'FF_Voltage': None, 'PID_Correction': None,
+                    })
+                # FF-3 END
+
                 self.logger.log_reading(log_readings)
 
             if safety_shutdown:
@@ -2209,6 +2221,11 @@ class MainWindow:
 
             # Unified Program Mode: Add block index column (Task 7d)
             sensor_names += ['Block_Index']
+
+            # FF-3 START — scheduler state columns
+            sensor_names += ['Sched_Kp', 'Sched_Ki', 'Sched_Kd',
+                             'Sched_Zone', 'FF_Voltage', 'PID_Correction']
+            # FF-3 END
 
             # Append Power Programmer metadata if a profile is loaded
             if self._programmer_blocks:
