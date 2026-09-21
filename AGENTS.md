@@ -336,17 +336,19 @@ the `tests-exempt` PR label.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-21 16:56. Implement this. If something in it is wrong, say so before changing course._
+_Written by the planning model on 2026-09-21 13:11. Implement this. If something in it is wrong, say so before changing course._
 
-**Pointer, not a plan.** Two efforts are specced; neither has tickets yet.
+**Pointer, not a plan.** Two efforts are specced. Effort 1 now has tickets.
 
-1. `.scratch/workflow-setup/spec.md` — CI gate (ruff, tests-first, pytest) on a
-   Windows runner, green on `main`. **Next:** run `/to-tickets` on this spec.
-   Its first step is Isaac's: commit the workflow files, then renormalise line
-   endings in a separate commit.
+1. `.scratch/workflow-setup/` — CI gate (ruff, tests-first, pytest) on a Windows
+   runner, green on `main`. Tickets in `issues/`, a linear chain:
+   01 test suite passes in any order → 02 `ruff check .` clean → 03 CI workflow
+   green → 04 branch protection (**ready-for-developer**, Isaac).
+   **Next:** `issues/01-test-suite-passes-in-any-order.md`.
+   The spec's first step (commit the workflow files, renormalise line endings) is
+   already done as of `d5f30ae`: the index is all LF and `git add --renormalize .`
+   finds no changes.
 2. `.scratch/rig-architecture/spec.md` — Rig module, Heater output, Simulated rig,
    Program run, Run record (ADRs 0002–0005). **Blocked by** effort 1. Run
-   `/to-tickets` on it once CI is green.
-
-No ticket is claimable until `/to-tickets` has produced `issues/` files.
+   `/to-tickets` on it once ticket 04 is done.
 <!-- ACTIVE-PLAN:END -->
