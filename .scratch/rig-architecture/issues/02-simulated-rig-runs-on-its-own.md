@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0005-practice-mode-is-a-rig-adapter.md` and `.scratch/rig-architecture/spec.md` (Package layout; Every number has one home; The Rig adapter seam; The Snapshot; The Simulated rig) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
