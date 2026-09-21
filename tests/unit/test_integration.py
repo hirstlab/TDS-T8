@@ -5,7 +5,7 @@ import json
 import os
 import tempfile
 
-# conftest.py handles mocking of labjack, pyvisa, serial, tkinter, matplotlib
+# conftest.py handles mocking of labjack, serial, tkinter, matplotlib
 from t8_daq_system.gui.main_window import MainWindow
 
 import pytest
@@ -65,8 +65,9 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_main_window_init(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+    def test_main_window_init(self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Test that MainWindow can be instantiated with all GUI components mocked."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -76,8 +77,9 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_no_start_stop_buttons(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+    def test_no_start_stop_buttons(self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Verify that start_btn and stop_btn attributes no longer exist (buttons removed)."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -89,8 +91,9 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_log_btn_exists(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+    def test_log_btn_exists(self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Verify that the Start Logging button still exists."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -100,8 +103,9 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_slider_mode_btn_exists(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+    def test_slider_mode_btn_exists(self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Verify that the slider mode toggle buttons exist."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -111,9 +115,10 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
     def test_auto_start_acquisition_not_running_without_hardware(
-            self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+            self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Without hardware, acquisition should not auto-start (is_running stays False)."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -124,9 +129,10 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
     def test_auto_start_acquisition_method_exists(
-            self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+            self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """_auto_start_acquisition method must exist and be callable."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
@@ -136,8 +142,9 @@ class TestIntegration(unittest.TestCase):
     @patch('t8_daq_system.gui.main_window.tk.Tk')
     @patch('t8_daq_system.gui.main_window.LivePlot')
     @patch('t8_daq_system.gui.main_window.SensorPanel')
+    @patch('t8_daq_system.gui.main_window.CameraPanel')
     @patch('t8_daq_system.gui.main_window.AppSettings')
-    def test_auto_start_idempotent(self, mock_settings_cls, mock_sensor_panel, mock_plot, mock_tk):
+    def test_auto_start_idempotent(self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk):
         """Calling _auto_start_acquisition twice should not double-start."""
         mock_settings = self._make_mock_settings(mock_settings_cls)
         app = MainWindow(settings=mock_settings)
