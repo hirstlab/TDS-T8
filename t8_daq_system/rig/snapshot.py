@@ -81,3 +81,5 @@ class Snapshot:
     permissive_ok: bool
     permissive_reason: str | None
     adapter: str  # "t8" | "simulated"
+    adapter_refusal_reason: str | None = None
+    command_rejected_reason: str | None = None

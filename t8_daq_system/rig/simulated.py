@@ -46,6 +46,7 @@ class SimulatedRig(RigAdapter):
         self._room_temp_c = float(room_temp_c)
 
         self._connected: bool = True
+        self._cable_connected: bool = True
         self._output_enabled: bool = False
         self._voltage_setpoint: float = 0.0
         self._last_time: float = clock.now()
@@ -60,11 +61,14 @@ class SimulatedRig(RigAdapter):
     # --- RigAdapter protocol operations ---
 
     def connect(self) -> bool:
+        if not self._cable_connected:
+            return False
         self._connected = True
         return True
 
     def disconnect(self) -> None:
         self._connected = False
+        self._cable_connected = False
 
     def is_connected(self) -> bool:
         return self._connected
@@ -169,6 +173,7 @@ class SimulatedRig(RigAdapter):
 
     def reconnect(self) -> None:
         """Restore link after disconnect()."""
+        self._cable_connected = True
         self._connected = True
 
     # --- Internal helpers ---
