@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** in-progress
+**Status:** done
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0005-practice-mode-is-a-rig-adapter.md` and `.scratch/rig-architecture/spec.md` (Package layout; Every number has one home; The Rig adapter seam; The Snapshot; The Simulated rig) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -18,11 +18,22 @@ Requirements (new package `t8_daq_system/rig/`, plus `t8_daq_system/settings/saf
 - `SimulatedRig` implements `RigAdapter` as specified: voltage → current = V / R(T) → temperature, advanced to `clock.now()` on each `read()`; primary TC reports model temperature, other TCs room temperature; gauges report a configurable pressure in Torr (default 1e-7). Fault-injection methods: `drop_tc`, `restore_tc`, `set_pressure`, `stall_gauge`, `fail_next_write`, `disconnect`, `reconnect`.
 - Nothing outside `rig/` and `settings/` changes. Nothing in the app uses these yet.
 
-- [ ] For a fixed voltage, the Simulated rig settles to `TungstenSim.steady_state_temp` for that voltage (within the model's own tolerance)
-- [ ] `set_output(False)` gives zero current and the specimen cools
-- [ ] Each fault-injection method has a test showing its effect on `read()` / writes (dropped TC reads `None`, stalled gauge invalid, `fail_next_write` raises `AdapterError` once, `disconnect` makes `read()` raise)
-- [ ] `ManualClock` tests: `advance` moves `now()` and `wall_time()`; `sleep_until` never blocks
-- [ ] No test sleeps
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] For a fixed voltage, the Simulated rig settles to `TungstenSim.steady_state_temp` for that voltage (within the model's own tolerance)
+- [x] `set_output(False)` gives zero current and the specimen cools
+- [x] Each fault-injection method has a test showing its effect on `read()` / writes (dropped TC reads `None`, stalled gauge invalid, `fail_next_write` raises `AdapterError` once, `disconnect` makes `read()` raise)
+- [x] `ManualClock` tests: `advance` moves `now()` and `wall_time()`; `sleep_until` never blocks
+- [x] No test sleeps
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+### 2026-09-21
+- Created package `t8_daq_system/rig/` with `Clock` protocol, `RealClock`, and `ManualClock` in `clock.py`.
+- Created `safety_limits.py` in `t8_daq_system/settings/` defining the 8 canonical constants with justifications.
+- Created frozen dataclasses `Snapshot`, `SourceStatus`, `HeaterStatus`, `ProgramStatus` in `snapshot.py`.
+- Defined `AdapterError`, `RawReadings`, and `RigAdapter` protocol with exactly 7 methods in `adapter.py`.
+- Moved `TungstenSim` into `t8_daq_system/rig/tungsten_model.py` and updated `tests/simulation/tungsten_thermal_model.py` to re-export it for backward compatibility.
+- Implemented `SimulatedRig` in `simulated.py` implementing `RigAdapter` over `TungstenSim`, with injectable `Clock`, physical Ohmic heating and cooling, and full fault injection methods (`drop_tc`, `restore_tc`, `set_pressure`, `stall_gauge`, `fail_next_write`, `disconnect`, `reconnect`).
+- Added comprehensive unit tests in `test_rig_clock.py`, `test_safety_limits.py`, `test_rig_snapshot.py`, and `test_simulated_rig.py`.
+- Verified all three local gates pass with 0 failures (`ruff`, `check_tests_first`, `pytest`).
+
