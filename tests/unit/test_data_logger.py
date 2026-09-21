@@ -2,10 +2,9 @@ import unittest
 import os
 import shutil
 import tempfile
-import csv
+import pytest
 from t8_daq_system.data.data_logger import DataLogger
 
-import pytest
 pytestmark = pytest.mark.unit
 
 class TestDataLogger(unittest.TestCase):

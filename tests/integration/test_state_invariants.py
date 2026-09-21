@@ -64,7 +64,8 @@ def _run_with_invariants(blocks, temp_k=300.0, timeout=WALL_TIMEOUT):
     ps.reset()
 
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: temp_k)
+    def provider(tc_name):
+        return lambda: temp_k
 
     ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
     checker = InvariantChecker(ex, ps)

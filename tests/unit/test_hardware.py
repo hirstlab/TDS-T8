@@ -1,18 +1,17 @@
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
 import json
 import os
+import sys
 import tempfile
-
-# Get the mock ljm that conftest.py already placed in sys.modules
-mock_ljm = sys.modules['labjack'].ljm
+import unittest
+import pytest
 
 from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
 
-import pytest
 pytestmark = pytest.mark.unit
+
+# Get the mock ljm that conftest.py already placed in sys.modules
+mock_ljm = sys.modules['labjack'].ljm
 
 class TestHardware(unittest.TestCase):
     def setUp(self):
@@ -66,6 +65,8 @@ class TestHardware(unittest.TestCase):
 
     def test_tc_reader_init(self):
         reader = ThermocoupleReader(self.mock_handle, self.tc_config)
+        # NOTE: unused — possible bug, see workflow-setup ticket 02
+        del reader
         # Check if some configuration calls were made
         self.assertTrue(mock_ljm.eWriteName.called)
 

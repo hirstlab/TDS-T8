@@ -35,9 +35,9 @@ def test_step_returns_tuple():
     sim = TungstenSim(dt=0.5)
     result = sim.step(2.0)
     assert len(result) == 2
-    T, I = result
+    T, current = result
     assert T > 300.0
-    assert I > 0.0
+    assert current > 0.0
 
 
 def test_current_increases_from_cold():

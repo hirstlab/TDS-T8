@@ -1,6 +1,3 @@
-import pytest
-pytestmark = pytest.mark.unit
-
 """
 Unit tests for dialog classes - testing core logic without GUI
 """
@@ -9,8 +6,10 @@ import unittest
 import os
 import shutil
 import tempfile
-from unittest.mock import MagicMock, patch
 from datetime import datetime
+import pytest
+
+pytestmark = pytest.mark.unit
 
 
 class TestLoggingDialogFilenamePreview(unittest.TestCase):

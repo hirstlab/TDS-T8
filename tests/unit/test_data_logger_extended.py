@@ -1,6 +1,3 @@
-import pytest
-pytestmark = pytest.mark.unit
-
 """
 Extended unit tests for DataLogger class - metadata, custom names, CSV loading
 """
@@ -12,8 +9,11 @@ import tempfile
 import csv
 import json
 from datetime import datetime
+import pytest
 
 from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
+
+pytestmark = pytest.mark.unit
 
 
 class TestDataLoggerMetadata(unittest.TestCase):

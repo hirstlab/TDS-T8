@@ -8,8 +8,6 @@ Reference points from feedforward table:
   3.0 V -> 1680 K steady-state
   1.0 V -> 1100 K steady-state
 """
-import math
-
 
 class TungstenSim:
     """

@@ -36,12 +36,12 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-try:
-    import imageio
-    import imageio_ffmpeg  # noqa — just tests availability
-    IMAGEIO_AVAILABLE = True
-except ImportError:
-    IMAGEIO_AVAILABLE = False
+import importlib.util
+
+IMAGEIO_AVAILABLE = bool(
+    importlib.util.find_spec("imageio") is not None
+    and importlib.util.find_spec("imageio_ffmpeg") is not None
+)
 
 
 class CameraPanel(ttk.Frame):
@@ -606,7 +606,7 @@ class CameraPanel(ttk.Frame):
                     "imageio and imageio-ffmpeg are required.\n"
                     "Run: pip install imageio imageio-ffmpeg"
                 )
-            import imageio  # noqa — already guarded above
+            import imageio
 
             frame_files = sorted([
                 os.path.join(self._timelapse_folder, f)

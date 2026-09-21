@@ -1,14 +1,10 @@
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
-import json
 import os
-import tempfile
-
-# conftest.py handles mocking of labjack, serial, tkinter, matplotlib
-from t8_daq_system.gui.main_window import MainWindow
+import unittest
+from unittest.mock import patch
 
 import pytest
+from t8_daq_system.gui.main_window import MainWindow
+
 pytestmark = pytest.mark.unit
 
 class TestIntegration(unittest.TestCase):
@@ -23,7 +19,6 @@ class TestIntegration(unittest.TestCase):
         log_dir = os.path.join(base_dir, 'logs')
         profiles_dir = os.path.join(base_dir, 'config', 'profiles')
         
-        import shutil
         if os.path.exists(log_dir):
             # Only remove if it's empty or we are sure it's from tests
             # For integration tests, we'll be aggressive but careful
@@ -152,6 +147,8 @@ class TestIntegration(unittest.TestCase):
         # Patch _on_start to count calls
         call_count = []
         original_on_start = app._on_start
+        # NOTE: unused — possible bug, see workflow-setup ticket 02
+        del original_on_start
 
         def counting_on_start():
             call_count.append(1)

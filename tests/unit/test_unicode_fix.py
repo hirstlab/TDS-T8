@@ -1,5 +1,4 @@
 import pytest
-from t8_daq_system.core.data_acquisition import DataAcquisition
 
 pytestmark = pytest.mark.unit
 

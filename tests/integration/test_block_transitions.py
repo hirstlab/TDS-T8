@@ -5,7 +5,6 @@ Patches time.sleep so executor runs at CPU speed.
 """
 import pytest
 import threading
-import time
 from t8_daq_system.control.program_block import VoltageRampBlock, StableHoldBlock, TempRampBlock
 from t8_daq_system.control.program_executor import ProgramExecutor
 from tests.mock_ps import fast_executor_time
@@ -80,7 +79,8 @@ def run_program(executor, blocks, timeout=WALL_TIMEOUT):
 def test_two_block_transition(mock_ps, block_a, block_b):
     """Every 2-block combo: both blocks execute and on_complete fires."""
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: 300.0)
+        def provider(tc_name):
+            return lambda: 300.0
         ex = ProgramExecutor(mock_ps, provider)
         completed, starts, completes = run_program(ex, [block_a, block_b])
 
@@ -105,7 +105,8 @@ def test_voltage_ramp_tempramp_hold_rampdown(mock_ps):
         VoltageRampBlock(start_voltage=3.0, end_voltage=0.0, duration_sec=1),
     ]
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: 300.0)
+        def provider(tc_name):
+            return lambda: 300.0
         ex = ProgramExecutor(mock_ps, provider)
         completed, starts, completes = run_program(ex, blocks)
 
@@ -123,7 +124,8 @@ def test_voltage_ramp_stablehold_rampdown(mock_ps):
         VoltageRampBlock(start_voltage=2.0, end_voltage=0.0, duration_sec=1),
     ]
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: 300.0)
+        def provider(tc_name):
+            return lambda: 300.0
         ex = ProgramExecutor(mock_ps, provider)
         completed, starts, completes = run_program(ex, blocks)
 
@@ -141,7 +143,8 @@ def test_tempramp_stablehold_rampdown(mock_ps):
         VoltageRampBlock(start_voltage=2.0, end_voltage=0.0, duration_sec=1),
     ]
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: 600.0)
+        def provider(tc_name):
+            return lambda: 600.0
         ex = ProgramExecutor(mock_ps, provider)
         completed, starts, completes = run_program(ex, blocks)
 
@@ -190,7 +193,8 @@ def test_no_power_dropout_between_blocks(mock_ps):
     with fast_executor_time():
         # Temp fixed well below setpoint => persistent positive error => PID
         # holds a high output on both blocks.
-        provider = lambda tc_name: (lambda: 300.0)
+        def provider(tc_name):
+            return lambda: 300.0
         ex = ProgramExecutor(mock_ps, provider, on_status=on_status)
         run_program(ex, blocks)
 
@@ -226,7 +230,8 @@ def test_three_block_all_permutations(mock_ps, a, b, c):
     complete_count = [0]
 
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: temp_k)
+        def provider(tc_name):
+            return lambda: temp_k
         ex = ProgramExecutor(mock_ps, provider,
                              on_program_complete=lambda: complete_count.__setitem__(0, complete_count[0] + 1))
         ex.load_program(blocks)
