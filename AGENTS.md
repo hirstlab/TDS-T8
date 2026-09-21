@@ -336,12 +336,13 @@ the `tests-exempt` PR label.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Updated on 2026-09-21 17:01. Implement this. If something in it is wrong, say so before changing course._
+_Updated on 2026-09-21 17:45. Implement this. If something in it is wrong, say so before changing course._
 
 1. `.scratch/workflow-setup/` — CI gate (ruff, tests-first, pytest) on a Windows
    runner, green on `main`. All tickets 01–04 done.
 2. `.scratch/rig-architecture/spec.md` — Rig module, Heater output, Simulated rig,
    Program run, Run record (ADRs 0002–0005). **In progress.**
    - Ticket 01 done: `01-pin-todays-control-and-csv-behaviour.md`
-   - Next ticket: `02-simulated-rig-runs-on-its-own.md`
+   - Ticket 02 done: `02-simulated-rig-runs-on-its-own.md`
+   - Next ticket: `03-rig-loop-publishes-snapshots.md`
 <!-- ACTIVE-PLAN:END -->
