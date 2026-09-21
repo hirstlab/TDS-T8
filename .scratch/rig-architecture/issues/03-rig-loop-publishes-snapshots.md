@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0003-heater-output-arbitration-and-trips.md` and `.scratch/rig-architecture/spec.md` (The Rig loop; The Snapshot) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
