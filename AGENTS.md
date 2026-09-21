@@ -336,19 +336,14 @@ the `tests-exempt` PR label.
 <!-- ACTIVE-PLAN:START -->
 ## Active implementation plan
 
-_Written by the planning model on 2026-09-21 13:11. Implement this. If something in it is wrong, say so before changing course._
+_Updated on 2026-09-21 16:25. Implement this. If something in it is wrong, say so before changing course._
 
-**Pointer, not a plan.** Two efforts are specced. Effort 1 now has tickets.
+**Pointer, not a plan.** Two efforts are specced. Effort 1 is complete.
 
 1. `.scratch/workflow-setup/` — CI gate (ruff, tests-first, pytest) on a Windows
-   runner, green on `main`. Tickets in `issues/`, a linear chain:
-   01 test suite passes in any order → 02 `ruff check .` clean → 03 CI workflow
-   green → 04 branch protection (**ready-for-developer**, Isaac).
-   **Next:** `issues/01-test-suite-passes-in-any-order.md`.
-   The spec's first step (commit the workflow files, renormalise line endings) is
-   already done as of `d5f30ae`: the index is all LF and `git add --renormalize .`
-   finds no changes.
+   runner, green on `main`. All tickets 01–04 done.
 2. `.scratch/rig-architecture/spec.md` — Rig module, Heater output, Simulated rig,
-   Program run, Run record (ADRs 0002–0005). **Blocked by** effort 1. Run
-   `/to-tickets` on it once ticket 04 is done.
+   Program run, Run record (ADRs 0002–0005). **Unblocked.**
+   **Next:** Run `/to-tickets` on `.scratch/rig-architecture/spec.md` to break the
+   effort into tickets under `.scratch/rig-architecture/issues/`.
 <!-- ACTIVE-PLAN:END -->
