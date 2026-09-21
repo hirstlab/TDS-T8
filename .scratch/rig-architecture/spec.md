@@ -2,7 +2,7 @@
 
 Status: ready-for-agent
 Date: 2026-09-21
-Blocked by: `.scratch/workflow-setup/` (CI green on `main`)
+Blocked by: None — `.scratch/workflow-setup/` is done (tickets 01–04; CI green and branch protection on `main`)
 Related: `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`,
 `docs/adr/0003-heater-output-arbitration-and-trips.md`,
 `docs/adr/0004-pressure-interlock-is-a-permissive.md`,
@@ -59,14 +59,14 @@ interlock check; ~33 `practice_mode` references thread through three files. A
 physical model (`tests/simulation/tungsten_thermal_model.py`, `TungstenSim`) exists
 but only tests use it.
 
-**Failures are silent.** 62 exception handlers whose entire body is `pass`, including the
+**Failures are silent.** 57 exception handlers whose entire body is `pass` (count re-checked 2026-09-21 after the ruff clean-up), including the
 executor's current-guard read, the DAC-write failure path, and the supply shutdown
 in both safety handlers. A failed `set_voltage` prints and the loop carries on.
 
 **The hot spots cannot be tested faster than real time.** `_execute_block` is a
 ~220-line loop mixing PID, feedforward, practice simulation, the current guard,
 hardware writes, scheduler logging state, per-tick `print`, and `time.sleep(0.5)`.
-`main_window.py` is 3 088 lines and builds every CSV row inside a closure running on
+`main_window.py` is 3 084 lines and builds every CSV row inside a closure running on
 the acquisition thread, computing `Block_Index` in three places.
 
 ## Solution
@@ -397,6 +397,38 @@ time-dependent module takes a `Clock`.
 Tests assert on external behaviour: Snapshot contents, the voltage and output state
 the adapter received, CSV rows and event rows, what the GUI renders. Not on private
 attributes, and not on whether an internal method was called.
+
+### Seams (confirmed with Isaac, 2026-09-21)
+
+Four test seams, no more:
+
+1. **Main seam:** a real `Rig` driven tick by tick against `SimulatedRig` with a
+   `ManualClock`. Every end-to-end behaviour in the user stories is proven here.
+2. **Pure-module seams:** `HeaterOutput.resolve`, the safety evaluator, block
+   steps, `build_row`. These exist because boundary cases (4.9 s vs 5.1 s, each
+   Heater rule, each trip threshold) are clearer asserted directly than through a
+   full rig run.
+3. **Characterisation seam (temporary):** today's `ProgramExecutor`, deleted with it.
+4. **Architecture-rules seam:** one `ast` scan over the whole package.
+
+No other seam is introduced. A ticket that wants a new one escalates.
+
+### Prior art
+
+- `tests/integration/test_block_transitions.py` and `test_state_invariants.py` —
+  drive `ProgramExecutor` at CPU speed with `tests/mock_ps.py`
+  (`fast_executor_time`). The characterisation tests reuse this pattern; the
+  integration-seam tests replace it with `ManualClock`, and these files are
+  re-pointed at the Rig seam (or deleted with `ProgramExecutor` once their cases are
+  covered there).
+- `tests/fault_injection/test_fault_recovery.py` (`FaultyMockPS`) — today's fault
+  cases (SO latch, OVP trip, comms timeout, nudge-must-not-assert-FIO1). Each case
+  that still applies moves onto `SimulatedRig` fault injection; `test_regression_rampdown_after_hold`
+  is deleted with the ramp-down, which this effort removes.
+- `tests/simulation/test_tungsten_model.py` — the `TungstenSim` tests; they follow
+  the model into `t8_daq_system/rig/tungsten_model.py`.
+- `tests/unit/test_safety_monitor.py` — rewritten against the pure evaluator; its
+  ramp-down assertions go.
 
 ### 1. Characterisation first (before anything moves)
 

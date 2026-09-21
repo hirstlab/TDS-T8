@@ -106,6 +106,44 @@ _PROGRAMMER_SAFE_MODE_MAX_VOLTS = 1.0   # V
 _PROGRAMMER_SAFE_MODE_MAX_AMPS  = 10.0  # A
 
 
+def build_csv_header(config: dict, has_ps_controller: bool = True) -> list:
+    """
+    Build the full CSV header row (including 'Timestamp') in exact column order.
+
+    WHY THIS EXISTS
+    ---------------
+    Extracted from MainWindow._on_start_stop_logging (rig-architecture ticket 01)
+    to allow pure characterisation testing of the CSV column schema without
+    requiring a Tk root.
+    """
+    enabled_tcs = [tc for tc in config.get('thermocouples', [])
+                   if tc.get('enabled', True)]
+    sensor_names = [tc['name'] for tc in enabled_tcs]
+    sensor_names += [g['name'] for g in config.get('frg702_gauges', [])
+                     if g.get('enabled', True)]
+
+    if has_ps_controller:
+        sensor_names += ['PS_Voltage', 'PS_Current',
+                         'PS_Voltage_Setpoint', 'PS_CC_Limit']
+
+    # Unified Program Mode: Add block index column (Task 7d)
+    sensor_names += ['Block_Index']
+
+    # FF-3 START — scheduler state columns
+    sensor_names += ['Sched_Kp', 'Sched_Ki', 'Sched_Kd',
+                     'Sched_Zone', 'FF_Voltage', 'PID_Correction']
+    # FF-3 END
+
+    # Append raw-voltage columns right after the temperature columns so the
+    # log shows the full conversion chain for each thermocouple:
+    for tc in enabled_tcs:
+        sensor_names.append(f"{tc['name']}_rawV")
+
+    # Guard: remove any None or empty-string entries that could produce phantom CSV columns
+    sensor_names = [n for n in sensor_names if n]
+    return ['Timestamp'] + sensor_names
+
+
 class MockPowerSupplyController:
     """
     Simulated power supply for practice mode.
@@ -2232,39 +2270,13 @@ class MainWindow:
                 notes=notes or ""
             )
 
-            enabled_tcs = [tc for tc in self.config['thermocouples']
-                           if tc.get('enabled', True)]
-            sensor_names = [tc['name'] for tc in enabled_tcs]
-            sensor_names += [g['name'] for g in self.config.get('frg702_gauges', [])
-                            if g.get('enabled', True)]
-
-            if self.ps_controller:
-                sensor_names += ['PS_Voltage', 'PS_Current',
-                                 'PS_Voltage_Setpoint', 'PS_CC_Limit']
-
-            # Unified Program Mode: Add block index column (Task 7d)
-            sensor_names += ['Block_Index']
-
-            # FF-3 START — scheduler state columns
-            sensor_names += ['Sched_Kp', 'Sched_Ki', 'Sched_Kd',
-                             'Sched_Zone', 'FF_Voltage', 'PID_Correction']
-            # FF-3 END
+            header = build_csv_header(self.config, has_ps_controller=bool(self.ps_controller))
+            sensor_names = header[1:]
 
             # Append Power Programmer metadata if a profile is loaded
             if self._programmer_blocks:
                 metadata['programmer_mode'] = self._programmer_control_mode
 
-            # Append raw-voltage columns right after the temperature columns so the
-            # log shows the full conversion chain for each thermocouple:
-            #   <TC_N>  = converted temperature
-            #   <TC_N>_rawV = raw differential input voltage (V) before EF conversion
-            # Both columns carry identical physical information; having both lets the
-            # user verify that the T8's internal millivolt→temperature lookup is correct.
-            for tc in enabled_tcs:
-                sensor_names.append(f"{tc['name']}_rawV")
-
-            # Guard: remove any None or empty-string entries that could produce phantom CSV columns
-            sensor_names = [n for n in sensor_names if n]
             filepath = self.logger.start_logging(sensor_names, custom_name, metadata)
             self.is_logging = True
             self.log_btn.config(text="Stop Logging")
