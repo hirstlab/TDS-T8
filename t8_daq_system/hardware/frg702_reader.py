@@ -7,15 +7,12 @@ analog voltage conversion. Pressure values are read directly from the controller
 
 
 from labjack import ljm
+from t8_daq_system.utils.helpers import (
+    UNIT_CONVERSIONS,
+    convert_pressure as _convert_pressure,
+)
 
 DEBUG_PRESSURE = False   # Set False to silence once working correctly
-
-# Unit conversion factors from mbar
-UNIT_CONVERSIONS = {
-    'mbar': 1.0,
-    'Torr': 0.750062,
-    'Pa': 100.0,
-}
 
 # Status constants
 STATUS_VALID = 'valid'
@@ -51,29 +48,20 @@ class FRG702Reader:
                 self._device_unit = unit
         return self._device_unit
 
+    @property
+    def target_unit(self):
+        return 'Torr'
+
+    @target_unit.setter
+    def target_unit(self, val):
+        pass
+
     @staticmethod
     def convert_pressure(value, from_unit, to_unit):
         """
-        Convert pressure from one unit to another.
-
-        Args:
-            value: Pressure value
-            from_unit: Source unit ('mbar', 'Torr', 'Pa')
-            to_unit: Target unit ('mbar', 'Torr', 'Pa')
-
-        Returns:
-            Converted pressure value
+        Convert pressure from one unit to another ('mbar', 'Torr', 'Pa').
         """
-        if from_unit == to_unit or value is None:
-            return value
-
-        # UNIT_CONVERSIONS maps mbar -> unit
-        # factor = unit / mbar  =>  mbar = unit / factor
-        from_factor = UNIT_CONVERSIONS.get(from_unit, 1.0)
-        to_factor = UNIT_CONVERSIONS.get(to_unit, 1.0)
-
-        # (val / from_factor) converts to mbar, then * to_factor converts to target
-        return (value / from_factor) * to_factor
+        return _convert_pressure(value, from_unit, to_unit)
 
     @staticmethod
     def voltage_to_pressure_mbar(voltage):
@@ -148,11 +136,10 @@ class FRG702Reader:
                 continue
 
             sensor_code = gauge['sensor_code']
-            target_unit = gauge.get('units', 'mbar')
 
             try:
                 raw_pressure = self.controller.read_pressure(sensor_code)
-                pressure = self.convert_pressure(raw_pressure, device_unit, target_unit)
+                pressure = self.convert_pressure(raw_pressure, device_unit, 'Torr')
 
                 if pressure is not None:
                     readings[gauge['name']] = {
@@ -162,7 +149,7 @@ class FRG702Reader:
                         '_raw_str':   str(raw_pressure) if raw_pressure is not None else '?',
                         '_raw_value': raw_pressure,
                         '_raw_device_unit': device_unit,
-                        '_target_unit': target_unit,
+                        '_target_unit': 'Torr',
                     }
                 else:
                     readings[gauge['name']] = {
@@ -172,7 +159,7 @@ class FRG702Reader:
                         '_raw_str':   '?',
                         '_raw_value': None,
                         '_raw_device_unit': device_unit,
-                        '_target_unit': target_unit,
+                        '_target_unit': 'Torr',
                     }
 
             except Exception as e:
@@ -184,7 +171,7 @@ class FRG702Reader:
                     '_raw_str':   '?',
                     '_raw_value': None,
                     '_raw_device_unit': device_unit,
-                    '_target_unit': target_unit,
+                    '_target_unit': 'Torr',
                 }
 
         if DEBUG_PRESSURE:
@@ -223,25 +210,23 @@ class FRG702Reader:
         and keep the buffer and status panel in sync.
 
         Returns:
-            dict like {'FRG702_Chamber': 1.5e-6} — pressure in mbar, or None.
+            dict like {'FRG702_Chamber': 1.5e-6} — pressure in Torr, or None.
         """
         detail = self.read_all_with_status()
         return {name: info['pressure'] for name, info in detail.items()}
 
     def read_single(self, channel_name):
         """
-        Read just one FRG-702 gauge by name.
+        Read just one FRG-702 gauge by name in Torr.
 
         Args:
             channel_name: Name of the gauge to read
 
         Returns:
-            Pressure in target unit, or None if not found/error
+            Pressure in Torr, or None if not found/error
         """
         for gauge in self.gauges:
             if gauge['name'] == channel_name and gauge.get('enabled', True):
-                target_unit = gauge.get('units', 'mbar')
-                
                 # Ensure we know the device unit
                 if self._device_unit is None:
                     self._refresh_device_unit()
@@ -249,7 +234,7 @@ class FRG702Reader:
 
                 try:
                     raw = self.controller.read_pressure(gauge['sensor_code'])
-                    return self.convert_pressure(raw, device_unit, target_unit)
+                    return self.convert_pressure(raw, device_unit, 'Torr')
                 except Exception as e:
                     print(f"Error reading {channel_name}: {e}")
                     return None
@@ -275,7 +260,7 @@ class FRG702AnalogReader:
         self.gauges = frg702_config_list
 
     def read_all(self):
-        """Read all enabled gauges. Returns {name: pressure_mbar}."""
+        """Read all enabled gauges. Returns {name: pressure_torr}."""
         readings = {}
         for gauge in self.gauges:
             if not gauge.get('enabled', True):
@@ -283,7 +268,8 @@ class FRG702AnalogReader:
             
             try:
                 voltage = ljm.eReadName(self.handle, gauge['pin'])
-                pressure, _ = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                pressure_mbar, _ = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                pressure = FRG702Reader.convert_pressure(pressure_mbar, 'mbar', 'Torr') if pressure_mbar is not None else None
                 readings[gauge['name']] = pressure
             except Exception as e:
                 print(f"Error reading analog gauge {gauge['name']}: {e}")
@@ -291,7 +277,7 @@ class FRG702AnalogReader:
         return readings
 
     def read_all_with_status(self):
-        """Read all enabled gauges with status and voltage."""
+        """Read all enabled gauges with status and voltage in Torr."""
         readings = {}
         for gauge in self.gauges:
             if not gauge.get('enabled', True):
@@ -299,7 +285,8 @@ class FRG702AnalogReader:
             
             try:
                 voltage = ljm.eReadName(self.handle, gauge['pin'])
-                pressure, status = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                pressure_mbar, status = FRG702Reader.voltage_to_pressure_mbar(voltage)
+                pressure = FRG702Reader.convert_pressure(pressure_mbar, 'mbar', 'Torr') if pressure_mbar is not None else None
                 readings[gauge['name']] = {
                     'pressure': pressure,
                     'status': status,
@@ -307,8 +294,7 @@ class FRG702AnalogReader:
                     'voltage': voltage
                 }
             except Exception as e:
-                # NOTE: unused — possible bug, see workflow-setup ticket 02
-                del e
+                print(f"Error reading analog gauge {gauge['name']}: {e}")
                 readings[gauge['name']] = {
                     'pressure': None,
                     'status': 'error',

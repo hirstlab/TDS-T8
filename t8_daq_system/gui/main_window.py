@@ -31,7 +31,7 @@ from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
 from t8_daq_system.gui.live_plot import LivePlot
 from t8_daq_system.gui.camera_panel import CameraPanel
 from t8_daq_system.gui.sensor_panel import SensorPanel
-from t8_daq_system.utils.helpers import convert_temperature
+from t8_daq_system.utils.helpers import convert_pressure, convert_temperature
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
 from t8_daq_system.gui.settings_dialog import SettingsDialog
 from t8_daq_system.gui.pinout_display import PinoutDisplay
@@ -1716,7 +1716,8 @@ class MainWindow:
                 # TC data in buffer is always in Celsius (converted at acquisition)
                 self.plot_tc.update(tc_names, data_units={'temp': 'C'})
             if hasattr(self, 'plot_pressure'):
-                self.plot_pressure.update(frg_names, data_units={'press': self.p_unit_var.get()})
+                # Gauge data in buffer is always in Torr (canonical unit)
+                self.plot_pressure.update(frg_names, data_units={'press': 'Torr'})
             if hasattr(self, 'plot_ps'):
                 self.plot_ps.update(['PS_Voltage', 'PS_Current'])
 
@@ -2179,12 +2180,15 @@ class MainWindow:
                 log_readings = {}
                 # Avoid calling tk.StringVar.get() from background thread
                 t_unit = getattr(self, '_current_t_unit', 'C')
+                p_unit = getattr(self, '_current_p_unit', 'mbar')
                 for name, value in all_readings.items():
                     if value is None:
                         log_readings[name] = None
                         continue
                     if name in self._tc_names:
                         log_readings[name] = convert_temperature(value, 'C', t_unit)
+                    elif name in self._frg_names:
+                        log_readings[name] = convert_pressure(value, 'Torr', p_unit)
                     else:
                         log_readings[name] = value
                 # Include raw voltages (and differential voltages — same value,
@@ -2293,6 +2297,7 @@ class MainWindow:
 
         # Update cache of GUI-owned variables for background threads
         self._current_t_unit = self.t_unit_var.get()
+        self._current_p_unit = self.p_unit_var.get()
 
         gui_profiler.start("skip_counter_check")
         # Only redraw plots every Nth call to avoid overwhelming matplotlib
@@ -2398,6 +2403,7 @@ class MainWindow:
 
         display_readings = {}
         t_unit = self.t_unit_var.get()
+        p_unit = self.p_unit_var.get()
 
         for name, value in current.items():
             if value is None:
@@ -2405,6 +2411,8 @@ class MainWindow:
                 continue
             if name in self._tc_names:
                 display_readings[name] = convert_temperature(value, 'C', t_unit)
+            elif name in self._frg_names:
+                display_readings[name] = convert_pressure(value, 'Torr', p_unit)
             else:
                 display_readings[name] = value
 
@@ -2412,17 +2420,24 @@ class MainWindow:
         self.sensor_panel.update(display_readings)
 
         # Update FRG-702 detailed status
+        display_frg_details = {}
         if hasattr(self, '_latest_frg702_details') and self._latest_frg702_details:
-            self.sensor_panel.update_frg702_status(self._latest_frg702_details)
+            for g_name, info in self._latest_frg702_details.items():
+                p_val = info.get('pressure')
+                display_frg_details[g_name] = {
+                    **info,
+                    'pressure': convert_pressure(p_val, 'Torr', p_unit) if p_val is not None else None,
+                }
+            self.sensor_panel.update_frg702_status(display_frg_details)
 
         # Update live pinout display if open (Change 6: moved from DAQ thread to GUI thread)
         if hasattr(self, '_pinout_window') and self._pinout_window is not None:
             try:
                 if self._pinout_window.winfo_exists():
                     self._pinout_window.update_readings(
-                        all_readings=current,
+                        all_readings=display_readings,
                         raw_voltages=getattr(self, '_latest_raw_voltages', {}),
-                        frg702_details=getattr(self, '_latest_frg702_details', {})
+                        frg702_details=display_frg_details if display_frg_details else getattr(self, '_latest_frg702_details', {})
                     )
             except tk.TclError:
                 self._pinout_window = None
@@ -2449,7 +2464,8 @@ class MainWindow:
                 # TC data in buffer is always in Celsius (converted at acquisition)
                 self.plot_tc.update(tc_names, data_units={'temp': 'C'})
             if hasattr(self, 'plot_pressure'):
-                self.plot_pressure.update(frg_names, data_units={'press': self.p_unit_var.get()})
+                # Gauge data in buffer is always in Torr (canonical unit)
+                self.plot_pressure.update(frg_names, data_units={'press': 'Torr'})
             if hasattr(self, 'plot_ps'):
                 _ps_names = ['PS_Voltage', 'PS_Current']
                 if getattr(self, '_programmer_ramp_running', False):

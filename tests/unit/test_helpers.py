@@ -5,6 +5,7 @@ from t8_daq_system.utils.helpers import (
     format_timestamp,
     format_timestamp_filename,
     convert_temperature,
+    convert_pressure,
     linear_scale,
     clamp
 )
@@ -34,6 +35,22 @@ class TestHelpers(unittest.TestCase):
         self.assertAlmostEqual(convert_temperature(273.15, 'K', 'C'), 0)
         # Same unit
         self.assertEqual(convert_temperature(25, 'C', 'C'), 25)
+
+    def test_convert_pressure(self):
+        # Identity
+        self.assertEqual(convert_pressure(1.0, 'mbar', 'mbar'), 1.0)
+        self.assertEqual(convert_pressure(1.0, 'Torr', 'Torr'), 1.0)
+        self.assertEqual(convert_pressure(1.0, 'Pa', 'Pa'), 1.0)
+        # None passthrough
+        self.assertIsNone(convert_pressure(None, 'Torr', 'mbar'))
+        # mbar <-> Torr
+        self.assertAlmostEqual(convert_pressure(1.0, 'mbar', 'Torr'), 0.750062, places=5)
+        self.assertAlmostEqual(convert_pressure(0.750062, 'Torr', 'mbar'), 1.0, places=5)
+        # mbar <-> Pa
+        self.assertAlmostEqual(convert_pressure(1.0, 'mbar', 'Pa'), 100.0, places=1)
+        self.assertAlmostEqual(convert_pressure(100.0, 'Pa', 'mbar'), 1.0, places=1)
+        # Torr <-> Pa
+        self.assertAlmostEqual(convert_pressure(0.750062, 'Torr', 'Pa'), 100.0, places=1)
 
     def test_linear_scale(self):
         self.assertEqual(linear_scale(0.5, 0.5, 4.5, 0, 100), 0)
