@@ -4,7 +4,7 @@
 
 **Blocked by:** None (can start immediately)
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read** `.scratch/workflow-setup/spec.md` and `docs/adr/0001-tests-first-and-no-muted-failures.md` **first.** ADR 0001 is binding.
 
@@ -21,12 +21,26 @@ Requirements:
 - If the leak turns out to be module-level state inside `t8_daq_system/` (not in the tests), fix it in the application code without changing runtime behaviour. Record what it was under `## Comments`.
 - Under `## Comments`, record the root cause in two or three sentences: the shared object, the test that consumes it, and the fix.
 
-- [ ] `tests/unit/test_keysight_connection.py` no longer exists
-- [ ] `pytest -q` → 254 passed, 0 failed, 0 errors (the deleted file collected no tests; if the count differs, explain why under `## Comments`)
-- [ ] `pytest -q tests/unit/test_integration.py` passes
-- [ ] `pytest -q -p no:randomly` passes
-- [ ] `pytest -q tests/unit` passes when run twice in a row
-- [ ] Root cause recorded under `## Comments`
-- [ ] `python scripts/check_tests_first.py` and `pytest --tb=short -q` pass. (`ruff check .` is not clean until ticket 02, so it is not a gate here. Just don't add new findings: the count must not go above 133.)
+- [x] `tests/unit/test_keysight_connection.py` no longer exists
+- [x] `pytest -q` → 254 passed, 0 failed, 0 errors (the deleted file collected no tests; if the count differs, explain why under `## Comments`)
+- [x] `pytest -q tests/unit/test_integration.py` passes
+- [x] `pytest -q -p no:randomly` passes
+- [x] `pytest -q tests/unit` passes when run twice in a row
+- [x] Root cause recorded under `## Comments`
+- [x] `python scripts/check_tests_first.py` and `pytest --tb=short -q` pass. (`ruff check .` is not clean until ticket 02, so it is not a gate here. Just don't add new findings: the count must not go above 133.)
 
 ## Comments
+
+### 2026-09-21: Root Cause and Resolution
+
+**Root Cause:**
+When `CameraPanel` was added to `MainWindow._build_plots` in commit `2cb3a3ce`, it was not mocked in `tests/unit/test_integration.py::TestIntegration` alongside `LivePlot` and `SensorPanel`. Because `CameraPanel` subclasses `ttk.Frame` while `tkinter` is mocked in headless test runs via `sys.modules["tkinter.ttk"] = MagicMock()`, Python evaluated `class CameraPanel(ttk.Frame)` using `MagicMock` as the metaclass, which bound `CameraPanel.side_effect = iter((ttk.Frame,))` at module scope. The first test to instantiate `MainWindow` consumed that single-item iterator; subsequent tests instantiating `MainWindow` invoked `CameraPanel(...)` against the exhausted iterator, raising `StopIteration`.
+
+**Changes & Verification:**
+- Removed dead test file `tests/unit/test_keysight_connection.py` and cleaned up stale `pyvisa` reference in `tests/unit/test_integration.py`.
+- Added `@patch('t8_daq_system.gui.main_window.CameraPanel')` to each test in `TestIntegration`, providing a fresh mock instance per test call.
+- Verified `pytest -q` passes with 254 passed, 0 failed, 0 errors.
+- Verified `pytest -q tests/unit/test_integration.py` passes (7 passed).
+- Verified `pytest -q -p no:randomly` passes (254 passed).
+- Verified `pytest -q tests/unit` passes twice in a row (196 passed both times).
+- Verified `python scripts/check_tests_first.py` passes.
