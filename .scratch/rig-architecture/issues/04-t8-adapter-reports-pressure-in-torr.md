@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0004-pressure-interlock-is-a-permissive.md`, `AGENTS.md` §2–§3 (CV-only, wiring, XGS `T{2*i+1}` addressing) and `.scratch/rig-architecture/spec.md` (The Rig adapter seam) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
