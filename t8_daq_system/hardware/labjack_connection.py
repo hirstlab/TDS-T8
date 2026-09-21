@@ -5,8 +5,6 @@ FLOW: Open device -> Return handle -> Close when done
 """
 
 from labjack import ljm
-import json
-import os
 
 
 class LabJackConnection:
@@ -41,8 +39,8 @@ class LabJackConnection:
             if self.handle is not None:
                 try:
                     ljm.close(self.handle)
-                except:
-                    pass
+                except ljm.LJMError as e:
+                    print(f"Error closing LabJack handle: {e}")
                 self.handle = None
             return False
 

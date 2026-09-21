@@ -100,12 +100,12 @@ class KeysightAnalogController:
 
         if self.handle is not None:
             if self.debug:
-                print(f"[DEBUG] KeysightAnalogController: Handle is valid, configuring hardware...")
+                print("[DEBUG] KeysightAnalogController: Handle is valid, configuring hardware...")
             self._configure_ain_channels()
             self._enable_analog_mode()
         else:
             if self.debug:
-                print(f"[DEBUG] KeysightAnalogController: Handle is None, skipping hardware config")
+                print("[DEBUG] KeysightAnalogController: Handle is None, skipping hardware config")
 
     # ──────────────────────────────────────────────────────────────────────────
     # One-time hardware configuration
@@ -276,19 +276,21 @@ class KeysightAnalogController:
 
             # STEP 3: Debug output (Before write)
             if self.debug:
-                print(f"\n--- KEYSIGHT VOLTAGE COMMAND ---")
+                print("\n--- KEYSIGHT VOLTAGE COMMAND ---")
                 print(f"Target Voltage: {volts:.3f} V")
                 print(f"Scaling Info: Rated Max={self.rated_max_volts}V, DAC Max=5.0V")
                 print(f"Calculated DAC: {dac_v:.4f} V (formula: ({volts:.3f} / {self.rated_max_volts}) * 5.0)")
 
             # STEP 4: Send to T8 via clamped write
             actual_written = self._safe_dac_write(self._DAC_VOLTAGE, dac_v)
+            # NOTE: unused — possible bug, see workflow-setup ticket 02
+            del actual_written
 
             # STEP 5: Readback Verification
             actual_dac_v = ljm.eReadName(self.handle, self._DAC_VOLTAGE)
             if self.debug:
                 print(f"DAC Readback:   {actual_dac_v:.4f} V")
-                print(f"--------------------------------\n")
+                print("--------------------------------\n")
 
             return True
         except Exception as e:
@@ -317,19 +319,21 @@ class KeysightAnalogController:
 
             # STEP 3: Debug output (Before write)
             if self.debug:
-                print(f"\n--- KEYSIGHT CURRENT COMMAND ---")
+                print("\n--- KEYSIGHT CURRENT COMMAND ---")
                 print(f"Target Current: {amps:.2f} A")
                 print(f"Scaling Info: Rated Max={self.rated_max_amps}A, DAC Max=5.0V")
                 print(f"Calculated DAC: {dac_i:.4f} V (formula: ({amps:.2f} / {self.rated_max_amps}) * 5.0)")
 
             # STEP 4: Send to T8 via clamped write
             actual_written = self._safe_dac_write(self._DAC_CURRENT, dac_i)
+            # NOTE: unused — possible bug, see workflow-setup ticket 02
+            del actual_written
 
             # STEP 5: Readback Verification
             actual_dac_i = ljm.eReadName(self.handle, self._DAC_CURRENT)
             if self.debug:
                 print(f"DAC Readback:   {actual_dac_i:.4f} V")
-                print(f"--------------------------------\n")
+                print("--------------------------------\n")
 
             return True
         except Exception as e:
@@ -393,12 +397,12 @@ class KeysightAnalogController:
 
             # Debug output - helps verify scaling is correct
             if self.debug:
-                print(f"\n--- KEYSIGHT VOLTAGE MONITOR ---")
+                print("\n--- KEYSIGHT VOLTAGE MONITOR ---")
                 print(f"Raw AIN ({self._AIN_VOLTAGE}): {raw_v:.4f} V")
                 print(f"Monitor Range: {self._MONITOR_RANGE_V} V (Switch 4: {self.switch_4_position})")
                 print(f"Rated Max:     {self.rated_max_volts} V")
                 print(f"Scaled Value:  {actual_voltage:.3f} V (formula: ({raw_v:.4f} / {self._MONITOR_RANGE_V}) * {self.rated_max_volts})")
-                print(f"--------------------------------\n")
+                print("--------------------------------\n")
 
             # Safety check for reasonable values - allow for small negative noise (-0.05V raw)
             if raw_v < -0.05 or actual_voltage > self.rated_max_volts * 1.083:
@@ -409,9 +413,9 @@ class KeysightAnalogController:
                     print(f"WARNING: Voltage reading {actual_voltage:.3f}V is out of expected range (0-{self.rated_max_volts}V)")
                     print(f"         Raw AIN reading was: {raw_v:.4f}V on {self._AIN_VOLTAGE}")
                     if raw_v < -0.3:
-                        print(f"         HINT: A large negative raw reading typically means the Keysight")
-                        print(f"         output is OFF or not enabled. Check: (1) front panel output button,")
-                        print(f"         (2) FIO1 shutoff pin state, (3) SW1 switches 1 & 2 are UP.")
+                        print("         HINT: A large negative raw reading typically means the Keysight")
+                        print("         output is OFF or not enabled. Check: (1) front panel output button,")
+                        print("         (2) FIO1 shutoff pin state, (3) SW1 switches 1 & 2 are UP.")
 
             return actual_voltage
         except Exception as e:
@@ -439,21 +443,21 @@ class KeysightAnalogController:
 
             # Debug output - helps verify scaling is correct
             if self.debug:
-                print(f"\n--- KEYSIGHT CURRENT MONITOR ---")
+                print("\n--- KEYSIGHT CURRENT MONITOR ---")
                 print(f"Raw AIN ({self._AIN_CURRENT}): {raw_v:.4f} V")
                 print(f"Monitor Range: {self._MONITOR_RANGE_V} V (Switch 4: {self.switch_4_position})")
                 print(f"Rated Max:     {self.rated_max_amps} A")
                 print(f"Scaled Value:  {actual_current:.2f} A (formula: ({raw_v:.4f} / {self._MONITOR_RANGE_V}) * {self.rated_max_amps})")
-                print(f"--------------------------------\n")
+                print("--------------------------------\n")
 
             # Safety check for reasonable values - allow for small negative noise (-0.05V raw)
             if raw_v < -0.05 or actual_current > self.rated_max_amps * 1.028:
                 print(f"WARNING: Current reading {actual_current:.2f}A is out of expected range (0-{self.rated_max_amps}A)")
                 print(f"         Raw AIN reading was: {raw_v:.4f}V on {self._AIN_CURRENT}")
                 if raw_v < -0.3:
-                    print(f"         HINT: A large negative raw reading typically means the Keysight")
-                    print(f"         output is OFF or not enabled. Check: (1) front panel output button,")
-                    print(f"         (2) FIO1 shutoff pin state, (3) SW1 switches 1 & 2 are UP.")
+                    print("         HINT: A large negative raw reading typically means the Keysight")
+                    print("         output is OFF or not enabled. Check: (1) front panel output button,")
+                    print("         (2) FIO1 shutoff pin state, (3) SW1 switches 1 & 2 are UP.")
 
             return actual_current
         except Exception as e:

@@ -1,17 +1,13 @@
-import pytest
-pytestmark = pytest.mark.unit
-
 """
 Unit tests for LivePlot class - dynamic axes and absolute scales
 """
 
 import unittest
-from unittest.mock import MagicMock, patch, Mock
-import sys
 from datetime import datetime, timedelta
+from unittest.mock import MagicMock, patch
+import pytest
 
-# conftest.py handles mocking of tkinter, matplotlib, and hardware libs
-import t8_daq_system.gui.live_plot
+pytestmark = pytest.mark.unit
 
 
 class TestLivePlotAxesConfiguration(unittest.TestCase):

@@ -1,14 +1,14 @@
-import pytest
-pytestmark = pytest.mark.unit
-
 """
 Unit tests for SafetyMonitor class.
 """
 
 import unittest
 from unittest.mock import MagicMock
+import pytest
 
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus, SafetyEvent
+
+pytestmark = pytest.mark.unit
 
 
 class TestSafetyMonitorInit(unittest.TestCase):

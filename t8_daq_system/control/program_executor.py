@@ -145,8 +145,8 @@ class ProgramExecutor:
             try:
                 self._ps.set_voltage(0.0)
                 self._ps.set_current(0.0)
-            except:
-                pass
+            except Exception as e:
+                print(f"[ProgramExecutor] Warning: zeroing output failed: {e}")
 
     def is_running(self):
         return self._running and self._thread and self._thread.is_alive()
@@ -222,6 +222,8 @@ class ProgramExecutor:
         # Initial temp from TC_1 or similar
         self._current_get_temp_k = self._get_temp_k_provider("TC_1")
         block_start_temp_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
+        # NOTE: unused — possible bug, see workflow-setup ticket 02
+        del block_start_temp_k
         
         # Seed the shared voltage setpoint from the live supply output if the
         # supply is already energised, so that starting a continuation program
@@ -285,7 +287,7 @@ class ProgramExecutor:
                     while self._running and not self._confirmation_event.is_set():
                         self._confirmation_event.wait(timeout=0.5)
                     self._waiting_for_confirmation = False
-                    print(f"[ProgramExecutor] QMS confirmation received, continuing")
+                    print("[ProgramExecutor] QMS confirmation received, continuing")
 
                 self.current_block_index += 1
 
@@ -332,6 +334,8 @@ class ProgramExecutor:
         while self._running:
             now = time.time()
             dt = now - self._last_tick_time if self._last_tick_time else 0.1
+            # NOTE: unused — possible bug, see workflow-setup ticket 02
+            del dt
             self._last_tick_time = now
 
             elapsed = now - start_time

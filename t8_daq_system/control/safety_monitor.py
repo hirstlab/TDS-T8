@@ -222,6 +222,8 @@ class SafetyMonitor:
             limits = self._temperature_limits.copy()
             warning_threshold = self._warning_threshold
             watchdog = self._watchdog_sensor
+            # NOTE: unused — possible bug, see workflow-setup ticket 02
+            del watchdog
 
         warnings_found = []
         violations_found = []

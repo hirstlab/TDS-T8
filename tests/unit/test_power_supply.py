@@ -1,15 +1,13 @@
-import unittest
-from unittest.mock import MagicMock, call
 import sys
-
-# Get the mock ljm that conftest.py already placed in sys.modules
-mock_ljm = sys.modules['labjack'].ljm
+import unittest
+import pytest
 
 from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 
-
-import pytest
 pytestmark = pytest.mark.unit
+
+# Get the mock ljm that conftest.py already placed in sys.modules
+mock_ljm = sys.modules['labjack'].ljm
 
 class TestKeysightAnalogController(unittest.TestCase):
     """Tests for KeysightAnalogController — the LJM-based analog PS interface."""

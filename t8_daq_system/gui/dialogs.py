@@ -4,7 +4,7 @@ PURPOSE: Custom dialog windows for the T8 DAQ System
 """
 
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox
+from tkinter import ttk, filedialog
 import os
 from datetime import datetime
 

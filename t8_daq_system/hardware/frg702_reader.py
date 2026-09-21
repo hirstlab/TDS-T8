@@ -6,6 +6,8 @@ analog voltage conversion. Pressure values are read directly from the controller
 """
 
 
+from labjack import ljm
+
 DEBUG_PRESSURE = False   # Set False to silence once working correctly
 
 # Unit conversion factors from mbar
@@ -27,8 +29,6 @@ MODE_PIRANI_ONLY = 'Pirani'
 MODE_COMBINED = 'Combined'
 MODE_UNKNOWN = 'Unknown'
 
-
-from labjack import ljm
 
 class FRG702Reader:
     def __init__(self, xgs600_controller, frg702_config_list):
@@ -307,6 +307,8 @@ class FRG702AnalogReader:
                     'voltage': voltage
                 }
             except Exception as e:
+                # NOTE: unused — possible bug, see workflow-setup ticket 02
+                del e
                 readings[gauge['name']] = {
                     'pressure': None,
                     'status': 'error',

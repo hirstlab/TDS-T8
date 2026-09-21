@@ -4,9 +4,9 @@ PURPOSE: Read thermocouple temperatures from T8
 KEY CONCEPT: T8 has "Extended Features" (EF) that do the math automatically
 """
 
-DEBUG_TC = False   # Set False to silence TC debug output
-
 from labjack import ljm
+
+DEBUG_TC = False   # Set False to silence TC debug output
 
 
 class ThermocoupleReader:

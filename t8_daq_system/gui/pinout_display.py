@@ -280,7 +280,7 @@ class PinoutDisplay(tk.Toplevel):
             dot.pack(side=tk.LEFT, padx=(2, 4))
 
             pin_str  = f"AIN{ch}+"
-            pair_str = f"+/−"
+            pair_str = "+/−"
 
             for val, w, anchor in [
                 (pin_str,    9,  'w'),
@@ -460,6 +460,8 @@ class PinoutDisplay(tk.Toplevel):
 
         s    = self._settings
         cfg  = self._config.get('power_supply', {})
+        # NOTE: unused — possible bug, see workflow-setup ticket 02
+        del cfg
 
         f = ttk.Frame(self._content_frame)
         f.pack(fill=tk.X, padx=12, pady=2)

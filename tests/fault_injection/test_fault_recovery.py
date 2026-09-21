@@ -4,8 +4,7 @@ Tests executor response to PS faults during a live run.
 """
 import pytest
 import threading
-import time
-from t8_daq_system.control.program_block import VoltageRampBlock, TempRampBlock, StableHoldBlock
+from t8_daq_system.control.program_block import VoltageRampBlock, TempRampBlock
 from t8_daq_system.control.program_executor import ProgramExecutor
 from tests.mock_ps import fast_executor_time
 
@@ -151,7 +150,8 @@ def _run_with_fault(fault_type, at_call=5):
     ]
 
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: 300.0)
+    def provider(tc_name):
+        return lambda: 300.0
 
     with fast_executor_time():
         ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
@@ -177,7 +177,8 @@ def test_so_latched_dac_not_nonzero_after_fault():
     ps.inject_fault('SO_LATCHED', at_call=3)
     blocks = [TempRampBlock(rate_k_per_min=60.0, end_temp_k=2000.0, tc_name="TC_1")]
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: 300.0)
+    def provider(tc_name):
+        return lambda: 300.0
     with fast_executor_time():
         ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
         ex.load_program(blocks)
@@ -197,7 +198,8 @@ def test_ovp_trip_sets_interlock():
     ps.inject_fault('OVP_TRIP', at_call=4)
     blocks = [TempRampBlock(rate_k_per_min=600.0, end_temp_k=1000.0, tc_name="TC_1")]
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: 300.0)
+    def provider(tc_name):
+        return lambda: 300.0
     with fast_executor_time():
         ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
         ex.load_program(blocks)
@@ -243,7 +245,8 @@ def test_regression_nudge_during_run_does_not_assert_fio1(mock_ps):
     mock_ps.reset()
     blocks = [VoltageRampBlock(start_voltage=0.0, end_voltage=3.0, duration_sec=2)]
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: 300.0)
+    def provider(tc_name):
+        return lambda: 300.0
     with fast_executor_time():
         ex = ProgramExecutor(mock_ps, provider, on_program_complete=lambda: completed.set())
         ex.load_program(blocks)
@@ -268,7 +271,8 @@ def test_regression_gui_state_matches_ps_after_so_latch():
     ps.inject_fault('SO_LATCHED', at_call=3)
     blocks = [TempRampBlock(rate_k_per_min=600.0, end_temp_k=1000.0, tc_name="TC_1")]
     completed = threading.Event()
-    provider = lambda tc_name: (lambda: 300.0)
+    def provider(tc_name):
+        return lambda: 300.0
     with fast_executor_time():
         ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
         ex.load_program(blocks)
@@ -300,7 +304,8 @@ def test_regression_rampdown_after_hold(mock_ps):
     completed = threading.Event()
 
     with fast_executor_time():
-        provider = lambda tc_name: (lambda: 300.0)
+        def provider(tc_name):
+            return lambda: 300.0
         ex = ProgramExecutor(
             mock_ps, provider,
             on_block_start=lambda idx, blk: block_starts.append(idx),

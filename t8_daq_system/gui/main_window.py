@@ -20,6 +20,26 @@ import random
 import math
 
 from t8_daq_system.utils.startup_profiler import profiler
+from t8_daq_system.hardware.labjack_connection import LabJackConnection
+from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
+from t8_daq_system.hardware.xgs600_controller import XGS600Controller
+from t8_daq_system.hardware.frg702_reader import FRG702Reader, FRG702AnalogReader
+from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
+from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
+from t8_daq_system.data.data_buffer import DataBuffer
+from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
+from t8_daq_system.gui.live_plot import LivePlot
+from t8_daq_system.gui.camera_panel import CameraPanel
+from t8_daq_system.gui.sensor_panel import SensorPanel
+from t8_daq_system.utils.helpers import convert_temperature
+from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
+from t8_daq_system.gui.settings_dialog import SettingsDialog
+from t8_daq_system.gui.pinout_display import PinoutDisplay
+from t8_daq_system.control.program_executor import ProgramExecutor
+from t8_daq_system.gui.program_panel import ProgramPanel
+from t8_daq_system.core.data_acquisition import DataAcquisition
+from t8_daq_system.settings.app_settings import AppSettings
+from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
 
 
 class GUIProfiler:
@@ -80,30 +100,6 @@ class GUIProfiler:
         self.section_times.clear()
 
 gui_profiler = GUIProfiler()
-
-
-# Import our modules
-from t8_daq_system.hardware.labjack_connection import LabJackConnection
-from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
-from t8_daq_system.hardware.xgs600_controller import XGS600Controller
-from t8_daq_system.hardware.frg702_reader import FRG702Reader, FRG702AnalogReader
-from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
-from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
-from t8_daq_system.data.data_buffer import DataBuffer
-from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
-from t8_daq_system.gui.live_plot import LivePlot
-from t8_daq_system.gui.camera_panel import CameraPanel
-from t8_daq_system.gui.sensor_panel import SensorPanel
-from t8_daq_system.utils.helpers import convert_temperature
-from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
-from t8_daq_system.gui.settings_dialog import SettingsDialog
-from t8_daq_system.gui.pinout_display import PinoutDisplay
-from t8_daq_system.control.program_executor import ProgramExecutor
-from t8_daq_system.gui.program_panel import ProgramPanel
-from t8_daq_system.core.data_acquisition import DataAcquisition
-from t8_daq_system.settings.app_settings import AppSettings
-from t8_daq_system.gui.power_programmer_panel import PowerProgrammerPanel
-from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
 
 # Safe Mode limits for the Voltage/Current Power Programmer (not TempRamp)
 _PROGRAMMER_SAFE_MODE_MAX_VOLTS = 1.0   # V
@@ -2622,8 +2618,8 @@ class MainWindow:
         if hasattr(self, '_nudge_frame') and self._nudge_frame:
             try:
                 self._nudge_frame.destroy()
-            except:
-                pass
+            except (tk.TclError, AttributeError) as e:
+                print(f"[MainWindow] Error cleaning up nudge frame: {e}")
 
         frame = ttk.LabelFrame(parent_frame, text="Manual Voltage Nudge")
         frame.pack(side=pack_side, fill=tk.X, padx=4, pady=2)
@@ -2677,8 +2673,8 @@ class MainWindow:
             if hasattr(self, '_nudge_frame') and self._nudge_frame:
                 try:
                     current_parent = self._nudge_frame.master
-                except:
-                    pass
+                except (tk.TclError, AttributeError) as e:
+                    print(f"[MainWindow] Error accessing nudge frame master: {e}")
             
             if not hasattr(self, '_nudge_frame') or not self._nudge_frame or not self._nudge_frame.winfo_exists() or current_parent != target_parent:
                 self._build_manual_nudge_panel(target_parent, pack_side=pack_side)
@@ -2693,8 +2689,8 @@ class MainWindow:
             if hasattr(self, '_nudge_frame') and self._nudge_frame:
                 try:
                     self._nudge_frame.destroy()
-                except:
-                    pass
+                except (tk.TclError, AttributeError) as e:
+                    print(f"[MainWindow] Error destroying nudge frame: {e}")
                 self._nudge_frame = None
 
     def _nudge_voltage(self, direction):
@@ -2916,11 +2912,11 @@ class MainWindow:
 
             # 3. Abort MASsoft scan via pyautogui (Escape key = Abort in MASsoft toolbar)
             try:
-                import pyautogui, time as _t
+                import pyautogui
                 windows = pyautogui.getWindowsWithTitle("MASsoft")
                 if windows:
                     windows[0].activate()
-                    _t.sleep(0.1)
+                    time.sleep(0.1)
                     pyautogui.press('escape')
             except Exception:
                 pass
@@ -3065,7 +3061,7 @@ class MainWindow:
                         f"  Achieved    : {run.get('achieved_mean_rate_k_per_min', 0):.2f} K/min\n"
                         f"  Overshoot   : {run.get('overshoot_k', 0):.2f} K\n"
                         f"  Settling    : {run.get('settling_time_sec') or 'N/A'}"
-                        + (f" s\n" if run.get('settling_time_sec') else "\n") +
+                        + (" s\n" if run.get('settling_time_sec') else "\n") +
                         f"  Oscillations: {run.get('oscillation_count', 0)}\n"
                         f"  Duration    : {run.get('duration_sec', 0):.1f} s\n"
                         f"  Gains (Kp/Ki/Kd): {run.get('kp_used', 0):.4f} / "

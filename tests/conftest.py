@@ -68,7 +68,7 @@ if "matplotlib" not in sys.modules:
 # Re-export MockPowerSupplyController from mock_ps module so that it is
 # accessible both as a standalone class and via conftest fixtures.
 # ---------------------------------------------------------------------------
-from tests.mock_ps import MockPowerSupplyController  # noqa: E402
+from tests.mock_ps import MockPowerSupplyController
 
 
 # ---------------------------------------------------------------------------
@@ -98,7 +98,8 @@ def make_executor(mock_ps):
 
     def factory(temp_k=300.0, on_block_start=None, on_block_complete=None,
                 on_program_complete=None, on_status=None):
-        provider = lambda tc_name: (lambda: temp_k)
+        def provider(tc_name):
+            return lambda: temp_k
         ex = ProgramExecutor(
             power_supply=mock_ps,
             get_temp_k_fn_provider=provider,
