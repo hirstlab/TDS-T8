@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0003-heater-output-arbitration-and-trips.md` and `.scratch/rig-architecture/spec.md` (The Rig loop; The Snapshot) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -18,11 +18,27 @@ Requirements:
 - `Rig.latest()` is safe to call from another thread (lock around the single reference).
 - Tests call `run_tick()` directly with a `ManualClock`. No test starts the thread.
 
-- [ ] A tick against the Simulated rig publishes a Snapshot with TC °C, pressure in Torr, PS V/I, and `source_age_s` for every source
-- [ ] A dropped TC's age grows tick by tick; restoring it resets to 0
-- [ ] `disconnect()` → Snapshot shows LabJack `lost`; `reconnect()` + enough clock → the adapter's first three calls are exactly off, 0 V, pin current limit
-- [ ] Reconnect is not attempted more often than `RECONNECT_INTERVAL_S`
-- [ ] `SelectAdapter` is refused with a reason while logging is flagged active, and accepted when idle
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] A tick against the Simulated rig publishes a Snapshot with TC °C, pressure in Torr, PS V/I, and `source_age_s` for every source
+- [x] A dropped TC's age grows tick by tick; restoring it resets to 0
+- [x] `disconnect()` → Snapshot shows LabJack `lost`; `reconnect()` + enough clock → the adapter's first three calls are exactly off, 0 V, pin current limit
+- [x] Reconnect is not attempted more often than `RECONNECT_INTERVAL_S`
+- [x] `SelectAdapter` is refused with a reason while logging is flagged active, and accepted when idle
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+### 2026-09-21
+- Defined all spec command types as frozen dataclasses in `t8_daq_system/rig/commands.py`: `LoadProgram`, `StartProgram`, `StopProgram`, `ConfirmContinue`, `Nudge`, `SetVoltage`, `SetOutput`, `ResetTrip`, `SelectAdapter`, `UpdateConfig`.
+- Added optional `adapter_refusal_reason` and `command_rejected_reason` to `Snapshot` in `snapshot.py`.
+- Updated `SimulatedRig` in `simulated.py` with `_cable_connected` tracking so `connect()` respects physical link state.
+- Implemented `Rig` in `t8_daq_system/rig/rig.py` executing `run_tick()` in spec order:
+  1. Drain commands (handles `SelectAdapter` refusal when logging/running and `UpdateConfig`).
+  2. Safe reconnection (reconnect interval rate-limiting, and on reconnect enforcing: `set_output(False)`, `write_voltage(0.0)`, `pin_current_limit()` before any reads).
+  3. Adapter read (catches `AdapterError`, sets LabJack lost and `labjack_lost` trip condition).
+  4. Staleness calculation per source, building and publishing immutable Snapshot behind thread lock.
+  5-6. Explicit no-op hooks for safety and control steps (filled in tickets 08 and 10).
+  7. Handing Snapshot to consumer queue.
+- Re-exported all rig classes, types, and commands in `t8_daq_system/rig/__init__.py`.
+- Added unit tests in `tests/unit/test_rig_loop.py` verifying all requirements and acceptance criteria.
+- Verified adversarial self-review by temporarily breaking reconnect call order and confirming test failure.
+- All three gates pass locally with 0 failures: `ruff check .`, `python scripts/check_tests_first.py`, `pytest --tb=short -q`.
