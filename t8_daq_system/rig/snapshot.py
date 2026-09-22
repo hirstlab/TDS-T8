@@ -53,6 +53,7 @@ class ProgramStatus:
     sched_zone: str = ""
     ff_voltage: float = 0.0
     pid_correction: float = 0.0
+    control_tc: str = "TC_1"
 
 
 @dataclass(frozen=True)
