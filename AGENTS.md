@@ -345,6 +345,6 @@ _Updated on 2026-09-21 18:05. Implement this. If something in it is wrong, say s
    - Ticket 01 done: `01-pin-todays-control-and-csv-behaviour.md`
    - Ticket 02 done: `02-simulated-rig-runs-on-its-own.md`
    - Ticket 03 done: `03-rig-loop-publishes-snapshots.md`
-   - Ticket 04 done: `04-t8-adapter-reports-pressure-in-torr.md`
-   - Next ticket: `05-gui-reads-the-rig-not-the-hardware.md`
+   - Ticket 05 done: `05-gui-reads-the-rig-not-the-hardware.md`
+   - Ticket 06 in-progress: `06-safety-evaluator-is-a-pure-function.md`
 <!-- ACTIVE-PLAN:END -->
