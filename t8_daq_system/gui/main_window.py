@@ -21,9 +21,8 @@ import math
 
 from t8_daq_system.utils.startup_profiler import profiler
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
-from t8_daq_system.hardware.thermocouple_reader import ThermocoupleReader
 from t8_daq_system.hardware.xgs600_controller import XGS600Controller
-from t8_daq_system.hardware.frg702_reader import FRG702Reader, FRG702AnalogReader
+from t8_daq_system.hardware.frg702_reader import FRG702Reader
 from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
 from t8_daq_system.data.data_buffer import DataBuffer
@@ -37,9 +36,15 @@ from t8_daq_system.gui.settings_dialog import SettingsDialog
 from t8_daq_system.gui.pinout_display import PinoutDisplay
 from t8_daq_system.control.program_executor import ProgramExecutor
 from t8_daq_system.gui.program_panel import ProgramPanel
-from t8_daq_system.core.data_acquisition import DataAcquisition
 from t8_daq_system.settings.app_settings import AppSettings
 from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
+from t8_daq_system.rig.rig import Rig
+from t8_daq_system.rig.t8_adapter import T8Adapter
+from t8_daq_system.rig.simulated import SimulatedRig
+from t8_daq_system.rig.clock import RealClock
+from t8_daq_system.rig.commands import SelectAdapter, UpdateConfig
+from t8_daq_system.rig.snapshot import Snapshot
+from t8_daq_system.settings.safety_limits import PRESSURE_INTERLOCK_TORR
 
 
 class GUIProfiler:
@@ -251,7 +256,7 @@ class MainWindow:
     # Available sampling rates in milliseconds
     SAMPLE_RATES = [100, 200, 500, 1000, 2000]
 
-    def __init__(self, settings=None):
+    def __init__(self, settings=None, rig=None):
         profiler.section("MainWindow.__init__ START")
         profiler.checkpoint("Entering __init__ method")
 
@@ -294,6 +299,34 @@ class MainWindow:
         profiler.checkpoint("LabJackConnection instance created (not connected yet)")
         # LabJack reconnect guard
         self._last_labjack_read_failed = False
+        self._pressure_interlock_fired = False
+        self._practice_mode = False
+
+        profiler.section("Rig and Adapter Initialization")
+        if rig is not None:
+            self.rig = rig
+            self._hardware_adapter = getattr(rig, '_hardware_adapter', None)
+            self._practice_adapter = getattr(rig, '_practice_adapter', None)
+            self.clock = getattr(rig, '_clock', None)
+        else:
+            tc_names = [tc['name'] for tc in self.config['thermocouples'] if tc.get('enabled', True)]
+            gauge_names = [g['name'] for g in self.config.get('frg702_gauges', []) if g.get('enabled', True)]
+            self.clock = RealClock()
+            self._hardware_adapter = T8Adapter(config=self.config, connection=self.connection)
+            self._practice_adapter = SimulatedRig(clock=self.clock, tc_names=tc_names, gauge_names=gauge_names)
+            initial_adapter = self._practice_adapter if self._practice_mode else self._hardware_adapter
+
+            self.rig = Rig(
+                adapter=initial_adapter,
+                clock=self.clock,
+                sample_rate_ms=self.config['logging']['interval_ms'],
+                snapshot_consumer=self._on_snapshot,
+                practice_adapter=self._practice_adapter,
+                hardware_adapter=self._hardware_adapter,
+                tc_names=tc_names,
+                gauge_names=gauge_names,
+            )
+            self.rig.start()
 
         profiler.section("XGS-600 Controller Connection")
         profiler.checkpoint("Initializing XGS-600 variables")
@@ -318,7 +351,8 @@ class MainWindow:
             on_block_start=self._on_program_block_start,
             on_block_complete=self._on_program_block_complete,
             on_program_complete=self._on_program_complete,
-            on_status=self._on_program_status
+            on_status=self._on_program_status,
+            rig=self.rig,
         )
         self._program_executor.on_waiting_for_confirmation = self._on_waiting_for_qms_confirmation
         self._program_panel  = None
@@ -1123,6 +1157,9 @@ class MainWindow:
     def _toggle_practice_mode(self):
         """Toggle practice mode on/off."""
         self._practice_mode = not self._practice_mode
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(SelectAdapter(practice=self._practice_mode))
+
         if self._practice_mode:
             self._hardware_init_attempted = True  # Practice mode counts as initialized
             self.practice_btn.config(text="Practice Mode: ON")
@@ -1165,15 +1202,17 @@ class MainWindow:
             # Stop practice acquisition before switching to real hardware
             self._on_stop()
 
-            if not self.connection or not self.connection.is_connected():
-                self.status_var.set("Disconnected")
-                self.ps_controller = None
-            else:
+            self.ps_controller = getattr(self._hardware_adapter, 'ps_controller', None)
+            if self._program_executor:
+                self._program_executor.set_power_supply(self.ps_controller)
+                self._program_executor.practice_mode = False
+
+            snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
+            if snap is not None and snap.labjack.state == "connected":
                 self.status_var.set("Connected")
-                self._initialize_hardware_readers()
-                # Re-initialize the analog PS controller with the live T8 handle
-                self._initialize_power_supply()
                 self._auto_start_acquisition()
+            else:
+                self.status_var.set("Disconnected")
 
             # Clear programmer overlay from PS plot when leaving practice mode
             for plot in getattr(self, '_live_plots', []):
@@ -1320,10 +1359,89 @@ class MainWindow:
         return lambda: self._get_latest_tc_reading_k(tc_name)
 
     def _get_latest_tc_reading_k(self, tc_name):
+        if hasattr(self, 'rig') and self.rig:
+            snap = self.rig.latest()
+            if snap is not None and tc_name in snap.tc_c:
+                val_c = snap.tc_c[tc_name]
+                if val_c is not None:
+                    return val_c + 273.15
         if not self._latest_tc_readings:
             return 293.15
         val_c = self._latest_tc_readings.get(tc_name, 20.0)
         return val_c + 273.15
+
+    def _on_snapshot(self, snap: Snapshot):
+        """
+        Consume each Snapshot published by the Rig (Step 7 of the Rig loop).
+
+        Checks the pressure interlock, updates DataBuffer, latest readings,
+        and logs CSV rows if logging is active.
+        """
+        # Pressure interlock check in canonical Torr
+        if snap.pressure_torr:
+            for k, pval in snap.pressure_torr.items():
+                if pval is not None and isinstance(pval, (int, float)) and pval > PRESSURE_INTERLOCK_TORR:
+                    if not self._pressure_interlock_fired:
+                        self._pressure_interlock_fired = True
+                        print(f"[INTERLOCK] {k} pressure {pval:.2e} Torr exceeds {PRESSURE_INTERLOCK_TORR:.0e} Torr limit - output disabled")
+                        self._on_pressure_interlock(pval)
+                    break
+
+        all_readings = {}
+        for k, v in snap.tc_c.items():
+            all_readings[k] = v
+        for k, v in snap.pressure_torr.items():
+            all_readings[k] = v
+
+        all_readings['PS_Voltage'] = snap.ps_volts
+        all_readings['PS_Current'] = snap.ps_amps
+        all_readings['PS_Voltage_Setpoint'] = snap.commanded_volts
+        all_readings['PS_CC_Limit'] = 180.0
+
+        prog_executor = getattr(self, '_program_executor', None)
+        if prog_executor and prog_executor.is_running():
+            all_readings['Block_Index'] = prog_executor.current_block_index + 1
+        else:
+            all_readings['Block_Index'] = None
+
+        if self.is_running:
+            self.data_buffer.add_reading(all_readings)
+
+        self._latest_readings = (snap.wall_time, all_readings)
+        self._latest_tc_readings = dict(snap.tc_c)
+        self._latest_raw_voltages = dict(snap.tc_raw_v)
+        self._latest_frg702_details = {
+            g: {'pressure': p, 'status': 'OK' if p is not None else 'Error'}
+            for g, p in snap.pressure_torr.items()
+        }
+
+        if self.is_logging:
+            log_readings = {}
+            t_unit = getattr(self, '_current_t_unit', 'C')
+            p_unit = getattr(self, '_current_p_unit', 'mbar')
+            for name, value in all_readings.items():
+                if value is None:
+                    log_readings[name] = None
+                    continue
+                if name in self._tc_names:
+                    log_readings[name] = convert_temperature(value, 'C', t_unit)
+                elif name in self._frg_names:
+                    log_readings[name] = convert_pressure(value, 'Torr', p_unit)
+                else:
+                    log_readings[name] = value
+
+            if snap.tc_raw_v:
+                log_readings.update(snap.tc_raw_v)
+
+            if prog_executor and prog_executor.is_running():
+                log_readings.update(prog_executor.get_sched_state())
+            else:
+                log_readings.update({
+                    'Sched_Kp': None, 'Sched_Ki': None, 'Sched_Kd': None,
+                    'Sched_Zone': None, 'FF_Voltage': None, 'PID_Correction': None,
+                })
+
+            self.logger.log_reading(log_readings)
 
     def _on_program_block_start(self, index, block):
         print(f"[Program] Starting block {index+1}: {block.block_type}")
@@ -1859,13 +1977,13 @@ class MainWindow:
         self.tc_count_var.set(str(len(self.config['thermocouples'])))
         self.frg_count_var.set(str(len(self.config.get('frg702_gauges', []))))
 
-        if self.connection and self.connection.is_connected():
-            self._initialize_hardware_readers()
-            # Always call _initialize_power_supply; it now handles its own enabled check
-            self._initialize_power_supply()
-        elif self.daq:
-            # If not connected but daq exists (e.g. practice mode), update config
-            self.daq.update_readers(config=self.config)
+        if hasattr(self, 'rig') and self.rig is not None:
+            sample_rate = self.config.get('logging', {}).get('interval_ms')
+            self.rig.submit(UpdateConfig(
+                sample_rate_ms=float(sample_rate) if sample_rate is not None else None,
+                tc_names=list(self._tc_names),
+                gauge_names=list(self._frg_names),
+            ))
 
         self._configure_safety_monitor()
         self._rebuild_sensor_panel()
@@ -2077,28 +2195,8 @@ class MainWindow:
         pass
 
     def _check_connections(self):
-        if self._practice_mode:
-            for name in self.indicators:
-                self.indicators[name].config(bg='#00FF00')
-            return
-
-        if not self.tc_reader:
-            return
-
-        try:
-            tc_readings = self.tc_reader.read_all()
-            all_readings = {**tc_readings}
-
-            if self.frg702_reader:
-                frg702_readings = self.frg702_reader.read_all()
-                all_readings.update(frg702_readings)
-
-            for name, value in all_readings.items():
-                if name in self.indicators:
-                    color = '#00FF00' if value is not None else '#333333'
-                    self.indicators[name].config(bg=color)
-        except Exception as e:
-            print(f"Error checking connections: {e}")
+        """Deprecated: hardware connection checking now lives in Rig/Snapshot (ADR 0002)."""
+        pass
 
     def _update_safety_interlocks(self):
         """Update all safety interlock states. Called from the GUI update loop."""
@@ -2141,94 +2239,10 @@ class MainWindow:
         self.status_var.set("Running")
 
         self.data_buffer.clear()
-
-        self.daq = DataAcquisition(
-            config=self.config,
-            tc_reader=self.tc_reader,
-            frg702_reader=self.frg702_reader,
-            ps_controller=self.ps_controller,
-            safety_monitor=self.safety_monitor if not self._safety_triggered else None,
-            program_executor=self._program_executor,
-            practice_mode=self._practice_mode
-        )
-
-        # Wire pressure interlock callback
-        self.daq.set_pressure_interlock_callback(self._on_pressure_interlock)
-
-        def on_new_data(timestamp, all_readings, tc_readings, frg702_details,
-                        safety_shutdown=False, raw_voltages=None, read_failed=False):
-            # Update LabJack read status (Task 6)
-            self._last_labjack_read_failed = read_failed
-            if read_failed:
-                return
-
-            # Unified Program Mode: Add current block index to log (Task 7d)
-            prog_executor = getattr(self, '_program_executor', None)
-            if prog_executor and prog_executor.is_running():
-                all_readings['Block_Index'] = prog_executor.current_block_index + 1
-            else:
-                all_readings['Block_Index'] = None
-
-            self.data_buffer.add_reading(all_readings)
-
-            self._latest_readings = (timestamp, all_readings)
-            self._latest_tc_readings = tc_readings
-            self._latest_frg702_details = frg702_details
-            self._latest_raw_voltages = raw_voltages
-
-            if self.is_logging:
-                log_readings = {}
-                # Avoid calling tk.StringVar.get() from background thread
-                t_unit = getattr(self, '_current_t_unit', 'C')
-                p_unit = getattr(self, '_current_p_unit', 'mbar')
-                for name, value in all_readings.items():
-                    if value is None:
-                        log_readings[name] = None
-                        continue
-                    if name in self._tc_names:
-                        log_readings[name] = convert_temperature(value, 'C', t_unit)
-                    elif name in self._frg_names:
-                        log_readings[name] = convert_pressure(value, 'Torr', p_unit)
-                    else:
-                        log_readings[name] = value
-                # Include raw voltages (and differential voltages — same value,
-                # labelled _rawV) so the log shows the full conversion chain:
-                #   physical TC wire → raw mV input → EF temperature conversion
-                #
-                # Unified Program Mode: Add current block index to CSV (Task 7d)
-                prog_executor = getattr(self, '_program_executor', None)
-                if prog_executor and prog_executor.is_running():
-                    log_readings['Block_Index'] = prog_executor.current_block_index + 1
-                else:
-                    log_readings['Block_Index'] = None
-
-                if raw_voltages:
-                    log_readings.update(raw_voltages)
-
-                # FF-3 START — append scheduler state to each logged row
-                _exec = getattr(self, '_program_executor', None)
-                if _exec and _exec.is_running():
-                    log_readings.update(_exec.get_sched_state())
-                else:
-                    log_readings.update({
-                        'Sched_Kp': None, 'Sched_Ki': None, 'Sched_Kd': None,
-                        'Sched_Zone': None, 'FF_Voltage': None, 'PID_Correction': None,
-                    })
-                # FF-3 END
-
-                self.logger.log_reading(log_readings)
-
-            if safety_shutdown:
-                self.is_running = False
-                self.root.after(0, self._handle_safety_shutdown)
-
-        self.daq.start_fast_acquisition(callback=on_new_data)
+        self._pressure_interlock_fired = False
 
     def _on_stop(self):
         self.is_running = False
-
-        if self.daq:
-            self.daq.stop_fast_acquisition()
 
         self.log_btn.config(state='disabled')
         self.status_var.set("Stopped")
@@ -2283,11 +2297,15 @@ class MainWindow:
 
             filepath = self.logger.start_logging(sensor_names, custom_name, metadata)
             self.is_logging = True
+            if hasattr(self, 'rig') and self.rig:
+                self.rig.set_logging_active(True)
             self.log_btn.config(text="Stop Logging")
             self.status_var.set(f"Running - Logging to {os.path.basename(filepath)}")
         else:
             self.logger.stop_logging()
             self.is_logging = False
+            if hasattr(self, 'rig') and self.rig:
+                self.rig.set_logging_active(False)
             self.log_btn.config(text="Start Logging")
             self.status_var.set("Running")
 
@@ -2311,74 +2329,28 @@ class MainWindow:
             gui_profiler.loop_end()
             return
 
-        gui_profiler.start("labjack_reconnect")
-        # Auto-connect hardware (only when last read failed and after initial attempt)
-        lj_connected = self.connection.is_connected()
-        now = time.time()
-        if self._practice_mode:
-            lj_connected = True
-        elif self._last_labjack_read_failed and not lj_connected and self._hardware_init_attempted:
-            if (now - self._last_lj_reconnect_time) >= self._reconnect_interval:
-                self._last_lj_reconnect_time = now
-                if self.connection.connect():
-                    if self._initialize_hardware_readers():
-                        lj_connected = True
-                        self._update_connection_state(True)
-                        self._last_labjack_read_failed = False
-                    else:
-                        self.connection.disconnect()
-                        lj_connected = False
+        gui_profiler.start("rig_snapshot_render")
+        snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
+        lj_connected = (snap.labjack.state == "connected") if snap else False
+        xgs_connected = (snap.xgs.state == "connected") if snap else False
+        ps_connected = lj_connected and (self.ps_controller is not None or (snap is not None and snap.adapter == "simulated"))
 
-            if not lj_connected:
-                if self.status_var.get() != "Disconnected":
-                    self._update_connection_state(False)
-                    self.is_running = False
-                    for name in self.indicators:
-                        self.indicators[name].config(bg='#333333')
-
-        gui_profiler.start("labjack_indicator")
-        # Update LabJack indicator
-        color = '#00FF00' if lj_connected else '#333333'
+        # Update connection indicators from Snapshot SourceStatus
         if 'LabJack' in self.indicators:
-            self.indicators['LabJack'].config(bg=color)
-
-        gui_profiler.start("xgs600_reconnect")
-        # Auto-connect XGS-600 (only after initial deferred init)
-        xgs_connected = (self.xgs600 is not None and self.xgs600.is_connected()) or self._practice_mode
-        if not xgs_connected and not self._practice_mode and self._hardware_init_attempted and self.config.get('xgs600', {}).get('enabled', False):
-            if (now - self._last_xgs_reconnect_time) >= self._reconnect_interval:
-                self._last_xgs_reconnect_time = now
-                if self._connect_xgs600():
-                    xgs_connected = True
-
-        color = '#00FF00' if xgs_connected else '#333333'
+            self.indicators['LabJack'].config(bg='#00FF00' if lj_connected else '#333333')
         if 'XGS600' in self.indicators:
-            self.indicators['XGS600'].config(bg=color)
-
-        gui_profiler.start("keysight_reconnect")
-        # PS is connected whenever the T8 is connected and the controller is initialised.
-        # If T8 just reconnected but the controller is missing, create it now.
-        ps_connected = (lj_connected and self.ps_controller is not None) or \
-                       (self._practice_mode and self.ps_controller is not None)
-
-        if lj_connected and self.ps_controller is None and not self._practice_mode \
-                and self._hardware_init_attempted \
-                and self.config.get('power_supply', {}).get('enabled', True):
-            self._initialize_power_supply()
-            ps_connected = self.ps_controller is not None
-
-        color = '#00FF00' if ps_connected else '#333333'
+            self.indicators['XGS600'].config(bg='#00FF00' if xgs_connected else '#333333')
         if 'PowerSupply' in self.indicators:
-            self.indicators['PowerSupply'].config(bg=color)
+            self.indicators['PowerSupply'].config(bg='#00FF00' if ps_connected else '#333333')
 
-        # When not running, poll PS directly and update sensor-panel tiles
-        if ps_connected and self.ps_controller and not self.is_running:
-            _ps_live = self.ps_controller.get_readings()
-            if hasattr(self, 'sensor_panel'):
-                self.sensor_panel.update({
-                    'PS_Voltage': _ps_live.get('PS_Voltage'),
-                    'PS_Current': _ps_live.get('PS_Current'),
-                })
+        # If not connected, update status var
+        if not lj_connected and not self._practice_mode:
+            if self.status_var.get() != "Disconnected":
+                self._update_connection_state(False)
+                self.is_running = False
+        elif lj_connected and not self.is_running and self.status_var.get() == "Disconnected":
+            self._update_connection_state(True)
+            self.status_var.set("Connected")
 
         gui_profiler.start("safety_interlocks")
         # Update safety interlocks
@@ -2389,8 +2361,22 @@ class MainWindow:
             self._update_safety_display(self.safety_monitor.status)
 
         if not self.is_running:
-            if lj_connected:
-                self._check_connections()
+            # Idle display: update sensor panel with latest readings from Snapshot if available
+            if snap is not None:
+                idle_readings = {}
+                t_unit = self.t_unit_var.get()
+                p_unit = self.p_unit_var.get()
+                for name, value in snap.tc_c.items():
+                    idle_readings[name] = convert_temperature(value, 'C', t_unit) if value is not None else None
+                for name, value in snap.pressure_torr.items():
+                    idle_readings[name] = convert_pressure(value, 'Torr', p_unit) if value is not None else None
+                idle_readings['PS_Voltage'] = snap.ps_volts
+                idle_readings['PS_Current'] = snap.ps_amps
+                if hasattr(self, 'sensor_panel'):
+                    self.sensor_panel.update(idle_readings)
+                for name, value in idle_readings.items():
+                    if name in self.indicators:
+                        self.indicators[name].config(bg='#00FF00' if value is not None else '#333333')
 
             gui_profiler.start("schedule_next")
             self.root.after(self.config['display']['update_rate_ms'], self._update_gui)
@@ -2477,40 +2463,11 @@ class MainWindow:
         gui_profiler.loop_end()
 
     def _initialize_hardware_readers(self):
-        try:
-            handle = self.connection.get_handle()
-            self.tc_reader = ThermocoupleReader(handle, self.config['thermocouples'])
-
-            # Handle FRG702 reader initialization / config refresh
-            frg702_config = self.config.get('frg702_gauges', [])
-            if self.config.get('frg_interface') == "Analog":
-                if frg702_config:
-                    self.frg702_reader = FRG702AnalogReader(handle, frg702_config)
-                    print("Analog FRG-702 reader initialized via LabJack AIN")
-            elif self.frg702_reader is not None and frg702_config:
-                # XGS600 mode: keep the live serial connection but sync gauge config
-                # so readings are keyed by the current sensor names/units.
-                self.frg702_reader.gauges = frg702_config
-
-            # Update live DAQ engine if running
-            if self.daq:
-                self.daq.update_readers(
-                    tc_reader=self.tc_reader,
-                    frg702_reader=self.frg702_reader,
-                    config=self.config
-                )
-
-            # Only probe hardware directly when the DAQ is NOT running.
-            # When acquisition is active the background thread owns the serial
-            # port; calling _check_connections() here races with it and can
-            # corrupt the XGS-600 serial exchange, setting _connected=False and
-            # causing a persistent "disconnected" state.
-            if not self.is_running:
-                self._check_connections()
-            return True
-        except Exception as e:
-            print(f"Error initializing hardware readers: {e}")
-            return False
+        """
+        Transitional: reader construction and ownership live in the Rig adapter (ADR 0002).
+        This method no longer swaps reader objects under a running acquisition thread.
+        """
+        return True
 
     def _connect_xgs600(self):
         xgs_config = self.config.get('xgs600', {})
@@ -2925,7 +2882,11 @@ class MainWindow:
     def _on_pressure_interlock(self, pressure_torr):
         """Emergency: pressure exceeded 1e-4 Torr. Stop QMS and power supply."""
         def _shutdown():
-            # 1. Stop power supply immediately
+            # 1. Stop program executor if running (must stop BEFORE power supply off)
+            if self._program_executor and self._program_executor.is_running():
+                self._program_executor.stop()
+
+            # 2. Stop power supply immediately
             ps = getattr(self, 'ps_controller', None)
             if ps is not None:
                 try:
@@ -2933,10 +2894,6 @@ class MainWindow:
                     ps.output_off()
                 except Exception:
                     pass
-
-            # 2. Stop program executor if running
-            if self._program_executor and self._program_executor.is_running():
-                self._program_executor.stop()
 
             # 3. Abort MASsoft scan via pyautogui (Escape key = Abort in MASsoft toolbar)
             try:
@@ -2972,6 +2929,9 @@ class MainWindow:
 
     def _on_close(self):
         self.is_running = False
+
+        if hasattr(self, 'rig') and self.rig:
+            self.rig.stop()
 
         # Stop camera feed and timelapse before destroying widgets
         if self._camera_panel is not None:
