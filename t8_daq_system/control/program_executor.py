@@ -2,6 +2,17 @@
 program_executor.py
 PURPOSE: Unified execution engine for block-based programs.
 Supports Voltage Ramp, Stable Hold, and Temperature Ramp blocks.
+
+WHY THIS EXISTS / TRANSITIONAL NOTE
+------------------------------------
+Previously, ProgramExecutor read the control TC independently via
+DataAcquisition.get_tc_kelvin_by_name() -> ThermocoupleReader.read_single(),
+which caused temperature readings to diverge from the GUI and CSV logging.
+In ticket rig-architecture-05, its temperature source becomes the latest Snapshot
+published by the Rig (converted to K at this module's conversion point).
+Its voltage writes still go through the power-supply object it holds today
+as a transitional step until ticket 10, when ProgramExecutor is replaced by
+ProgramRun and pure block steps (ADRs 0002, 0003).
 """
 
 import threading
@@ -13,22 +24,28 @@ from .temp_ramp_pid import PIDController, PIDRunLogger
 from .feedforward_map import FeedforwardMap  # FF-5
 
 class ProgramExecutor:
-    def __init__(self, power_supply, get_temp_k_fn_provider,
+    def __init__(self, power_supply=None, get_temp_k_fn_provider=None,
                  on_block_start=None, on_block_complete=None,
                  on_program_complete=None, on_status=None,
-                 practice_mode=False):
-        # get_temp_k_fn_provider: callable that accepts a TC name string and returns
-        # a zero-argument callable returning temperature in KELVIN.
-        # The T8 thermocouple EF outputs Celsius; DataAcquisition.get_tc_kelvin_by_name()
-        # converts C→K before returning. Do NOT add another +273.15 conversion.
+                 practice_mode=False, rig=None):
         self._ps = power_supply
-        self._get_temp_k_provider = get_temp_k_fn_provider # Returns a function for a given TC name
+        self._rig = rig
+        if get_temp_k_fn_provider is not None:
+            self._get_temp_k_provider = get_temp_k_fn_provider
+            self._using_default_snapshot_provider = False
+        elif rig is not None:
+            self._get_temp_k_provider = lambda tc_name: lambda: self._get_temp_k_from_snapshot(tc_name)
+            self._using_default_snapshot_provider = True
+        else:
+            self._get_temp_k_provider = lambda tc_name: (lambda: 293.15)
+            self._using_default_snapshot_provider = True
+
         self._on_block_start = on_block_start
         self._on_block_complete = on_block_complete
         self._on_program_complete = on_program_complete
         self._on_status = on_status
         self.practice_mode = practice_mode
-        
+
         self._current_get_temp_k = None
 
         self._blocks = []
@@ -72,6 +89,24 @@ class ProgramExecutor:
         self._confirmation_event = threading.Event()
         self._waiting_for_confirmation = False
         self.on_waiting_for_confirmation = None   # callback(block_index)
+
+    def set_rig(self, rig):
+        with self._lock:
+            self._rig = rig
+            if getattr(self, '_using_default_snapshot_provider', True):
+                self._using_default_snapshot_provider = True
+                self._get_temp_k_provider = lambda tc_name: lambda: self._get_temp_k_from_snapshot(tc_name)
+
+    def _get_temp_k_from_snapshot(self, tc_name: str) -> float | None:
+        if self._rig is None:
+            return 293.15
+        snap = self._rig.latest() if hasattr(self._rig, "latest") else self._rig()
+        if snap is None or not hasattr(snap, "tc_c"):
+            return 293.15
+        val_c = snap.tc_c.get(tc_name)
+        if val_c is None:
+            return None
+        return val_c + 273.15
 
     def set_power_supply(self, ps):
         with self._lock:

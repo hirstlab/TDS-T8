@@ -66,6 +66,11 @@ class T8Adapter(RigAdapter):
         self._connected = False
         self._voltage_setpoint = 0.0
 
+    @property
+    def ps_controller(self) -> KeysightAnalogController | None:
+        """Transitional access to the analog power supply controller."""
+        return self._ps_controller
+
     # ──────────────────────────────────────────────────────────────────────────
     # RigAdapter protocol implementation
     # ──────────────────────────────────────────────────────────────────────────
