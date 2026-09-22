@@ -74,6 +74,34 @@ def convert_temperature(value, from_unit, to_unit):
         return celsius
 
 
+UNIT_CONVERSIONS = {
+    'mbar': 1.0,
+    'Torr': 0.750062,
+    'Pa': 100.0,
+}
+
+
+def convert_pressure(value, from_unit, to_unit):
+    """
+    Convert pressure between units ('mbar', 'Torr', 'Pa').
+
+    Args:
+        value: Pressure value (float or None)
+        from_unit: Source unit ('mbar', 'Torr', 'Pa')
+        to_unit: Target unit ('mbar', 'Torr', 'Pa')
+
+    Returns:
+        Converted pressure value, or None if value is None
+    """
+    if from_unit == to_unit or value is None:
+        return value
+
+    from_factor = UNIT_CONVERSIONS.get(from_unit, 1.0)
+    to_factor = UNIT_CONVERSIONS.get(to_unit, 1.0)
+
+    return (value / from_factor) * to_factor
+
+
 def linear_scale(value, in_min, in_max, out_min, out_max):
     """
     Scale a value from one range to another using linear interpolation.
