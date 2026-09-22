@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 04
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `AGENTS.md` §12.1 and `.scratch/rig-architecture/spec.md` (The Rig loop; GUI; Ordering constraints) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
