@@ -4,7 +4,7 @@
 
 **Blocked by:** 02
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0003-heater-output-arbitration-and-trips.md`, `AGENTS.md` §2 (CV-only) and `.scratch/rig-architecture/spec.md` (The Heater output) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
