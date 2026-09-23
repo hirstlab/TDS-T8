@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `.scratch/rig-architecture/spec.md` (Block steps and the Program run) and `CONTEXT.md` (Block step) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
