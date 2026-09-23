@@ -102,6 +102,63 @@ def test_hardware_imported_only_under_rig_and_transitional_list():
     assert not violations, "Forbidden t8_daq_system.hardware imports outside rig/ and transitional allowlist:\n" + "\n".join(violations)
 
 
+def test_heater_calls_only_under_rig_and_hardware():
+    """
+    Rule 4: Calls to write_voltage, set_output, set_voltage, output_on, output_off,
+    and emergency_shutdown appear only under rig/ and hardware/.
+
+    These method calls represent direct hardware control.  Any caller outside those
+    two packages violates ADR 0003 (one writer of the heater).
+    Transitional callers are listed below with the ticket that removes them.
+    """
+    FORBIDDEN_CALL_NAMES = {
+        "write_voltage",
+        "set_output",
+        "set_voltage",
+        "output_on",
+        "output_off",
+        "emergency_shutdown",
+    }
+    # Explicit transitional allowlist: files outside rig/ and hardware/ that still
+    # hold these calls today, with the ticket responsible for removing them.
+    TRANSITIONAL_ALLOWED = {
+        # Ticket 14: ProgramExecutor deletion removes set_voltage/output_on/set_current
+        Path("t8_daq_system/control/program_executor.py"),
+        # Ticket 14: SafetyMonitor direct hardware calls removed with legacy monitor
+        Path("t8_daq_system/control/safety_monitor.py"),
+        # Ticket 05/10: MainWindow transitional PS access / output_on calls
+        Path("t8_daq_system/gui/main_window.py"),
+        # Ticket 14: PowerSupplyPanel direct output_off call
+        Path("t8_daq_system/gui/power_supply_panel.py"),
+    }
+
+    violations = []
+    for py_file in _iter_python_files(PACKAGE_ROOT):
+        rel_parts = py_file.relative_to(PACKAGE_ROOT).parts
+        rel_path = py_file.relative_to(REPO_ROOT)
+
+        if rel_parts[0] in ("hardware", "rig"):
+            continue
+        if rel_path in TRANSITIONAL_ALLOWED:
+            continue
+
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(py_file))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                func = node.func
+                if isinstance(func, ast.Attribute) and func.attr in FORBIDDEN_CALL_NAMES:
+                    violations.append(
+                        f"{rel_path}:{node.lineno} calls {func.attr!r}"
+                    )
+
+    assert not violations, (
+        "Hardware-control calls outside rig/ and hardware/ "
+        "(add transitional entries with ticket numbers for known callers):\n"
+        + "\n".join(violations)
+    )
+
+
 def test_no_tkinter_or_gui_under_control_data_rig_settings():
     """
     Rule 3: No tkinter or gui imports under control/, data/, rig/, settings/.
