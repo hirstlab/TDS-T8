@@ -96,6 +96,10 @@ class ProgramRun:
         # TempRamp run history for feedforward learning
         self._run_log: list[tuple[float, float, float, float]] = []
 
+        # Events accumulated between take_events() calls.
+        # The Rig reads these after each step() and relays them to RunRecord.
+        self._pending_events: list[tuple[str, str]] = []
+
     # ------------------------------------------------------------------
     # Public lifecycle API
     # ------------------------------------------------------------------
@@ -142,6 +146,17 @@ class ProgramRun:
     def confirm_continue(self) -> None:
         """Release a QMS confirmation pause (called on ConfirmContinue)."""
         self._confirmation_ready = True
+
+    def take_events(self) -> list[tuple[str, str]]:
+        """
+        Return and clear all pending (event_name, detail) pairs.
+
+        Called by the Rig after each step() to relay BLOCK_START,
+        PROGRAM_COMPLETE, and RAMP_START events to RunRecord.
+        """
+        events = self._pending_events
+        self._pending_events = []
+        return events
 
     # ------------------------------------------------------------------
     # Step function — called by Rig on every control tick
@@ -248,6 +263,14 @@ class ProgramRun:
 
     def _setup_block(self, block: Any, snapshot: Snapshot, now_s: float) -> StepContext:
         """Resolve per-block gain/rate, build StepContext, apply bumpless PID."""
+        # Emit BLOCK_START and RAMP_START events for the Run record.
+        block_type = getattr(block, "block_type", "")
+        self._pending_events.append(
+            (f"BLOCK_START {self._block_index} {block_type}", "")
+        )
+        if block_type in ("temp_ramp", "voltage_ramp"):
+            self._pending_events.append(("RAMP_START", ""))
+
         # Per-block feedforward rate (mirrors ProgramExecutor._resolve_block_control)
         if block.block_type == "temp_ramp":
             self._block_rate_k_per_min = getattr(block, "rate_k_per_min", 0.0)
@@ -315,6 +338,7 @@ class ProgramRun:
         if next_idx >= len(self._blocks):
             # All blocks complete — program ends
             self._running = False
+            self._pending_events.append(("PROGRAM_COMPLETE", ""))
             logger.info("ProgramRun: program complete after block %d", self._block_index)
         else:
             # Advance to next block

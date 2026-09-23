@@ -150,6 +150,11 @@ class Rig:
         self._stop_requested: bool = False
         self._thread: threading.Thread | None = None
 
+        # Run record: step-7 consumer for CSV logging (set via set_run_record)
+        self._run_record: Any | None = None
+        # Track which trip kind has already been emitted to avoid duplicate events
+        self._last_emitted_trip_kind: str | None = None
+
     # --- Properties & public methods ---
 
     @property
@@ -183,6 +188,14 @@ class Rig:
     def set_logging_active(self, active: bool) -> None:
         """Set whether CSV logging is active."""
         self._logging_active = bool(active)
+
+    def set_run_record(self, run_record: Any) -> None:
+        """Attach a RunRecord as the step-7 Snapshot consumer for CSV logging."""
+        self._run_record = run_record
+
+    def clear_run_record(self) -> None:
+        """Detach the RunRecord; no more snapshots will be forwarded."""
+        self._run_record = None
 
     def submit_command(self, cmd: Any) -> None:
         """Submit a command to the Rig command queue."""
@@ -442,6 +455,9 @@ class Rig:
                     )
 
             # ProgramRun step: get voltage request or program_error trip
+            _pr_was_running = (
+                self._program_run is not None and self._program_run.running
+            )
             if is_control_step and self._program_run is not None and self._program_run.running:
                 from t8_daq_system.control.safety_monitor import Trip as _Trip
                 pr_result = self._program_run.step(snap_for_heater, now)
@@ -451,13 +467,22 @@ class Rig:
                 elif pr_result is not None:
                     drained_heater_cmds = list(drained_heater_cmds) + [pr_result]
 
+            # Relay ProgramRun events to RunRecord (BLOCK_START, PROGRAM_COMPLETE, etc.)
+            if self._run_record is not None and self._program_run is not None:
+                for evt_name, evt_detail in self._program_run.take_events():
+                    self._run_record.put_event(evt_name, evt_detail)
+
             requests = trips + drained_heater_cmds
+            _was_latched_before = self._heater_output.is_latched
+            _had_reset = any(isinstance(c, ResetTrip) for c in drained_heater_cmds)
             cmd = self._heater_output.resolve(requests, snap_for_heater)
 
             # Trip or stop_program: halt ProgramRun and legacy ProgramExecutor
+            _program_stopped_by_cmd = False
             if self._heater_output.is_latched or cmd.stop_program:
-                if self._program_run is not None:
+                if self._program_run is not None and self._program_run.running:
                     self._program_run.stop()
+                    _program_stopped_by_cmd = True
                 if self._program_executor is not None and hasattr(self._program_executor, "stop"):
                     try:
                         self._program_executor.stop()
@@ -466,6 +491,35 @@ class Rig:
 
             if cmd.refusal_reason:
                 self._command_rejected_reason = cmd.refusal_reason
+
+            # Emit events to RunRecord for trips, resets and program stops
+            if self._run_record is not None:
+                # New trip: emit TRIP event once per latched kind
+                new_trip_kind = cmd.trip_kind
+                if (
+                    new_trip_kind is not None
+                    and new_trip_kind != self._last_emitted_trip_kind
+                ):
+                    self._run_record.put_event(
+                        f"TRIP {new_trip_kind}",
+                        cmd.trip_reason or "",
+                    )
+                    self._last_emitted_trip_kind = new_trip_kind
+                # Latch cleared: reset tracking
+                if _was_latched_before and not self._heater_output.is_latched:
+                    self._last_emitted_trip_kind = None
+                    self._run_record.put_event("RESET")
+                # Reset refused
+                elif (
+                    _had_reset
+                    and self._heater_output.is_latched
+                    and cmd.refusal_reason
+                    and "Reset refused" in cmd.refusal_reason
+                ):
+                    self._run_record.put_event("RESET_REFUSED", cmd.refusal_reason)
+                # Program stopped by operator or trip (but not program_complete)
+                if _program_stopped_by_cmd and not cmd.trip_kind:
+                    self._run_record.put_event("PROGRAM_STOPPED")
 
             # Adapter writes (through Rig only)
             # Write if state changed, or if a trip appeared this tick
@@ -542,13 +596,16 @@ class Rig:
             self._latest = final_snap
 
         # ---------------------------------------------------------
-        # Step 7: Hand Snapshot to consumer queue
+        # Step 7: Hand Snapshot to consumer queue and RunRecord
         # ---------------------------------------------------------
         if self._snapshot_consumer is not None:
             if hasattr(self._snapshot_consumer, "put"):
                 self._snapshot_consumer.put(final_snap)
             elif callable(self._snapshot_consumer):
                 self._snapshot_consumer(final_snap)
+
+        if self._run_record is not None:
+            self._run_record.put_snapshot(final_snap)
 
     def _handle_command(self, cmd: Any) -> None:
         """Handle a single drained command."""
@@ -581,6 +638,9 @@ class Rig:
                     state="connected" if self._adapter_connected else "lost"
                 )
                 logger.info("SelectAdapter accepted (practice=%s)", cmd.practice)
+                adapter_name = "simulated" if cmd.practice else "t8"
+                if self._run_record is not None:
+                    self._run_record.put_event(f"ADAPTER {adapter_name}")
 
         elif isinstance(cmd, UpdateConfig):
             if cmd.sample_rate_ms is not None:

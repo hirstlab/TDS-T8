@@ -353,5 +353,6 @@ _Updated on 2026-09-21 18:05. Implement this. If something in it is wrong, say s
    - Ticket 08 done: `08-trips-cut-the-heater-in-the-same-tick.md`
    - Ticket 09 done: `09-extract-block-steps.md`
    - Ticket 10 done: `10-program-run-on-the-rig-loop.md`
-   - Next ticket: `11-run-record-writes-the-csv.md`
+   - Ticket 11 done: `11-run-record-writes-the-csv.md`
+   - Next ticket: `12-gui-speaks-in-commands.md`
 <!-- ACTIVE-PLAN:END -->

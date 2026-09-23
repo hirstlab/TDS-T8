@@ -45,6 +45,7 @@ from t8_daq_system.rig.clock import RealClock
 from t8_daq_system.rig.commands import SelectAdapter, UpdateConfig
 from t8_daq_system.rig.snapshot import Snapshot
 from t8_daq_system.settings.safety_limits import PRESSURE_INTERLOCK_TORR
+from t8_daq_system.data.run_record import RunRecord, build_header as _rr_build_header
 
 
 class GUIProfiler:
@@ -120,32 +121,16 @@ def build_csv_header(config: dict, has_ps_controller: bool = True) -> list:
     Extracted from MainWindow._on_start_stop_logging (rig-architecture ticket 01)
     to allow pure characterisation testing of the CSV column schema without
     requiring a Tk root.
+
+    Delegates to RunRecord.build_header (ticket 11) which owns the canonical
+    column schema including the two appended columns Heater_State and Trip_Reason.
     """
     enabled_tcs = [tc for tc in config.get('thermocouples', [])
                    if tc.get('enabled', True)]
-    sensor_names = [tc['name'] for tc in enabled_tcs]
-    sensor_names += [g['name'] for g in config.get('frg702_gauges', [])
-                     if g.get('enabled', True)]
-
-    if has_ps_controller:
-        sensor_names += ['PS_Voltage', 'PS_Current',
-                         'PS_Voltage_Setpoint', 'PS_CC_Limit']
-
-    # Unified Program Mode: Add block index column (Task 7d)
-    sensor_names += ['Block_Index']
-
-    # FF-3 START — scheduler state columns
-    sensor_names += ['Sched_Kp', 'Sched_Ki', 'Sched_Kd',
-                     'Sched_Zone', 'FF_Voltage', 'PID_Correction']
-    # FF-3 END
-
-    # Append raw-voltage columns right after the temperature columns so the
-    # log shows the full conversion chain for each thermocouple:
-    for tc in enabled_tcs:
-        sensor_names.append(f"{tc['name']}_rawV")
-
-    # Guard: remove any None or empty-string entries that could produce phantom CSV columns
-    sensor_names = [n for n in sensor_names if n]
+    tc_names = [tc['name'] for tc in enabled_tcs]
+    gauge_names = [g['name'] for g in config.get('frg702_gauges', [])
+                   if g.get('enabled', True)]
+    sensor_names = _rr_build_header(tc_names, gauge_names, has_ps=has_ps_controller)
     return ['Timestamp'] + sensor_names
 
 
@@ -411,6 +396,7 @@ class MainWindow:
         # Control flags
         self.is_running = False
         self.is_logging = False
+        self._run_record: RunRecord | None = None
         self.read_thread = None
         self._safety_triggered = False
         self._hardware_init_attempted = False  # Track if deferred init has run
@@ -1414,33 +1400,8 @@ class MainWindow:
             for g, p in snap.pressure_torr.items()
         }
 
-        if self.is_logging:
-            log_readings = {}
-            t_unit = getattr(self, '_current_t_unit', 'C')
-            p_unit = getattr(self, '_current_p_unit', 'mbar')
-            for name, value in all_readings.items():
-                if value is None:
-                    log_readings[name] = None
-                    continue
-                if name in self._tc_names:
-                    log_readings[name] = convert_temperature(value, 'C', t_unit)
-                elif name in self._frg_names:
-                    log_readings[name] = convert_pressure(value, 'Torr', p_unit)
-                else:
-                    log_readings[name] = value
-
-            if snap.tc_raw_v:
-                log_readings.update(snap.tc_raw_v)
-
-            if prog_executor and prog_executor.is_running():
-                log_readings.update(prog_executor.get_sched_state())
-            else:
-                log_readings.update({
-                    'Sched_Kp': None, 'Sched_Ki': None, 'Sched_Kd': None,
-                    'Sched_Zone': None, 'FF_Voltage': None, 'PID_Correction': None,
-                })
-
-            self.logger.log_reading(log_readings)
+        # CSV logging is handled by RunRecord (ticket 11): the Rig forwards each
+        # Snapshot to RunRecord.put_snapshot() at step 7, so no logging here.
 
     def _on_program_block_start(self, index, block):
         print(f"[Program] Starting block {index+1}: {block.block_type}")
@@ -2260,12 +2221,40 @@ class MainWindow:
                 metadata['programmer_mode'] = self._programmer_control_mode
 
             filepath = self.logger.start_logging(sensor_names, custom_name, metadata)
+
+            # Create and start RunRecord (ticket 11); wire to Rig as step-7 consumer.
+            enabled_tcs = [tc for tc in self.config.get('thermocouples', [])
+                           if tc.get('enabled', True)]
+            tc_names_list = [tc['name'] for tc in enabled_tcs]
+            gauge_names_list = [g['name'] for g in self.config.get('frg702_gauges', [])
+                                if g.get('enabled', True)]
+            t_unit = self.t_unit_var.get() if hasattr(self, 't_unit_var') else 'C'
+            p_unit = self.p_unit_var.get() if hasattr(self, 'p_unit_var') else 'mbar'
+            sample_rate = int(self.sample_rate_var.get().replace('ms', '')) if hasattr(self, 'sample_rate_var') else 1000
+            self._run_record = RunRecord(
+                logger_=self.logger,
+                tc_names=tc_names_list,
+                gauge_names=gauge_names_list,
+                t_unit=t_unit,
+                p_unit=p_unit,
+                sample_rate_ms=float(sample_rate),
+                has_ps=bool(self.ps_controller),
+            )
+            self._run_record.start()
+            if hasattr(self, 'rig') and self.rig:
+                self.rig.set_run_record(self._run_record)
+
             self.is_logging = True
             if hasattr(self, 'rig') and self.rig:
                 self.rig.set_logging_active(True)
             self.log_btn.config(text="Stop Logging")
             self.status_var.set(f"Running - Logging to {os.path.basename(filepath)}")
         else:
+            if self._run_record is not None:
+                self._run_record.stop()
+                self._run_record = None
+            if hasattr(self, 'rig') and self.rig:
+                self.rig.clear_run_record()
             self.logger.stop_logging()
             self.is_logging = False
             if hasattr(self, 'rig') and self.rig:
@@ -2902,6 +2891,11 @@ class MainWindow:
             self._program_executor.stop()
 
         if self.is_logging:
+            if self._run_record is not None:
+                self._run_record.stop()
+                self._run_record = None
+            if hasattr(self, 'rig') and self.rig:
+                self.rig.clear_run_record()
             self.logger.stop_logging()
 
         if self.ps_controller:

@@ -25,6 +25,7 @@ from t8_daq_system.control.program_block import (
 from t8_daq_system.control.program_executor import ProgramExecutor
 from t8_daq_system.gui.main_window import build_csv_header
 from t8_daq_system.data.data_logger import DataLogger
+from t8_daq_system.data.run_record import build_header as rr_build_header
 
 pytestmark = pytest.mark.integration
 
@@ -148,27 +149,17 @@ def test_characterisation_two_block_boundary_and_fix2():
 
 def test_characterisation_csv_header(tmp_path):
     """
-    Pins the CSV header (names and exact order) for a representative configuration:
-    TCs with _rawV columns, FRG-702 gauges, PS columns, Block_Index, and scheduler columns.
-    """
-    config = {
-        "thermocouples": [
-            {"name": "TC_1", "channel": 0, "type": "K", "units": "C", "enabled": True},
-            {"name": "TC_2", "channel": 2, "type": "K", "units": "C", "enabled": True},
-        ],
-        "frg702_gauges": [
-            {
-                "name": "FRG702_Chamber",
-                "sensor_code": "T1",
-                "pin": "AIN4",
-                "units": "Torr",
-                "enabled": True,
-            },
-        ],
-    }
+    Pins the CSV header (names and exact order) for a representative configuration.
 
-    expected_header = [
-        "Timestamp",
+    Re-pointed at RunRecord.build_header (ticket 11): the canonical schema now
+    includes Heater_State and Trip_Reason appended at the end.  The first N-2
+    sensor columns are identical to the ticket-01 pinned header.
+    """
+    tc_names = ["TC_1", "TC_2"]
+    gauge_names = ["FRG702_Chamber"]
+
+    # Ticket-01 pinned sensor list (all columns before the two new tail columns)
+    ticket01_sensors = [
         "TC_1",
         "TC_2",
         "FRG702_Chamber",
@@ -187,11 +178,34 @@ def test_characterisation_csv_header(tmp_path):
         "TC_2_rawV",
     ]
 
-    # 1. Pure function output
+    # RunRecord schema = ticket-01 schema + two new tail columns
+    rr_sensors = rr_build_header(tc_names, gauge_names, has_ps=True)
+    assert rr_sensors[:-2] == ticket01_sensors
+    assert rr_sensors[-2] == "Heater_State"
+    assert rr_sensors[-1] == "Trip_Reason"
+
+    expected_header = ["Timestamp"] + rr_sensors
+
+    # build_csv_header must delegate to RunRecord and return the same full header
+    config = {
+        "thermocouples": [
+            {"name": "TC_1", "channel": 0, "type": "K", "units": "C", "enabled": True},
+            {"name": "TC_2", "channel": 2, "type": "K", "units": "C", "enabled": True},
+        ],
+        "frg702_gauges": [
+            {
+                "name": "FRG702_Chamber",
+                "sensor_code": "T1",
+                "pin": "AIN4",
+                "units": "Torr",
+                "enabled": True,
+            },
+        ],
+    }
     header = build_csv_header(config, has_ps_controller=True)
     assert header == expected_header
 
-    # 2. File output through DataLogger
+    # File output through DataLogger must match as well
     sensor_names = header[1:]
     logger = DataLogger(log_folder=str(tmp_path))
     filepath = logger.start_logging(sensor_names)
