@@ -4,7 +4,7 @@
 
 **Blocked by:** 05, 08, 09
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read** `docs/adr/0002-one-rig-module-owns-hardware-single-loop.md`, `docs/adr/0003-heater-output-arbitration-and-trips.md` and `.scratch/rig-architecture/spec.md` (The Rig loop step 6; Block steps and the Program run; Testing Decisions §1–§2) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -19,11 +19,13 @@ Requirements:
 - Re-point ticket 01's per-tick voltage assertions at `ProgramRun` + block steps (same literals, same 1e-9 V tolerance) in a new test; keep the originals until 14.
 - Add to `test_architecture_rules.py`: calls named `write_voltage`, `set_output`, `set_voltage`, `output_on`, `output_off`, `emergency_shutdown` appear only under `rig/` and `hardware/` (list any remaining transitional callers explicitly with the ticket that removes them).
 
-- [ ] Three-block program (voltage ramp → temp ramp → stable hold) completes in simulated hours on the integration fixture
-- [ ] `drop_tc` on the control TC mid-ramp: no trip at 4.9 s, `control_tc_stale` at 5.1 s; off + 0 V that tick; run ended; reason in Snapshot
-- [ ] A raising block step → `program_error` trip carrying the exception text
-- [ ] Nudge during a run → run stopped, operator voltage applied; nudge with output disabled → output stays disabled
-- [ ] Ticket 01's voltage literals reproduce through `ProgramRun` to 1e-9 V
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] Three-block program (voltage ramp → temp ramp → stable hold) completes in simulated hours on the integration fixture
+- [x] `drop_tc` on the control TC mid-ramp: no trip at 4.9 s, `control_tc_stale` at 5.1 s; off + 0 V that tick; run ended; reason in Snapshot
+- [x] A raising block step → `program_error` trip carrying the exception text
+- [x] Nudge during a run → run stopped, operator voltage applied; nudge with output disabled → output stays disabled
+- [x] Ticket 01's voltage literals reproduce through `ProgramRun` to 1e-9 V
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+2026-09-22: Implemented `ProgramRun` in `t8_daq_system/control/program_run.py` — pure block-execution engine with no I/O, no clock reads, no sleep. Called by the Rig on every control step; returns `ProgramHeaterRequest`, `Trip(program_error)`, or `None`. Two-tick warm-up (`_just_started_phase` 2→1→0) replicates ProgramExecutor's timing so elapsed=0.5 at the first real step (matching ticket-01 voltage literals to 1e-9 V). Rig wired to route `LoadProgram`/`StartProgram`/`StopProgram`/`ConfirmContinue` commands into `ProgramRun`, and feeds `ProgramRun.step()` result into `HeaterOutput`. Architecture rule test added (`test_heater_calls_only_under_rig_and_hardware`) with transitional allowlist for `program_executor.py`, `safety_monitor.py`, `main_window.py`, `power_supply_panel.py`. Integration tests in `tests/integration/test_program_run_rig.py` cover all five ACs. Gate: ruff ✓, check_tests_first ✓, 375/375 pytest ✓.

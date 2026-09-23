@@ -22,10 +22,13 @@ from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 if TYPE_CHECKING:
     from t8_daq_system.control.heater_output import HeaterOutput
+    from t8_daq_system.control.program_run import ProgramRun
     from t8_daq_system.control.safety_monitor import SafetyEvaluator
 from t8_daq_system.rig.adapter import AdapterError, RawReadings, RigAdapter
 from t8_daq_system.rig.clock import Clock
 from t8_daq_system.rig.commands import (
+    ConfirmContinue,
+    LoadProgram,
     Nudge,
     ResetTrip,
     SelectAdapter,
@@ -72,6 +75,7 @@ class Rig:
         heater_output: HeaterOutput | None = None,
         safety_evaluator: SafetyEvaluator | None = None,
         program_executor: Any | None = None,
+        program_run: ProgramRun | None = None,
     ) -> None:
         self._adapter = adapter
         self._clock = clock
@@ -98,6 +102,7 @@ class Rig:
             self._safety_evaluator = SafetyEvaluator()
 
         self._program_executor = program_executor
+        self._program_run = program_run
 
         if tc_names is not None:
             self._tc_names = list(tc_names)
@@ -237,6 +242,8 @@ class Rig:
                 break
             if isinstance(cmd, (ResetTrip, SetOutput, SetVoltage, Nudge, StartProgram, StopProgram)):
                 drained_heater_cmds.append(cmd)
+            elif isinstance(cmd, (LoadProgram, ConfirmContinue)):
+                self._handle_command(cmd)
             else:
                 self._handle_command(cmd)
 
@@ -423,11 +430,34 @@ class Rig:
             if is_control_step:
                 self._last_control_step = now
 
+            # ProgramRun lifecycle: start/stop from drained commands
+            if self._program_run is not None:
+                has_stop = any(isinstance(c, StopProgram) for c in drained_heater_cmds)
+                has_start = any(isinstance(c, StartProgram) for c in drained_heater_cmds)
+                if has_stop:
+                    self._program_run.stop()
+                if has_start and not self._program_run.running:
+                    self._program_run.start(
+                        snap_for_heater, now, commanded_volts=self._commanded_volts
+                    )
+
+            # ProgramRun step: get voltage request or program_error trip
+            if is_control_step and self._program_run is not None and self._program_run.running:
+                from t8_daq_system.control.safety_monitor import Trip as _Trip
+                pr_result = self._program_run.step(snap_for_heater, now)
+                if isinstance(pr_result, _Trip):
+                    trips = list(trips) + [pr_result]
+                    new_trip_appeared = True
+                elif pr_result is not None:
+                    drained_heater_cmds = list(drained_heater_cmds) + [pr_result]
+
             requests = trips + drained_heater_cmds
             cmd = self._heater_output.resolve(requests, snap_for_heater)
 
-            # Latching trip cuts executor immediately
+            # Trip or stop_program: halt ProgramRun and legacy ProgramExecutor
             if self._heater_output.is_latched or cmd.stop_program:
+                if self._program_run is not None:
+                    self._program_run.stop()
                 if self._program_executor is not None and hasattr(self._program_executor, "stop"):
                     try:
                         self._program_executor.stop()
@@ -477,6 +507,10 @@ class Rig:
             self._output_enabled = cmd.output_enabled
             self._commanded_volts = cmd.volts
 
+            # Update program status after control step (reflects current tick)
+            if self._program_run is not None:
+                self._program_status = self._program_run.status
+
         # Determine final heater status
         if self._heater_output.is_latched:
             final_heater_state = "tripped"
@@ -497,6 +531,7 @@ class Rig:
         final_snap = replace(
             snap_for_heater,
             heater=final_heater_status,
+            program=self._program_status,
             output_enabled=self._output_enabled,
             commanded_volts=self._commanded_volts,
             labjack=self._labjack_status,
@@ -517,6 +552,16 @@ class Rig:
 
     def _handle_command(self, cmd: Any) -> None:
         """Handle a single drained command."""
+        if isinstance(cmd, LoadProgram):
+            if self._program_run is not None:
+                self._program_run.load(cmd.program)
+            return
+
+        if isinstance(cmd, ConfirmContinue):
+            if self._program_run is not None:
+                self._program_run.confirm_continue()
+            return
+
         if isinstance(cmd, SelectAdapter):
             if self._logging_active or self._program_status.running:
                 reason = "Cannot change adapter while " + (
