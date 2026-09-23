@@ -100,17 +100,19 @@ class DataLogger:
         self.file.write(f"{self.METADATA_PREFIX}{metadata_json}\n")
         self.file.flush()
 
-    def log_reading(self, sensor_readings):
+    def log_reading(self, sensor_readings, timestamp=None):
         """
         Write one row of data.
 
         Args:
             sensor_readings: dict like {'TC1': 25.3, 'P1': 45.2}
+            timestamp: optional ISO-format timestamp string; defaults to datetime.now()
         """
         if self.writer is None:
             return
 
-        timestamp = datetime.now().isoformat()
+        if timestamp is None:
+            timestamp = datetime.now().isoformat()
         row = [timestamp]
         for name in self.sensor_names:
             value = sensor_readings.get(name, '')
