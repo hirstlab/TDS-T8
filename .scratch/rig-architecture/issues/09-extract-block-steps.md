@@ -4,7 +4,7 @@
 
 **Blocked by:** 01
 
-**Status:** in-progress
+**Status:** done
 
 **Read** `.scratch/rig-architecture/spec.md` (Block steps and the Program run) and `CONTEXT.md` (Block step) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -16,9 +16,17 @@ Requirements:
 - `ProgramExecutor._execute_block` keeps its loop, sleeps, current guard, writes and logging, and delegates the per-tick math to the step. The practice-mode demo voltage and thermal lag stay in the executor for now (removed in 10/13).
 - Ticket 01's characterisation tests pass **unchanged**. If one fails, the extraction is wrong — fix the extraction; do not touch the literals (ADR 0001).
 
-- [ ] Direct tests for each step fed explicit (temp, elapsed) series, no clock
-- [ ] A test that a step raising propagates (no swallowing)
-- [ ] Ticket 01's tests pass without edits
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] Direct tests for each step fed explicit (temp, elapsed) series, no clock
+- [x] A test that a step raising propagates (no swallowing)
+- [x] Ticket 01's tests pass without edits
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+2026-09-22:
+- Extracted pure block-step functions (`step_voltage_ramp`, `step_temp_ramp`, `step_stable_hold`), `StepContext`, `StepResult`, `SchedValues`, and canonical `c_to_k` conversion into `t8_daq_system/control/block_steps.py`.
+- Step functions are pure, performing no I/O, clock reads, prints, sleeps, or exception catching.
+- Wired `ProgramExecutor._execute_block` and `_get_temp_k_from_snapshot` to delegate per-tick step math to the extracted functions.
+- Verified test-first: wrote `tests/unit/test_block_steps.py` (9 unit tests) and observed failure before implementation; verified tests fail when FIX-2 or calculations are deliberately broken.
+- Characterisation tests in `tests/integration/test_characterisation_control_and_csv.py` passed unchanged.
+- Passed full local gate: `ruff check .` clean, `python scripts/check_tests_first.py` clean, `pytest --tb=short -q` 364/364 passed.
