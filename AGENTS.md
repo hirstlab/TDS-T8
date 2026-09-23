@@ -99,6 +99,7 @@ Before editing any file, understand what it owns:
 | File | Owns |
 |------|------|
 | `temp_ramp_pid.py` | `PIDController` (anti-windup, derivative-on-measurement, slew-rate limiter) + `PIDRunLogger` (saves JSON run history to `logs/pid_runs.json`). **No GUI imports.** |
+| `heater_output.py` | `HeaterOutput` — pure arbiter of Safety > Operator > Program, holds trip latch, enforces CV-only. |
 | `program_executor.py` | `ProgramExecutor` — runs block lists (Voltage Ramp, Hold, TempRamp) in a background thread. Manages soft-start phase before PID handoff. |
 | `ramp_profile.py` | `RampProfile`, `RampStep`, `StepType`, `ControlMode` data classes. |
 | `ramp_executor.py` | Executes `RampProfile` instances (voltage mode). |
@@ -348,5 +349,6 @@ _Updated on 2026-09-21 18:05. Implement this. If something in it is wrong, say s
    - Ticket 04 done: `04-t8-adapter-reports-pressure-in-torr.md`
    - Ticket 05 done: `05-gui-reads-the-rig-not-the-hardware.md`
    - Ticket 06 done: `06-safety-evaluator-is-a-pure-function.md`
-   - Next ticket: `07-heater-output-arbitrates-and-latches.md`
+   - Ticket 07 done: `07-heater-output-arbitrates-and-latches.md`
+   - Next ticket: `08-trips-cut-the-heater-in-the-same-tick.md`
 <!-- ACTIVE-PLAN:END -->
