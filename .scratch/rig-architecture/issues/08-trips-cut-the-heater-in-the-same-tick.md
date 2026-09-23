@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 06, 07
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0003-heater-output-arbitration-and-trips.md`, `docs/adr/0004-pressure-interlock-is-a-permissive.md` and `.scratch/rig-architecture/spec.md` (The Rig loop steps 5–6; The Heater output; Testing Decisions §2) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
