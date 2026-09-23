@@ -8,11 +8,13 @@ WHY THIS EXISTS / TRANSITIONAL NOTE
 Previously, ProgramExecutor read the control TC independently via
 DataAcquisition.get_tc_kelvin_by_name() -> ThermocoupleReader.read_single(),
 which caused temperature readings to diverge from the GUI and CSV logging.
-In ticket rig-architecture-05, its temperature source becomes the latest Snapshot
-published by the Rig (converted to K at this module's conversion point).
-Its voltage writes still go through the power-supply object it holds today
-as a transitional step until ticket 10, when ProgramExecutor is replaced by
-ProgramRun and pure block steps (ADRs 0002, 0003).
+In ticket rig-architecture-05, its temperature source became the latest Snapshot
+published by the Rig (converted to K via block_steps.c_to_k).
+In ticket rig-architecture-09, its per-tick control math was extracted into pure
+block-step functions (block_steps.py).
+Its voltage writes and execution loop remain in ProgramExecutor as a transitional
+step until ticket 10, when ProgramExecutor is replaced by ProgramRun and pure
+block steps on the Rig loop (ADRs 0002, 0003).
 """
 
 import threading
@@ -22,6 +24,13 @@ import math
 import random
 from .temp_ramp_pid import PIDController, PIDRunLogger
 from .feedforward_map import FeedforwardMap  # FF-5
+from .block_steps import (
+    StepContext,
+    c_to_k,
+    step_stable_hold,
+    step_temp_ramp,
+    step_voltage_ramp,
+)
 
 class ProgramExecutor:
     def __init__(self, power_supply=None, get_temp_k_fn_provider=None,
@@ -104,9 +113,7 @@ class ProgramExecutor:
         if snap is None or not hasattr(snap, "tc_c"):
             return 293.15
         val_c = snap.tc_c.get(tc_name)
-        if val_c is None:
-            return None
-        return val_c + 273.15
+        return c_to_k(val_c)
 
     def set_power_supply(self, ps):
         with self._lock:
@@ -358,8 +365,12 @@ class ProgramExecutor:
         if block.block_type in ("temp_ramp", "stable_hold"):
             self._pid.reset_bumpless(self.current_voltage_setpoint, start_time)
 
-        # For StableHold stability tracking
-        stability_start = None
+        ctx = StepContext(
+            pid=self._pid,
+            ff_map=self._ff_map,
+            start_temp_k=start_temp_k,
+            rate_k_per_min=self._block_rate_k_per_min,
+        )
 
         # For TempRamp run history
         if block.block_type == "temp_ramp":
@@ -378,90 +389,33 @@ class ProgramExecutor:
             print(f"[PE-TICK] block={self.current_block_index}, type={block.block_type}, elapsed={elapsed:.1f}s, temp={current_temp_k:.1f}K, practice={self.practice_mode}, ps={self._ps is not None}")
 
             if block.block_type == "voltage_ramp":
-                # Linear voltage interpolation
-                if block.duration_sec > 0:
-                    progress = min(1.0, elapsed / block.duration_sec)
-                else:
-                    progress = 1.0
-                
-                v_out = block.start_voltage + (block.end_voltage - block.start_voltage) * progress
-                self.current_voltage_setpoint = v_out
-                
-                # PID monitoring if requested
-                if block.pid_active:
-                    # Just run it to update internal state/diagnostics
-                    # but we don't use the output
-                    self._pid.compute(current_temp_k, current_temp_k, now)
-                
-                if progress >= 1.0:
+                res = step_voltage_ramp(block, current_temp_k, elapsed, now, ctx)
+                self.current_voltage_setpoint = res.volts
+                if res.finished:
                     return True
 
             elif block.block_type == "stable_hold":
-                # PID control to target_temp_k
-                setpoint_k = block.target_temp_k
-                ff_v = 0.0
-                pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
-                v_out = max(0.0, min(ff_v + pid_correction, 6.0))
-                self.current_voltage_setpoint = v_out
-                # FF-3 START — update scheduler state
-                self._ff_voltage = ff_v
-                self._pid_correction = pid_correction
-                self._sched_kp = self._pid._kp
-                self._sched_ki = self._pid._ki
-                self._sched_kd = self._pid._kd
-                self._sched_zone = 0
-                # FF-3 END
-
-                # Stability check
-                if abs(current_temp_k - setpoint_k) <= block.tolerance_k:
-                    if stability_start is None:
-                        stability_start = now
-                    elif now - stability_start >= block.hold_duration_sec:
-                        return True
-                else:
-                    stability_start = None
+                res = step_stable_hold(block, current_temp_k, elapsed, now, ctx)
+                self.current_voltage_setpoint = res.volts
+                self._ff_voltage = res.sched.ff_voltage
+                self._pid_correction = res.sched.pid_correction
+                self._sched_kp = res.sched.kp
+                self._sched_ki = res.sched.ki
+                self._sched_kd = res.sched.kd
+                self._sched_zone = res.sched.zone
+                if res.finished:
+                    return True
 
             elif block.block_type == "temp_ramp":
-                # PID control with plain ramping setpoint at the requested rate.
-                current_temp_c = current_temp_k - 273.15
-                rate_k_per_sec = block.rate_k_per_min / 60.0
-                setpoint_k = start_temp_k + rate_k_per_sec * elapsed
-
-                # Cap at end_temp_k and detect completion
-                is_finished = False
-                if rate_k_per_sec > 0:
-                    setpoint_k = min(setpoint_k, block.end_temp_k)
-                    if setpoint_k >= block.end_temp_k:
-                        is_finished = True
-                else:
-                    setpoint_k = max(setpoint_k, block.end_temp_k)
-                    if setpoint_k <= block.end_temp_k:
-                        is_finished = True
-
-                # FIX-2 START — Suppress is_finished during the warmup window
-                # If the TC cache hasn't populated yet, start_temp_k falls back
-                # to 293.15 K. For a cooldown block with end_temp_k also near
-                # 293 K, is_finished would fire on tick 1 and the block would
-                # exit immediately. A 2 s guard lets the TC buffer populate
-                # without affecting real completions (ramps last minutes).
-                MIN_RAMP_ELAPSED_SEC = 2.0
-                if elapsed < MIN_RAMP_ELAPSED_SEC:
-                    is_finished = False
-                # FIX-2 END
-
-                # FF-7 START — feedforward voltage from steady-state backbone
-                ff_v = self._ff_map.voltage_for(self._block_rate_k_per_min, current_temp_c)
-                # FF-7 END
-                pid_correction = self._pid.compute(setpoint_k, current_temp_k, now)
-                v_out = max(0.0, min(ff_v + pid_correction, 6.0))
-                # FF-3 START — update scheduler state
-                self._ff_voltage = ff_v
-                self._pid_correction = pid_correction
-                self._sched_kp = self._pid._kp
-                self._sched_ki = self._pid._ki
-                self._sched_kd = self._pid._kd
-                self._sched_zone = 0
-                # FF-3 END
+                res = step_temp_ramp(block, current_temp_k, elapsed, now, ctx)
+                v_out = res.volts
+                setpoint_k = res.setpoint_k
+                self._ff_voltage = res.sched.ff_voltage
+                self._pid_correction = res.sched.pid_correction
+                self._sched_kp = res.sched.kp
+                self._sched_ki = res.sched.ki
+                self._sched_kd = res.sched.kd
+                self._sched_zone = res.sched.zone
 
                 if self.practice_mode:
                     # Override with a demo voltage that rises realistically with
@@ -498,7 +452,7 @@ class ProgramExecutor:
                 self._run_log.append((elapsed, setpoint_k, current_temp_k, self.current_voltage_setpoint))
                 _overshoot_k = max(_overshoot_k, current_temp_k - setpoint_k)
 
-                if is_finished:
+                if res.finished:
                     achieved_rate = ((current_temp_k - start_temp_k) / (elapsed / 60.0)
                                      if elapsed > 0 else 0.0)
                     self._save_run_to_history(block.rate_k_per_min, achieved_rate,
