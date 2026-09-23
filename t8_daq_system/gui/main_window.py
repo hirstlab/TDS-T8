@@ -7,7 +7,7 @@ Integrates LabJack T8 DAQ (thermocouples) and XGS-600 controller
 and ramp profile execution.
 
 Safety features:
-- 2200C temperature override triggers controlled ramp-down
+- 2200C temperature override triggers instant cutoff
 - Restart lockout until temperature drops below 2150C
 """
 
@@ -1173,7 +1173,6 @@ class MainWindow:
 
             # Set up Mock Power Supply
             self.ps_controller = MockPowerSupplyController()
-            self.safety_monitor.set_power_supply(self.ps_controller)
             if self._program_executor:
                 self._program_executor.set_power_supply(self.ps_controller)
                 self._program_executor.practice_mode = True
@@ -2079,7 +2078,6 @@ class MainWindow:
         self.safety_monitor.on_warning(self._on_safety_warning)
         self.safety_monitor.on_limit_exceeded(self._on_safety_limit_exceeded)
         self.safety_monitor.on_shutdown(self._on_safety_shutdown)
-        self.safety_monitor.on_rampdown_start(self._on_safety_rampdown_start)
 
     def _on_safety_warning(self, sensor_name: str, value: float, limit: float):
         self.root.after(0, lambda: self._update_safety_display(SafetyStatus.WARNING))
@@ -2091,45 +2089,12 @@ class MainWindow:
         self._safety_triggered = True
         self.root.after(0, self._handle_safety_shutdown)
 
-    def _on_safety_rampdown_start(self, message: str):
-        """Handle controlled ramp-down start event."""
-        self.root.after(0, lambda: self._handle_rampdown_start(message))
-
-    def _handle_rampdown_start(self, message: str):
-        """Handle ramp-down start on main thread."""
-        # Stop program executor if running
-        if self._program_executor and self._program_executor.is_running():
-            self._program_executor.stop()
-
-        # Update safety display
-        self._update_safety_display(SafetyStatus.RAMPDOWN_ACTIVE)
-
-        # Show reset button
-        self.reset_safety_btn.pack(side=tk.LEFT, padx=10)
-
-        # Show alert
-        messagebox.showerror(
-            "TEMPERATURE OVERRIDE - EMERGENCY SHUTDOWN",
-            f"{message}\n\n"
-            "A controlled power-down ramp is now active.\n"
-            "Power will be gradually reduced to zero.\n\n"
-            "You cannot restart the power supply until\n"
-            f"temperature drops below {SafetyMonitor.TEMP_RESTART_THRESHOLD:.0f}\u00b0C."
-        )
-
     def _handle_safety_shutdown(self):
         # Stop program executor if running
         if self._program_executor and self._program_executor.is_running():
             self._program_executor.stop()
 
-        # Directly shut down the power supply controller
-        if self.ps_controller:
-            try:
-                self.ps_controller.emergency_shutdown()
-            except Exception:
-                pass
-
-        # Update safety display
+        # Update safety display (power supply cutoff is handled by Rig/HeaterOutput)
         self._update_safety_display(SafetyStatus.SHUTDOWN_TRIGGERED)
 
         # Show reset button
@@ -2150,7 +2115,6 @@ class MainWindow:
             SafetyStatus.WARNING: ('#FFFF00', 'WARNING', 'orange'),
             SafetyStatus.LIMIT_EXCEEDED: ('#FF0000', 'LIMIT EXCEEDED', 'red'),
             SafetyStatus.SHUTDOWN_TRIGGERED: ('#FF0000', 'SHUTDOWN', 'red'),
-            SafetyStatus.RAMPDOWN_ACTIVE: ('#FF8800', 'RAMP-DOWN ACTIVE', 'red'),
             SafetyStatus.ERROR: ('#FF0000', 'ERROR', 'red')
         }
 
@@ -2539,7 +2503,6 @@ class MainWindow:
             if not enabled:
                 print("[DEBUG] Power supply is disabled in config. Setting ps_controller to None.")
                 self.ps_controller = None
-                self.safety_monitor.set_power_supply(None)
                 self.ps_resource_var.set("None")
                 return True
 
@@ -2571,7 +2534,6 @@ class MainWindow:
             if self.daq:
                 self.daq.update_readers(ps_controller=self.ps_controller)
 
-            self.safety_monitor.set_power_supply(self.ps_controller)
             if self._program_executor:
                 self._program_executor.set_power_supply(self.ps_controller)
                 self._program_executor.practice_mode = self._practice_mode
@@ -2886,14 +2848,7 @@ class MainWindow:
             if self._program_executor and self._program_executor.is_running():
                 self._program_executor.stop()
 
-            # 2. Stop power supply immediately
-            ps = getattr(self, 'ps_controller', None)
-            if ps is not None:
-                try:
-                    ps.set_voltage(0.0)
-                    ps.output_off()
-                except Exception:
-                    pass
+            # Power supply cutoff is handled by Rig / HeaterOutput (ADR 0003)
 
             # 3. Abort MASsoft scan via pyautogui (Escape key = Abort in MASsoft toolbar)
             try:

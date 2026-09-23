@@ -3,7 +3,7 @@ Frozen command dataclasses for the Rig module.
 
 WHY THIS EXISTS
 ---------------
-Previously, multiple threads (GUI thread, DAQ thread, executor thread, rampdown
+Previously, multiple threads (GUI thread, DAQ thread, executor thread, safety
 thread) directly invoked methods on hardware controllers and safety monitors without
 synchronization or arbitration. This led to race conditions, conflicting heater
 setpoints, and UI lockups.

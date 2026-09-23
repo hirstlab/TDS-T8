@@ -9,12 +9,11 @@ clock, and no power-supply reference. All trip thresholds and staleness limits
 come from settings.safety_limits.
 
 This module provides the pure SafetyEvaluator alongside the legacy SafetyMonitor
-(whose background thread and ramp-down logic remain transitional until ticket 08).
+(whose pure SafetyEvaluator evaluates Snapshots deterministically).
 """
 from __future__ import annotations
 
 import threading
-import time
 from typing import Dict, Optional, Callable, List, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -274,7 +273,7 @@ class SafetyEvaluator:
 
     WHY THIS EXISTS
     ---------------
-    Previously, safety evaluation was entangled with a 5-minute ramp-down thread and
+    Previously, safety evaluation was entangled with an ad-hoc safety thread and
     direct power-supply manipulation. Safety decisions are now a pure function of a
     Snapshot without threads, clocks, or callbacks, testable with 100% deterministic
     boundaries (ADR 0002, 0003, 0004).
@@ -358,7 +357,6 @@ class SafetyStatus(Enum):
     WARNING = "warning"
     LIMIT_EXCEEDED = "limit_exceeded"
     SHUTDOWN_TRIGGERED = "shutdown_triggered"
-    RAMPDOWN_ACTIVE = "rampdown_active"
     ERROR = "error"
 
 
@@ -379,8 +377,7 @@ class SafetyMonitor:
 
     Features:
     - Temperature monitoring against configurable limits
-    - 2200C emergency override with controlled ramp-down (not instant shutoff)
-    - Ramp-down over configurable duration (default 5 minutes)
+    - 2200C emergency override with instant cutoff
     - Restart lockout until temperature drops below 2150C
     - Callbacks for warning, limit exceeded, shutdown events
     """
@@ -388,7 +385,6 @@ class SafetyMonitor:
     # Temperature override settings
     TEMP_OVERRIDE_LIMIT = 2200.0      # Emergency override temperature (C)
     TEMP_RESTART_THRESHOLD = 2150.0   # Must be below this to restart (C)
-    RAMPDOWN_DURATION_SEC = 300.0     # 5 minutes controlled ramp-down
 
     def __init__(self, power_supply_controller=None, auto_shutoff: bool = True):
         self.power_supply = power_supply_controller
@@ -413,7 +409,6 @@ class SafetyMonitor:
         self._on_warning: Optional[Callable[[str, float, float], None]] = None
         self._on_limit_exceeded: Optional[Callable[[str, float, float], None]] = None
         self._on_shutdown: Optional[Callable[[SafetyEvent], None]] = None
-        self._on_rampdown_start: Optional[Callable[[str], None]] = None
 
         # Thread safety
         self._lock = threading.Lock()
@@ -424,13 +419,6 @@ class SafetyMonitor:
         # Consecutive violation tracking (for debouncing)
         self._violation_counts: Dict[str, int] = {}
         self._required_violations: int = 1
-
-        # Controlled ramp-down state
-        self._rampdown_active = False
-        self._rampdown_thread: Optional[threading.Thread] = None
-        self._rampdown_stop_event = threading.Event()
-        self._rampdown_start_voltage = 0.0
-        self._rampdown_start_time: Optional[float] = None
 
         # Temperature override restart lockout
         self._restart_locked = False
@@ -454,11 +442,6 @@ class SafetyMonitor:
     def enabled(self, value: bool) -> None:
         with self._lock:
             self._enabled = value
-
-    @property
-    def is_rampdown_active(self) -> bool:
-        with self._lock:
-            return self._rampdown_active
 
     @property
     def is_restart_locked(self) -> bool:
@@ -533,8 +516,8 @@ class SafetyMonitor:
         with self._lock:
             self._max_tc_reading = max_tc
 
-        # Check if temperature override should trigger
-        if max_tc >= self.TEMP_OVERRIDE_LIMIT and not self._rampdown_active:
+        # Check if temperature override should trigger (instant cutoff)
+        if max_tc >= self.TEMP_OVERRIDE_LIMIT:
             # Find the offending sensor
             offending_sensor = None
             for sensor_name, value in sensor_readings.items():
@@ -542,7 +525,7 @@ class SafetyMonitor:
                     offending_sensor = sensor_name
                     break
 
-            self._trigger_controlled_rampdown(
+            self._trigger_shutdown(
                 offending_sensor or "TC_unknown",
                 max_tc,
                 self.TEMP_OVERRIDE_LIMIT
@@ -597,11 +580,9 @@ class SafetyMonitor:
 
         # Update status if no violations
         with self._lock:
-            if self._rampdown_active:
-                self._status = SafetyStatus.RAMPDOWN_ACTIVE
-            elif warnings_found:
+            if warnings_found:
                 self._status = SafetyStatus.WARNING
-            elif self._status not in [SafetyStatus.SHUTDOWN_TRIGGERED, SafetyStatus.RAMPDOWN_ACTIVE]:
+            elif self._status != SafetyStatus.SHUTDOWN_TRIGGERED:
                 self._status = SafetyStatus.OK
 
         return True
@@ -637,104 +618,6 @@ class SafetyMonitor:
 
         return False
 
-    def _trigger_controlled_rampdown(self, sensor_name: str, value: float, limit: float) -> None:
-        """Trigger a controlled ramp-down of power supply output over RAMPDOWN_DURATION_SEC."""
-        event = SafetyEvent(
-            timestamp=datetime.now(),
-            event_type="temperature_override_rampdown",
-            sensor_name=sensor_name,
-            value=value,
-            limit=limit,
-            message=f"TEMPERATURE LIMIT EXCEEDED - EMERGENCY SHUTDOWN INITIATED. "
-                   f"{sensor_name}: {value:.1f}\u00b0C >= {limit:.1f}\u00b0C. "
-                   f"Controlled ramp-down over {self.RAMPDOWN_DURATION_SEC/60:.0f} minutes."
-        )
-
-        with self._lock:
-            self._last_event = event
-            self._event_history.append(event)
-            if len(self._event_history) > self._max_history:
-                self._event_history.pop(0)
-            self._status = SafetyStatus.RAMPDOWN_ACTIVE
-            self._rampdown_active = True
-            self._restart_locked = True
-
-        # Get current voltage for ramp-down starting point
-        start_voltage = 0.0
-        if self.power_supply:
-            try:
-                start_voltage = self.power_supply.get_voltage()
-            except Exception:
-                try:
-                    start_voltage = self.power_supply.get_voltage_setpoint()
-                except Exception:
-                    start_voltage = 0.0
-
-        self._rampdown_start_voltage = start_voltage
-        self._rampdown_start_time = time.time()
-        self._rampdown_stop_event.clear()
-
-        # Start ramp-down thread
-        self._rampdown_thread = threading.Thread(
-            target=self._rampdown_loop, daemon=True
-        )
-        self._rampdown_thread.start()
-
-        # Notify callbacks
-        if self._on_rampdown_start:
-            try:
-                self._on_rampdown_start(event.message)
-            except Exception:
-                pass
-
-        if self._on_shutdown:
-            try:
-                self._on_shutdown(event)
-            except Exception:
-                pass
-
-    def _rampdown_loop(self) -> None:
-        """Gradually reduce voltage to 0 over RAMPDOWN_DURATION_SEC."""
-        if not self.power_supply:
-            print("WARNING: No power supply connected for controlled ramp-down")
-            return
-
-        start_v = self._rampdown_start_voltage
-        duration = self.RAMPDOWN_DURATION_SEC
-        interval = 1.0  # Update every 1 second
-
-        print(f"SAFETY: Starting controlled ramp-down from {start_v:.3f}V over {duration:.0f}s")
-
-        while not self._rampdown_stop_event.is_set():
-            elapsed = time.time() - self._rampdown_start_time
-            if elapsed >= duration:
-                break
-
-            # Linear ramp-down
-            fraction_remaining = max(0.0, 1.0 - (elapsed / duration))
-            target_voltage = start_v * fraction_remaining
-
-            try:
-                self.power_supply.set_voltage(target_voltage)
-            except Exception as e:
-                print(f"SAFETY: Error during ramp-down: {e}")
-
-            time.sleep(interval)
-
-        # Final: set voltage to 0 and turn off output
-        try:
-            self.power_supply.set_voltage(0.0)
-            self.power_supply.set_current(0.0)
-            self.power_supply.output_off()
-        except Exception as e:
-            print(f"SAFETY: Error during final shutdown: {e}")
-
-        with self._lock:
-            self._rampdown_active = False
-            self._status = SafetyStatus.SHUTDOWN_TRIGGERED
-
-        print("SAFETY: Controlled ramp-down complete. Output off.")
-
     def _trigger_shutdown(self, sensor_name: str, value: float, limit: float) -> None:
         """Trigger emergency shutdown (immediate)."""
         event = SafetyEvent(
@@ -768,10 +651,6 @@ class SafetyMonitor:
 
     def emergency_shutdown(self) -> bool:
         """Immediately shut off the power supply output."""
-        # Stop any active ramp-down first
-        if self._rampdown_active:
-            self._rampdown_stop_event.set()
-
         if self.power_supply is None:
             print("WARNING: No power supply connected for emergency shutdown")
             return False
@@ -822,16 +701,9 @@ class SafetyMonitor:
 
     def reset(self) -> None:
         """Reset the safety monitor after a shutdown."""
-        # Stop any active ramp-down
-        if self._rampdown_active:
-            self._rampdown_stop_event.set()
-            if self._rampdown_thread and self._rampdown_thread.is_alive():
-                self._rampdown_thread.join(timeout=2.0)
-
         with self._lock:
             self._status = SafetyStatus.OK
             self._violation_counts = {k: 0 for k in self._violation_counts}
-            self._rampdown_active = False
             # Only unlock restart if temperature is below threshold
             if self._max_tc_reading < self.TEMP_RESTART_THRESHOLD:
                 self._restart_locked = False
@@ -849,13 +721,6 @@ class SafetyMonitor:
             self._event_history.clear()
             self._last_event = None
 
-    def get_rampdown_progress(self) -> float:
-        """Get the ramp-down progress as a percentage (0-100)."""
-        if not self._rampdown_active or self._rampdown_start_time is None:
-            return 0.0
-        elapsed = time.time() - self._rampdown_start_time
-        return min(100.0, (elapsed / self.RAMPDOWN_DURATION_SEC) * 100.0)
-
     # Callback registration methods
     def on_warning(self, callback: Callable[[str, float, float], None]) -> None:
         self._on_warning = callback
@@ -865,14 +730,6 @@ class SafetyMonitor:
 
     def on_shutdown(self, callback: Callable[[SafetyEvent], None]) -> None:
         self._on_shutdown = callback
-
-    def on_rampdown_start(self, callback: Callable[[str], None]) -> None:
-        """Register callback for when controlled ramp-down begins.
-
-        Args:
-            callback: Function called with warning message string
-        """
-        self._on_rampdown_start = callback
 
     def get_status_report(self) -> Dict:
         with self._lock:
@@ -887,7 +744,6 @@ class SafetyMonitor:
                 'violation_counts': self._violation_counts.copy(),
                 'last_event': self._last_event,
                 'event_count': len(self._event_history),
-                'rampdown_active': self._rampdown_active,
                 'restart_locked': self._restart_locked,
                 'max_tc_reading': self._max_tc_reading
             }
@@ -924,7 +780,7 @@ class SafetyMonitor:
         WHY THIS EXISTS
         ---------------
         Transitional bridge (Ticket 06) allowing consumers holding a SafetyMonitor
-        instance to evaluate Snapshots purely without touching the legacy ramp-down
+        instance to evaluate Snapshots purely without touching the legacy monitor
         thread or power-supply handle.
         """
         with self._lock:

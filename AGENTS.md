@@ -350,5 +350,6 @@ _Updated on 2026-09-21 18:05. Implement this. If something in it is wrong, say s
    - Ticket 05 done: `05-gui-reads-the-rig-not-the-hardware.md`
    - Ticket 06 done: `06-safety-evaluator-is-a-pure-function.md`
    - Ticket 07 done: `07-heater-output-arbitrates-and-latches.md`
-   - Next ticket: `08-trips-cut-the-heater-in-the-same-tick.md`
+   - Ticket 08 done: `08-trips-cut-the-heater-in-the-same-tick.md`
+   - Next ticket: `09-extract-block-steps.md`
 <!-- ACTIVE-PLAN:END -->

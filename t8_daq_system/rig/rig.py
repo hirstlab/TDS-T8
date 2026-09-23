@@ -3,7 +3,7 @@ Rig module — single owner of hardware communication, timing loop, and Snapshot
 
 WHY THIS EXISTS
 ---------------
-Previously, four separate threads (GUI, DAQ, executor, and safety rampdown) performed
+Previously, four separate threads (GUI, DAQ, executor, and safety thread) performed
 hardware I/O independently with no owner or synchronization. This caused UI lockups
 during reconnects, race conditions between PID voltage writes and safety shutdowns,
 and discrepancies between on-screen readings and recorded CSV logs.
@@ -14,15 +14,25 @@ drain commands -> reconnect safely -> read -> publish immutable Snapshot -> safe
 """
 from __future__ import annotations
 
+from dataclasses import replace
 import logging
 import queue
 import threading
-from typing import Any, Callable, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
+if TYPE_CHECKING:
+    from t8_daq_system.control.heater_output import HeaterOutput
+    from t8_daq_system.control.safety_monitor import SafetyEvaluator
 from t8_daq_system.rig.adapter import AdapterError, RawReadings, RigAdapter
 from t8_daq_system.rig.clock import Clock
 from t8_daq_system.rig.commands import (
+    Nudge,
+    ResetTrip,
     SelectAdapter,
+    SetOutput,
+    SetVoltage,
+    StartProgram,
+    StopProgram,
     UpdateConfig,
 )
 from t8_daq_system.rig.simulated import SimulatedRig
@@ -59,6 +69,9 @@ class Rig:
         hardware_adapter: RigAdapter | None = None,
         tc_names: Sequence[str] | None = None,
         gauge_names: Sequence[str] | None = None,
+        heater_output: HeaterOutput | None = None,
+        safety_evaluator: SafetyEvaluator | None = None,
+        program_executor: Any | None = None,
     ) -> None:
         self._adapter = adapter
         self._clock = clock
@@ -70,6 +83,22 @@ class Rig:
         self._hardware_adapter = hardware_adapter or (
             adapter if not isinstance(adapter, SimulatedRig) else None
         )
+        if heater_output is not None:
+            self._heater_output = heater_output
+        else:
+            from t8_daq_system.control.heater_output import HeaterOutput
+
+            self._heater_output = HeaterOutput()
+
+        if safety_evaluator is not None:
+            self._safety_evaluator = safety_evaluator
+        else:
+            from t8_daq_system.control.safety_monitor import SafetyEvaluator
+
+            self._safety_evaluator = SafetyEvaluator()
+
+        self._program_executor = program_executor
+
         if tc_names is not None:
             self._tc_names = list(tc_names)
         elif hasattr(adapter, "_tc_names"):
@@ -94,6 +123,7 @@ class Rig:
         self._heater_status = HeaterStatus(state="off")
         self._commanded_volts: float = 0.0
         self._output_enabled: bool = False
+        self._shutoff_unverified: bool = False
 
         self._adapter_connected: bool = adapter.is_connected()
         self._labjack_status = SourceStatus(
@@ -105,15 +135,31 @@ class Rig:
         self._start_time: float = clock.now()
         self._last_reconnect_attempt: float = -float("inf")
         self._last_valid_time: dict[str, float] = {}
+        self._last_control_step: float = -float("inf")
 
         self._trip_kind: str | None = None
         self._trip_reason: str | None = None
         self._adapter_refusal_reason: str | None = None
+        self._command_rejected_reason: str | None = None
 
         self._stop_requested: bool = False
         self._thread: threading.Thread | None = None
 
     # --- Properties & public methods ---
+
+    @property
+    def heater_output(self) -> HeaterOutput:
+        """The HeaterOutput instance arbitrating requests and latching trips."""
+        return self._heater_output
+
+    @property
+    def safety_evaluator(self) -> SafetyEvaluator:
+        """The pure SafetyEvaluator evaluating Snapshots."""
+        return self._safety_evaluator
+
+    def set_program_executor(self, executor: Any) -> None:
+        """Set the ProgramExecutor to be stopped on trip."""
+        self._program_executor = executor
 
     @property
     def tick_period_s(self) -> float:
@@ -171,8 +217,8 @@ class Rig:
         2. Reconnect if disconnected (at most every RECONNECT_INTERVAL_S)
         3. Read from adapter
         4. Calculate staleness and publish Snapshot
-        5. Safety evaluation (no-op hook in ticket 03)
-        6. Control step & Heater output write (no-op hook in ticket 03)
+        5. Safety evaluation
+        6. Control step & Heater output write
         7. Hand Snapshot to consumer queue
         """
         now = self._clock.now()
@@ -181,12 +227,18 @@ class Rig:
         # Step 1: Drain command queue
         # ---------------------------------------------------------
         self._adapter_refusal_reason = None
+        self._command_rejected_reason = None
+        drained_heater_cmds: list[Any] = []
+
         while not self._command_queue.empty():
             try:
                 cmd = self._command_queue.get_nowait()
             except queue.Empty:
                 break
-            self._handle_command(cmd)
+            if isinstance(cmd, (ResetTrip, SetOutput, SetVoltage, Nudge, StartProgram, StopProgram)):
+                drained_heater_cmds.append(cmd)
+            else:
+                self._handle_command(cmd)
 
         # ---------------------------------------------------------
         # Step 2: Reconnection
@@ -198,8 +250,6 @@ class Rig:
                 self._last_reconnect_attempt = now
 
             self._labjack_status = SourceStatus(state="lost", message="Disconnected")
-            self._trip_kind = "labjack_lost"
-            self._trip_reason = "LabJack communication lost"
 
             if (now - self._last_reconnect_attempt) >= RECONNECT_INTERVAL_S:
                 self._last_reconnect_attempt = now
@@ -218,14 +268,12 @@ class Rig:
                         self._adapter.pin_current_limit()
                         self._adapter_connected = True
                         self._labjack_status = SourceStatus(state="connected", message="OK")
-                        self._trip_kind = None
-                        self._trip_reason = None
+                        self._shutoff_unverified = False
                     except AdapterError as err:
                         logger.error("Failed to initialize adapter after connect: %s", err)
                         self._adapter_connected = False
                         self._labjack_status = SourceStatus(state="lost", message=str(err))
-                        self._trip_kind = "labjack_lost"
-                        self._trip_reason = f"Reconnection setup failed: {err}"
+                        self._shutoff_unverified = True
 
         # ---------------------------------------------------------
         # Step 3: Read
@@ -243,11 +291,9 @@ class Rig:
                 self._adapter_connected = False
                 self._last_reconnect_attempt = now
                 self._labjack_status = SourceStatus(state="lost", message=str(err))
-                self._trip_kind = "labjack_lost"
-                self._trip_reason = f"LabJack communication lost: {err}"
 
         # ---------------------------------------------------------
-        # Step 4: Staleness + publish Snapshot
+        # Step 4: Staleness + interim Snapshot
         # ---------------------------------------------------------
         source_age_s: dict[str, float] = {}
         tc_c: dict[str, float | None] = {}
@@ -285,7 +331,6 @@ class Rig:
 
             ps_volts = readings.ps_volts
             ps_amps = readings.ps_amps
-            output_enabled = readings.shutoff_readback
         else:
             for tc in self._tc_names:
                 tc_c[tc] = None
@@ -304,20 +349,24 @@ class Rig:
 
             ps_volts = 0.0
             ps_amps = 0.0
-            output_enabled = False
 
         adapter_name = "simulated" if isinstance(self._adapter, SimulatedRig) else "t8"
-        heater_state = (
-            "tripped" if self._trip_kind is not None else ("on" if output_enabled else "off")
+
+        current_trip_kind = self._heater_output.active_trip_kind
+        current_trip_reason = self._heater_output.active_trip_reason
+        current_heater_state = (
+            "tripped"
+            if self._heater_output.is_latched
+            else ("on" if self._output_enabled else "off")
         )
-        heater_status = HeaterStatus(
-            state=heater_state,
-            trip_kind=self._trip_kind,
-            trip_reason=self._trip_reason,
-            shutoff_unverified=False,
+        current_heater_status = HeaterStatus(
+            state=current_heater_state,
+            trip_kind=current_trip_kind,
+            trip_reason=current_trip_reason,
+            shutoff_unverified=self._shutoff_unverified,
         )
 
-        snap = Snapshot(
+        snap_interim = Snapshot(
             t=now,
             wall_time=self._clock.wall_time(),
             tc_c=tc_c,
@@ -327,37 +376,144 @@ class Rig:
             ps_volts=ps_volts,
             ps_amps=ps_amps,
             commanded_volts=self._commanded_volts,
-            output_enabled=output_enabled,
+            output_enabled=self._output_enabled,
             labjack=self._labjack_status,
             xgs=self._xgs_status,
-            heater=heater_status,
+            heater=current_heater_status,
             program=self._program_status,
-            permissive_ok=(self._trip_kind is None),
-            permissive_reason=self._trip_reason,
+            permissive_ok=False,
+            permissive_reason=None,
             adapter=adapter_name,
             adapter_refusal_reason=self._adapter_refusal_reason,
             command_rejected_reason=self._adapter_refusal_reason,
         )
 
-        with self._latest_lock:
-            self._latest = snap
+        # ---------------------------------------------------------
+        # Step 5: Safety evaluation (pure function)
+        # ---------------------------------------------------------
+        from t8_daq_system.control.safety_monitor import Trip
+
+        eval_result = self._safety_evaluator.evaluate(snap_interim)
+        trips = list(eval_result.trips)
+
+        if not self._adapter_connected or read_failed:
+            trips.insert(
+                0,
+                Trip(
+                    kind="labjack_lost",
+                    reason=self._labjack_status.message or "LabJack communication lost",
+                ),
+            )
+
+        # Update interim snapshot with actual permissive from evaluator
+        snap_for_heater = replace(
+            snap_interim,
+            permissive_ok=eval_result.permissive_ok,
+            permissive_reason=eval_result.permissive_reason,
+        )
 
         # ---------------------------------------------------------
-        # Steps 5 & 6: Safety evaluation & Control step
+        # Step 6: Control step & Heater output resolution
         # ---------------------------------------------------------
-        if not read_failed:
-            # Step 5: Safety evaluation (no-op hook in ticket 03, filled in ticket 08)
-            # Step 6: Control step & heater output (no-op hook in ticket 03, filled in ticket 10)
-            pass
+        is_control_step = (now - self._last_control_step) >= (CONTROL_PERIOD_S - 1e-9)
+        new_trip_appeared = bool(trips)
+        should_resolve = new_trip_appeared or bool(drained_heater_cmds) or is_control_step
+
+        if should_resolve:
+            if is_control_step:
+                self._last_control_step = now
+
+            requests = trips + drained_heater_cmds
+            cmd = self._heater_output.resolve(requests, snap_for_heater)
+
+            # Latching trip cuts executor immediately
+            if self._heater_output.is_latched or cmd.stop_program:
+                if self._program_executor is not None and hasattr(self._program_executor, "stop"):
+                    try:
+                        self._program_executor.stop()
+                    except Exception as err:
+                        logger.error("Failed to stop ProgramExecutor on trip: %s", err)
+
+            if cmd.refusal_reason:
+                self._command_rejected_reason = cmd.refusal_reason
+
+            # Adapter writes (through Rig only)
+            # Write if state changed, or if a trip appeared this tick
+            needs_write = (
+                new_trip_appeared
+                or (cmd.output_enabled != self._output_enabled)
+                or (cmd.volts != self._commanded_volts)
+            )
+
+            if needs_write and self._adapter_connected:
+                # 1. Output enable (Shut Off pin)
+                try:
+                    self._adapter.set_output(cmd.output_enabled)
+                    if not cmd.output_enabled:
+                        self._shutoff_unverified = False
+                except AdapterError as err:
+                    logger.error("Adapter set_output(%s) failed: %s", cmd.output_enabled, err)
+                    if not cmd.output_enabled:
+                        self._shutoff_unverified = True
+                    self._adapter_connected = False
+                    self._labjack_status = SourceStatus(state="lost", message=str(err))
+                    self._heater_output.resolve(
+                        [Trip(kind="labjack_lost", reason=f"Shut-off write failed: {err}")],
+                        snap_for_heater,
+                    )
+
+                # 2. Voltage (DAC0)
+                try:
+                    self._adapter.write_voltage(cmd.volts)
+                except AdapterError as err:
+                    logger.error("Adapter write_voltage(%s) failed: %s", cmd.volts, err)
+                    self._adapter_connected = False
+                    self._labjack_status = SourceStatus(state="lost", message=str(err))
+                    self._heater_output.resolve(
+                        [Trip(kind="labjack_lost", reason=f"Voltage write failed: {err}")],
+                        snap_for_heater,
+                    )
+
+            self._output_enabled = cmd.output_enabled
+            self._commanded_volts = cmd.volts
+
+        # Determine final heater status
+        if self._heater_output.is_latched:
+            final_heater_state = "tripped"
+            final_trip_kind = self._heater_output.active_trip_kind
+            final_trip_reason = self._heater_output.active_trip_reason
+        else:
+            final_heater_state = "on" if self._output_enabled else "off"
+            final_trip_kind = None
+            final_trip_reason = None
+
+        final_heater_status = HeaterStatus(
+            state=final_heater_state,
+            trip_kind=final_trip_kind,
+            trip_reason=final_trip_reason,
+            shutoff_unverified=self._shutoff_unverified,
+        )
+
+        final_snap = replace(
+            snap_for_heater,
+            heater=final_heater_status,
+            output_enabled=self._output_enabled,
+            commanded_volts=self._commanded_volts,
+            labjack=self._labjack_status,
+            command_rejected_reason=self._command_rejected_reason or self._adapter_refusal_reason,
+        )
+
+        with self._latest_lock:
+            self._latest = final_snap
 
         # ---------------------------------------------------------
         # Step 7: Hand Snapshot to consumer queue
         # ---------------------------------------------------------
         if self._snapshot_consumer is not None:
             if hasattr(self._snapshot_consumer, "put"):
-                self._snapshot_consumer.put(snap)
+                self._snapshot_consumer.put(final_snap)
             elif callable(self._snapshot_consumer):
-                self._snapshot_consumer(snap)
+                self._snapshot_consumer(final_snap)
 
     def _handle_command(self, cmd: Any) -> None:
         """Handle a single drained command."""
