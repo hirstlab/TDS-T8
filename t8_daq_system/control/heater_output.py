@@ -4,8 +4,8 @@ Heater output arbitration and latching module (Ticket 07 / ADR 0003).
 WHY THIS EXISTS
 ---------------
 Previously, five independent code paths called set_voltage with no priority:
-ProgramExecutor, the safety rampdown thread, MainWindow._handle_safety_shutdown,
-MainWindow._on_pressure_interlock, and manual nudge. Over-temperature rampdowns
+ProgramExecutor, the safety thread, MainWindow._handle_safety_shutdown,
+MainWindow._on_pressure_interlock, and manual nudge. Over-temperature shutdowns
 competed with the executor, pressure interlocks turned the supply off while the
 executor was still writing voltages, and a lost thermocouple left DAC0 at its last
 value with nothing regulating it.

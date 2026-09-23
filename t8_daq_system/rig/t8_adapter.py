@@ -3,7 +3,7 @@ T8 hardware adapter implementing RigAdapter for live LabJack, Keysight, and XGS-
 
 WHY THIS EXISTS
 ---------------
-Previously, four separate threads (GUI, DAQ, executor, and safety rampdown) performed
+Previously, four separate threads (GUI, DAQ, executor, and safety thread) performed
 hardware I/O independently with no owner or synchronization. Gauge readings were converted
 to display units (mbar or Pa) at the reader level, causing the pressure interlock to compare
 different physical pressures against the 1e-4 threshold depending on the operator's display

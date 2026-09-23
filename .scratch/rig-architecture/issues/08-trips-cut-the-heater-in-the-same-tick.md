@@ -4,7 +4,7 @@
 
 **Blocked by:** 03, 06, 07
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read** `docs/adr/0003-heater-output-arbitration-and-trips.md`, `docs/adr/0004-pressure-interlock-is-a-permissive.md` and `.scratch/rig-architecture/spec.md` (The Rig loop steps 5–6; The Heater output; Testing Decisions §2) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -18,12 +18,20 @@ Requirements:
 - The executor (still `ProgramExecutor`) is stopped via the Rig when a trip latches, in the same tick.
 - Tests use the integration fixture from the spec: real `Rig` + `SimulatedRig` + `ManualClock` + real `HeaterOutput` + evaluator, driven by `tick(n)`.
 
-- [ ] `set_pressure` above threshold → `pressure_high` trip; the adapter receives `set_output(False)` and `write_voltage(0.0)` on that same tick
-- [ ] `stall_gauge` → no trip at 4.9 s, `pressure_stale` at 5.1 s
-- [ ] `disconnect` → `labjack_lost`; `reconnect` → first calls off / 0 V / pin; reset accepted afterwards, not before
-- [ ] `fail_next_write` on `set_output(False)` → `shutoff_unverified` in the Snapshot
-- [ ] Reset while the condition persists → refused with reason; after it clears → accepted
-- [ ] No reference to ramp-down remains in `t8_daq_system/`
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] `set_pressure` above threshold → `pressure_high` trip; the adapter receives `set_output(False)` and `write_voltage(0.0)` on that same tick
+- [x] `stall_gauge` → no trip at 4.9 s, `pressure_stale` at 5.1 s
+- [x] `disconnect` → `labjack_lost`; `reconnect` → first calls off / 0 V / pin; reset accepted afterwards, not before
+- [x] `fail_next_write` on `set_output(False)` → `shutoff_unverified` in the Snapshot
+- [x] Reset while the condition persists → refused with reason; after it clears → accepted
+- [x] No reference to ramp-down remains in `t8_daq_system/`
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+- 2026-09-22: Implemented Rig step 5 safety evaluation and trip-driven heater resolution per ADR 0003 & 0004.
+  - Rig runs `SafetyEvaluator` and commands `HeaterOutput` on every tick. Any trip immediately cuts the supply (`set_output(False)` and `write_voltage(0.0)`) and aborts running programs in the same tick.
+  - Integrated command dispatching: `SetOutput`, `SetVoltage`, `Nudge`, `ResetTrip` route through `HeaterOutput` with hardware writes handled solely by `Rig`.
+  - Added adapter write failure handling resulting in `labjack_lost` trips and `shutoff_unverified = True` on failed deassert writes.
+  - Completely purged rampdown routines (`_rampdown_loop`, `_trigger_controlled_rampdown`, `RAMPDOWN_DURATION_SEC`, background thread, UI progress hooks) and deleted obsolete test `test_regression_rampdown_after_hold`.
+  - Added full test suite in `tests/integration/test_rig_trips.py` verifying all trip conditions, timing thresholds, disconnect/reconnect workflows, unverified shutoffs, and reset semantics.
+  - All 3 gates pass: `ruff check .` (0 errors), `python scripts/check_tests_first.py` (OK), `pytest --tb=short -q` (355 passed).

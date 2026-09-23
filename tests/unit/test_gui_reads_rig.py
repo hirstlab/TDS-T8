@@ -247,7 +247,6 @@ class TestGuiReadsRig:
         shutdown_cb()
 
         assert "executor_stop" in call_order
-        assert "output_off" in call_order
-        idx_stop = call_order.index("executor_stop")
-        idx_off = call_order.index("output_off")
-        assert idx_stop < idx_off, f"executor_stop must happen BEFORE output_off: {call_order}"
+        # Per Ticket 08 / ADR 0003, _on_pressure_interlock stops writing the supply directly;
+        # power supply cutoff is handled solely by Rig / HeaterOutput
+        assert "output_off" not in call_order
