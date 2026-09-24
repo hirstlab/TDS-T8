@@ -20,8 +20,6 @@ block steps on the Rig loop (ADRs 0002, 0003).
 import threading
 import time
 import datetime
-import math
-import random
 from .temp_ramp_pid import PIDController, PIDRunLogger
 from .feedforward_map import FeedforwardMap  # FF-5
 from .block_steps import (
@@ -36,7 +34,7 @@ class ProgramExecutor:
     def __init__(self, power_supply=None, get_temp_k_fn_provider=None,
                  on_block_start=None, on_block_complete=None,
                  on_program_complete=None, on_status=None,
-                 practice_mode=False, rig=None):
+                 rig=None):
         self._ps = power_supply
         self._rig = rig
         if get_temp_k_fn_provider is not None:
@@ -53,7 +51,6 @@ class ProgramExecutor:
         self._on_block_complete = on_block_complete
         self._on_program_complete = on_program_complete
         self._on_status = on_status
-        self.practice_mode = practice_mode
 
         self._current_get_temp_k = None
 
@@ -133,40 +130,19 @@ class ProgramExecutor:
             self._pid.reset()
             self._last_tick_time = time.time()
             
-            self._practice_last_tick = None
-            self._practice_temp_k = 293.15
-            if self.practice_mode:
+            # Enable output and set current ceiling before starting.
+            # DAC1 starts at 0V (= 0A) at power-on; must set current_limit
+            # explicitly or the supply cannot source any current.
+            if self._ps is not None:
                 try:
-                    fn = self._get_temp_k_provider("TC_1")
-                    temp = fn() if fn else None
-                    if temp:
-                        self._practice_temp_k = temp
-                except Exception:
-                    pass
-                # Turn on mock PS output so get_voltage/get_current return non-zero
-                if self._ps is not None:
-                    try:
-                        self._ps.output_on()
-                        max_amps = getattr(self._ps, 'current_limit',
-                                           getattr(self._ps, 'rated_max_amps', 180.0))
-                        self._ps.set_current(max_amps)
-                    except Exception:
-                        pass
-            else:
-                # Enable output and set current ceiling before starting.
-                # DAC1 starts at 0V (= 0A) at power-on; must set current_limit
-                # explicitly or the supply cannot source any current.
-                if self._ps is not None:
-                    try:
-                        self._ps.output_on()
-                        max_amps = getattr(self._ps, 'current_limit',
-                                           getattr(self._ps, 'rated_max_amps', 180.0))
-                        self._ps.set_current(max_amps)
-                        print(f"[ProgramExecutor] output_on + set_current({max_amps}A)")
-                        print(f"[ProgramExecutor] practice_mode={self.practice_mode}")
-                        print(f"[ProgramExecutor] ps is None: {self._ps is None}")
-                    except Exception as e:
-                        print(f"[ProgramExecutor] Warning: output_on/set_current failed: {e}")
+                    self._ps.output_on()
+                    max_amps = getattr(self._ps, 'current_limit',
+                                       getattr(self._ps, 'rated_max_amps', 180.0))
+                    self._ps.set_current(max_amps)
+                    print(f"[ProgramExecutor] output_on + set_current({max_amps}A)")
+                    print(f"[ProgramExecutor] ps is None: {self._ps is None}")
+                except Exception as e:
+                    print(f"[ProgramExecutor] Warning: output_on/set_current failed: {e}")
 
             self._thread = threading.Thread(target=self._run_loop, daemon=True)
             self._thread.start()
@@ -289,7 +265,7 @@ class ProgramExecutor:
                 break
         self._current_get_temp_k = self._get_temp_k_provider(first_tc)
         live_start_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
-        print(f"[ProgramExecutor] _run_loop started, {len(self._blocks)} block(s), practice={self.practice_mode}, ps={self._ps}, start_temp={live_start_k:.1f}K ({live_start_k-273.15:.1f}°C)")
+        print(f"[ProgramExecutor] _run_loop started, {len(self._blocks)} block(s), ps={self._ps}, start_temp={live_start_k:.1f}K ({live_start_k-273.15:.1f}°C)")
         try:
             while self._running and self.current_block_index < len(self._blocks):
                 block = self._blocks[self.current_block_index]
@@ -386,7 +362,7 @@ class ProgramExecutor:
 
             elapsed = now - start_time
             current_temp_k = self._current_get_temp_k() if self._current_get_temp_k else 293.15
-            print(f"[PE-TICK] block={self.current_block_index}, type={block.block_type}, elapsed={elapsed:.1f}s, temp={current_temp_k:.1f}K, practice={self.practice_mode}, ps={self._ps is not None}")
+            print(f"[PE-TICK] block={self.current_block_index}, type={block.block_type}, elapsed={elapsed:.1f}s, temp={current_temp_k:.1f}K, ps={self._ps is not None}")
 
             if block.block_type == "voltage_ramp":
                 res = step_voltage_ramp(block, current_temp_k, elapsed, now, ctx)
@@ -417,20 +393,6 @@ class ProgramExecutor:
                 self._sched_kd = res.sched.kd
                 self._sched_zone = res.sched.zone
 
-                if self.practice_mode:
-                    # Override with a demo voltage that rises realistically with
-                    # the setpoint fraction so plots look like a working PID.
-                    # Real PID with feedforward: V ≈ proportional to temp fraction
-                    # plus a small boost when lagging (error > 0), plus noise.
-                    _temp_range = max(block.end_temp_k - start_temp_k, 1.0)
-                    _sp_fraction = max(0.0, (setpoint_k - start_temp_k) / _temp_range)
-                    _error_k = setpoint_k - current_temp_k
-                    _demo_v = _sp_fraction * 5.5 + _error_k * 0.008
-                    _demo_v += random.uniform(-0.03, 0.03)
-                    # Exponential smoothing: blend toward target (alpha=0.25 → smooth ramp)
-                    _prev_v = self.current_voltage_setpoint
-                    v_out = max(0.0, min(0.25 * _demo_v + 0.75 * _prev_v, 6.0))
-
                 # Cold-tungsten current protection: if current exceeds 180A,
                 # hold voltage steady (don't increase) until current drops.
                 # Tungsten resistance is ~17x lower cold than at operating temp;
@@ -438,7 +400,7 @@ class ProgramExecutor:
                 # excessive current before the Keysight's CC mode kicks in.
                 # Compare v_out to the PREVIOUS tick's setpoint (before reassignment).
                 cold_start_limit = 180.0  # amps
-                if not self.practice_mode and self._ps is not None:
+                if self._ps is not None:
                     try:
                         measured_current = self._ps.get_current() or 0.0
                         if measured_current > cold_start_limit and v_out > self.current_voltage_setpoint:
@@ -459,39 +421,17 @@ class ProgramExecutor:
                                               _overshoot_k, elapsed)
                     return True
 
-            # Practice-mode thermal simulation: drive _practice_temp_k toward
-            # the current setpoint with a first-order lag (tau=20s).
-            if self.practice_mode and block.block_type == "temp_ramp":
-                _now_sim = time.time()
-                if self._practice_last_tick is not None:
-                    _dt_sim = _now_sim - self._practice_last_tick
-                    _tau = 20.0  # thermal time constant in seconds
-                    self._practice_temp_k += (setpoint_k - self._practice_temp_k) * (
-                        1.0 - math.exp(-_dt_sim / _tau)
-                    )
-                    self._practice_temp_k += random.uniform(-0.5, 0.5)
-                self._practice_last_tick = _now_sim
-
             # Apply to hardware
-            print(f"[PE-APP] v_setpoint={self.current_voltage_setpoint:.4f}V, practice={self.practice_mode}, ps_present={self._ps is not None}")
+            print(f"[PE-APP] v_setpoint={self.current_voltage_setpoint:.4f}V, ps_present={self._ps is not None}")
             if self._ps:
                 try:
-                    if not self.practice_mode:
-                        # Guard against interlock (Task 3c)
-                        if hasattr(self._ps, 'interlock_active') and self._ps.interlock_active:
-                            print("[ProgramExecutor] Interlock active - skipping DAC write")
-                        else:
-                            print(f"[PE-WRITE] set_voltage({self.current_voltage_setpoint:.4f}V) on ps={self._ps}")
-                            result = self._ps.set_voltage(self.current_voltage_setpoint)
-                            print(f"[PE-WRITE] set_voltage result={result}")
+                    # Guard against interlock (Task 3c)
+                    if hasattr(self._ps, 'interlock_active') and self._ps.interlock_active:
+                        print("[ProgramExecutor] Interlock active - skipping DAC write")
                     else:
-                        # In practice mode: update mock PS so plots show simulated voltage
-                        # and current rising proportionally (tungsten R ~ 0.033 Ω → I = V/R)
-                        self._ps.set_voltage(self.current_voltage_setpoint)
-                        _sim_current = self.current_voltage_setpoint * 30.0  # ~180A at 6V
-                        max_amps = getattr(self._ps, 'current_limit',
-                                           getattr(self._ps, 'rated_max_amps', 180.0))
-                        self._ps.set_current(min(_sim_current, max_amps))
+                        print(f"[PE-WRITE] set_voltage({self.current_voltage_setpoint:.4f}V) on ps={self._ps}")
+                        result = self._ps.set_voltage(self.current_voltage_setpoint)
+                        print(f"[PE-WRITE] set_voltage result={result}")
                 except Exception as e:
                     print(f"[ProgramExecutor] DAC write error: {e}")
 

@@ -165,7 +165,7 @@ Names are user-configurable in `AppSettings`. Never hardcode `"TC_1"` unless you
 Files in `control/` and `utils/` must **never import from `gui/`** or `tkinter`. They are pure logic/data modules. This is required for testability — the full test suite mocks all hardware but runs `control/` code directly.
 
 ### 5.5 Practice mode
-`DataAcquisition.__init__` accepts `practice_mode=True`. In practice mode, `read_all_sensors()` returns simulated data. All hardware objects (`tc_reader`, `frg702_reader`, `ps_controller`) can be `None` in practice mode — all callers must guard for `None`.
+Practice mode is the `Rig` module running the `SimulatedRig` adapter (ADR 0005). No `practice_mode` branch exists in control, acquisition, safety, or record code. Commanded voltage drives a physical tungsten thermal simulation (`TungstenSim`), producing realistic temperature and current. The real PID, feedforward, safety evaluator, Heater output and Run record run identically in practice as on live hardware.
 
 ### 5.6 AppSettings
 User settings persist across launches. When adding a new user-configurable field:

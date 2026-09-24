@@ -40,7 +40,6 @@ def _run_blocks(blocks, temp_fn):
         ps,
         lambda tc_name: temp_fn,
         on_program_complete=completed.set,
-        practice_mode=False,
     )
     with fast_executor_time(0.5):
         ex.load_program(blocks)
