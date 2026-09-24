@@ -37,15 +37,29 @@ from t8_daq_system.gui.pinout_display import PinoutDisplay
 from t8_daq_system.control.program_executor import ProgramExecutor
 from t8_daq_system.gui.program_panel import ProgramPanel
 from t8_daq_system.settings.app_settings import AppSettings
+import logging
 from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
 from t8_daq_system.rig.rig import Rig
 from t8_daq_system.rig.t8_adapter import T8Adapter
 from t8_daq_system.rig.simulated import SimulatedRig
 from t8_daq_system.rig.clock import RealClock
-from t8_daq_system.rig.commands import SelectAdapter, UpdateConfig
+from t8_daq_system.rig.commands import (
+    ConfirmContinue,
+    LoadProgram,
+    Nudge,
+    ResetTrip,
+    SelectAdapter,
+    SetOutput,
+    SetVoltage,
+    StartProgram,
+    StopProgram,
+    UpdateConfig,
+)
 from t8_daq_system.rig.snapshot import Snapshot
 from t8_daq_system.settings.safety_limits import PRESSURE_INTERLOCK_TORR
 from t8_daq_system.data.run_record import RunRecord, build_header as _rr_build_header
+
+_log = logging.getLogger(__name__)
 
 
 class GUIProfiler:
@@ -861,6 +875,42 @@ class MainWindow:
         control_frame.pack(fill=tk.X, padx=10, pady=5)
         self.control_frame = control_frame  # Save reference for banner placement
 
+        # ── Trip Banner (non-modal) ──────────────────────────────────────────
+        self._trip_banner_frame = tk.Frame(self.root, bg="#cc0000", bd=2, relief=tk.RIDGE)
+        self._trip_label = tk.Label(
+            self._trip_banner_frame,
+            text="",
+            font=("Arial", 10, "bold"),
+            fg="white",
+            bg="#cc0000",
+            anchor="w",
+            justify=tk.LEFT,
+        )
+        self._trip_label.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=8, pady=4)
+
+        self._trip_refusal_label = tk.Label(
+            self._trip_banner_frame,
+            text="",
+            font=("Arial", 9, "italic"),
+            fg="#ffdddd",
+            bg="#cc0000",
+            anchor="w",
+        )
+        self._trip_refusal_label.pack(side=tk.LEFT, padx=8, pady=4)
+
+        self._trip_reset_btn = ttk.Button(
+            self._trip_banner_frame,
+            text="Reset",
+            command=self._on_reset_trip,
+        )
+        self._trip_reset_btn.pack(side=tk.RIGHT, padx=8, pady=4)
+        self._trip_banner_visible = False
+        self._trip_text = ""
+        self._trip_refusal_text = ""
+        self._practice_btn_state = "normal"
+        self._last_aborted_trip_kind = None
+        self._qms_status_var = tk.StringVar(value="Waiting: temperature not yet stable")
+
         # Logging button (acquisition is always auto-started on connection)
         self.log_btn = ttk.Button(
             control_frame, text="Start Logging", command=self._on_toggle_logging,
@@ -1142,6 +1192,8 @@ class MainWindow:
 
     def _toggle_practice_mode(self):
         """Toggle practice mode on/off."""
+        if hasattr(self, 'practice_btn') and str(self.practice_btn.cget('state')) == 'disabled':
+            return
         self._practice_mode = not self._practice_mode
         if hasattr(self, 'rig') and self.rig is not None:
             self.rig.submit(SelectAdapter(practice=self._practice_mode))
@@ -1362,6 +1414,10 @@ class MainWindow:
         Checks the pressure interlock, updates DataBuffer, latest readings,
         and logs CSV rows if logging is active.
         """
+        # Marshal snapshot rendering to the Tk thread
+        if hasattr(self, 'root') and hasattr(self.root, 'after'):
+            self.root.after(0, lambda s=snap: self.render_snapshot(s))
+
         # Pressure interlock check in canonical Torr
         if snap.pressure_torr:
             for k, pval in snap.pressure_torr.items():
@@ -1402,6 +1458,111 @@ class MainWindow:
 
         # CSV logging is handled by RunRecord (ticket 11): the Rig forwards each
         # Snapshot to RunRecord.put_snapshot() at step 7, so no logging here.
+
+    def is_trip_banner_visible(self) -> bool:
+        """Return True if the trip banner is currently shown."""
+        return getattr(self, '_trip_banner_visible', False)
+
+    def get_trip_text(self) -> str:
+        """Return the text currently shown in the trip label."""
+        return getattr(self, '_trip_text', "")
+
+    def get_trip_refusal_text(self) -> str:
+        """Return the text currently shown in the trip refusal label."""
+        return getattr(self, '_trip_refusal_text', "")
+
+    def get_practice_button_state(self) -> str:
+        """Return the current state ('normal' or 'disabled') of the practice mode button."""
+        return getattr(self, '_practice_btn_state', "normal")
+
+    def _on_reset_trip(self):
+        """Submit ResetTrip command to the Rig."""
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(ResetTrip())
+
+    def _abort_massoft(self):
+        """Abort MASsoft scan on Tk thread; failure is reported and not swallowed."""
+        try:
+            import pyautogui
+            windows = pyautogui.getWindowsWithTitle("MASsoft")
+            if windows:
+                windows[0].activate()
+                time.sleep(0.1)
+                pyautogui.press('escape')
+        except Exception as err:
+            _log.error("MASsoft abort failed: %s", err)
+            messagebox.showerror(
+                "MASsoft Abort Failed",
+                f"Could not abort MASsoft scan:\n{err}"
+            )
+            self.status_var.set(f"MASsoft abort failed: {err}")
+
+    def render_snapshot(self, snap: Snapshot):
+        """
+        Render a Snapshot on the GUI (runs on the Tk thread).
+        Updates the non-modal trip banner, practice button state, and aborts QMS on trip.
+        """
+        if snap is None:
+            return
+
+        self._latest_rendered_snapshot = snap
+
+        # 1. Trip banner handling
+        is_tripped = (snap.heater is not None and snap.heater.state == "tripped")
+        if is_tripped:
+            kind = snap.heater.trip_kind or "unknown"
+            reason = snap.heater.trip_reason or ""
+            if snap.heater.shutoff_unverified:
+                banner_bg = "#880000"
+                text = f"CRITICAL: shutoff_unverified! Trip: {kind} \u2014 {reason}"
+            else:
+                banner_bg = "#cc0000"
+                text = f"TRIP: {kind} \u2014 {reason}"
+
+            self._trip_text = text
+            refusal = snap.command_rejected_reason or snap.adapter_refusal_reason or ""
+            self._trip_refusal_text = refusal
+
+            if hasattr(self, '_trip_banner_frame'):
+                self._trip_banner_frame.config(bg=banner_bg)
+            if hasattr(self, '_trip_label'):
+                self._trip_label.config(text=text, bg=banner_bg)
+            if hasattr(self, '_trip_refusal_label'):
+                self._trip_refusal_label.config(text=refusal, bg=banner_bg)
+
+            if not getattr(self, '_trip_banner_visible', False):
+                if hasattr(self, '_trip_banner_frame'):
+                    if hasattr(self, 'panel_container') and hasattr(self.panel_container, 'winfo_exists') and self.panel_container.winfo_exists():
+                        self._trip_banner_frame.pack(before=self.panel_container, fill=tk.X, padx=10, pady=2)
+                    else:
+                        self._trip_banner_frame.pack(fill=tk.X, padx=10, pady=2)
+                self._trip_banner_visible = True
+
+            # On pressure_high or pressure_stale trip, run MASsoft abort if not yet aborted for this trip
+            if kind in ("pressure_high", "pressure_stale"):
+                if getattr(self, '_last_aborted_trip_kind', None) != kind:
+                    self._last_aborted_trip_kind = kind
+                    self._abort_massoft()
+        else:
+            self._last_aborted_trip_kind = None
+            self._trip_text = ""
+            self._trip_refusal_text = ""
+            if getattr(self, '_trip_banner_visible', False):
+                if hasattr(self, '_trip_banner_frame'):
+                    self._trip_banner_frame.pack_forget()
+                self._trip_banner_visible = False
+                if hasattr(self, '_trip_label'):
+                    self._trip_label.config(text="")
+                if hasattr(self, '_trip_refusal_label'):
+                    self._trip_refusal_label.config(text="")
+
+        # 2. Practice toggle enabled/disabled
+        prog_running = bool(snap.program and snap.program.running)
+        logging_active = getattr(self, 'is_logging', False) or getattr(self, '_run_record', None) is not None
+        target_state = 'disabled' if (prog_running or logging_active) else 'normal'
+        self._practice_btn_state = target_state
+        if hasattr(self, 'practice_btn'):
+            self.practice_btn.config(state=target_state)
 
     def _on_program_block_start(self, index, block):
         print(f"[Program] Starting block {index+1}: {block.block_type}")
@@ -1478,7 +1639,9 @@ class MainWindow:
         if frame is not None and frame.winfo_exists():
             frame.pack_forget()
 
-        # 4. Release executor
+        # 4. Release executor / submit ConfirmContinue to Rig
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(ConfirmContinue())
         if self._program_executor:
             self._program_executor.confirm_and_continue()
 
@@ -1601,38 +1764,39 @@ class MainWindow:
             messagebox.showwarning("No Program", "Please add at least one block.")
             return
 
-        # Guard: must have a power supply controller
-        if not self.ps_controller:
-            messagebox.showerror("No Power Supply", "Power supply is not connected.")
-            return
-
         # Guard: safety monitor must not be in shutdown state
         if self.safety_monitor.is_restart_locked:
             messagebox.showwarning("Safety Lockout", "Safety lockout is active.")
             return
 
-        # Load and start
-        self._program_executor.load_program(blocks)
-        self._program_executor.practice_mode = self._practice_mode
+        # Submit LoadProgram and StartProgram commands to Rig
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(LoadProgram(program=blocks))
+            self.rig.submit(StartProgram())
 
-        # Apply all PID settings from AppSettings before every run
-        self._program_executor._pid.update_gains(
-            self._app_settings.pid_kp,
-            self._app_settings.pid_ki,
-            self._app_settings.pid_kd,
-            output_max=self._app_settings.pid_output_max,
-            windup_limit=self._app_settings.pid_windup_limit,
-        )
+        # Load and start executor if present
+        if self._program_executor:
+            self._program_executor.load_program(blocks)
+            self._program_executor.practice_mode = self._practice_mode
 
-        if self._program_executor.start():
-            self._programmer_ramp_running = True
-            self.run_ramp_btn.config(text="Stop Program")
-            print("[Program] Started execution")
-        else:
-            messagebox.showerror("Error", "Failed to start program executor.")
+            # Apply all PID settings from AppSettings before every run
+            self._program_executor._pid.update_gains(
+                self._app_settings.pid_kp,
+                self._app_settings.pid_ki,
+                self._app_settings.pid_kd,
+                output_max=self._app_settings.pid_output_max,
+                windup_limit=self._app_settings.pid_windup_limit,
+            )
+            self._program_executor.start()
+
+        self._programmer_ramp_running = True
+        self.run_ramp_btn.config(text="Stop Program")
+        print("[Program] Started execution")
 
     def _stop_programmer_ramp_safe(self):
         """Stop the running program safely."""
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(StopProgram())
         if self._program_executor and self._program_executor.is_running():
             self._program_executor.stop()
         self._programmer_ramp_running = False
@@ -1647,23 +1811,17 @@ class MainWindow:
 
     def _cut_power_output(self):
         """
-        Immediately command 0 V / 0 A to the power supply and stop any
+        Immediately command 0 V to the power supply and stop any
         running executor. Safe to call at any time.
         """
-        import time as _time
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(StopProgram())
+            self.rig.submit(SetOutput(False))
+            self.rig.submit(SetVoltage(0.0))
 
         # Stop program executor if running
         if self._program_executor and self._program_executor.is_running():
             self._program_executor.stop()
-
-        # Command 0 V then 0 A to hardware
-        if hasattr(self, 'ps_controller') and self.ps_controller is not None:
-            try:
-                self.ps_controller.set_voltage(0.0)
-                _time.sleep(0.3)
-                self.ps_controller.set_current(0.0)
-            except Exception as e:
-                messagebox.showwarning("Cut Power Warning", f"Error commanding 0V/0A: {e}")
 
         # Reset run state
         self._programmer_ramp_running = False
@@ -2103,6 +2261,8 @@ class MainWindow:
             self._safety_triggered = False
             self._update_safety_display(SafetyStatus.OK)
             self.reset_safety_btn.pack_forget()
+            if hasattr(self, 'rig') and self.rig is not None:
+                self.rig.submit(ResetTrip())
 
     def _on_ps_output_change(self, is_on: bool):
         if is_on:
@@ -2112,9 +2272,8 @@ class MainWindow:
                 self.status_var.set("Running")
 
     def _on_ramp_start(self):
-        # Enable power supply output if not already on
-        if self.ps_controller and not self.ps_controller.is_output_on():
-            self.ps_controller.output_on()
+        """Deprecated: heater output is commanded via Rig / HeaterOutput (ADR 0003)."""
+        pass
 
     def _on_ramp_stop(self):
         pass
@@ -2284,6 +2443,8 @@ class MainWindow:
 
         gui_profiler.start("rig_snapshot_render")
         snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
+        if snap is not None:
+            self.render_snapshot(snap)
         lj_connected = (snap.labjack.state == "connected") if snap else False
         xgs_connected = (snap.xgs.state == "connected") if snap else False
         ps_connected = lj_connected and (self.ps_controller is not None or (snap is not None and snap.adapter == "simulated"))
@@ -2630,67 +2791,33 @@ class MainWindow:
                 self._nudge_frame = None
 
     def _nudge_voltage(self, direction):
-        """Apply one nudge step in the given direction (+1 or -1)."""
-        try:
-            step = float(self._nudge_step_var.get())
-        except ValueError:
-            return
-        if step <= 0:
-            return
+        """Apply one nudge step by submitting a Nudge command to the Rig."""
+        dir_str = (
+            "up"
+            if (isinstance(direction, (int, float)) and direction > 0)
+            or str(direction).lower() in ("up", "+", "+1")
+            else "down"
+        )
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(Nudge(direction=dir_str))
 
-        ps = getattr(self, 'ps_controller', None)
-        print(f"[Nudge] direction={direction:+d}, ps={ps}, practice={self._practice_mode}")
-        if ps is None:
-            print("[Nudge] ps_controller is None — cannot nudge")
-            return
+    def set_voltage(self, volts: float):
+        """Submit SetVoltage command to the Rig."""
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(SetVoltage(volts=float(volts)))
 
-        current_v = ps.get_voltage_setpoint() or 0.0
-        target_v  = current_v + direction * step
-        target_v  = round(target_v, 4)  # Prevent float drift (DAC resolution is ~0.001V)
-
-        # Safe mode clamp: 1 V ceiling
-        safe_mode = getattr(self, '_programmer_safe_mode', False)
-        if safe_mode:
-            target_v = min(target_v, 1.0)
-
-        target_v = max(0.0, min(target_v, 6.0))
-
-        # FIX-3 START — Refuse to nudge when output is off
-        # The previous implementation called output_on() + set_current(current_limit),
-        # where current_limit defaults to 10.0 A. On a hot filament needing ~78 A,
-        # this would trigger the N5700 "SO" shutoff. If the output is off during
-        # an active run, something external killed it (safety trip, FIO1 external
-        # cause, etc.) and the user must investigate before re-enabling manually.
-        if hasattr(ps, 'is_output_on') and not ps.is_output_on():
-            print("[Nudge] REFUSED — PSU output is off. Not auto-enabling.")
-            try:
-                from tkinter import messagebox
-                messagebox.showwarning(
-                    "Nudge Refused",
-                    "Power supply output is OFF.\n\n"
-                    "The nudge will not re-enable the output automatically, "
-                    "because doing so with the stored current limit can trigger "
-                    "a Keysight 'SO' shutoff on a hot filament.\n\n"
-                    "If you want to resume, investigate why the output went off, "
-                    "then re-enable it deliberately from the main controls."
-                )
-            except Exception:
-                pass
-            return
-        # FIX-3 END
-
-        result = ps.set_voltage(target_v)
-        print(f"[Nudge] set_voltage({target_v:.3f}) → {result}")
-        self._nudge_v_var.set(f"{target_v:.3f} V")
+    def set_output(self, enabled: bool):
+        """Submit SetOutput command to the Rig."""
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(SetOutput(enabled=bool(enabled)))
 
     def _start_nudge_readback_loop(self):
-        """Poll the power supply setpoint every 500ms and update the nudge display."""
+        """Poll latest snapshot commanded voltage and update the nudge display."""
         def _poll():
-            ps = getattr(self, 'ps_controller', None)
-            if ps is not None:
-                v = ps.get_voltage_setpoint()
-                if v is not None:
-                    self._nudge_v_var.set(f"{v:.3f} V")
+            if hasattr(self, 'rig') and self.rig is not None:
+                snap = self.rig.latest()
+                if snap is not None:
+                    self._nudge_v_var.set(f"{snap.commanded_volts:.3f} V")
             
             # Continue polling if nudge frame exists and is visible, 
             # or if the programmer is active.
@@ -2732,60 +2859,66 @@ class MainWindow:
         if not self._qms_gate_active:
             return
 
+        snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
         hold_stable = False
-        pressure_ok = False
-        pressure_val = None
-        if hasattr(self, 'daq') and self.daq is not None:
-            try:
-                readings = self.daq.get_last_readings() if hasattr(self.daq, 'get_last_readings') else {}
-                for k, v in readings.items():
-                    if ('FRG' in k or 'pressure' in k.lower()) and v is not None and isinstance(v, float):
-                        pressure_val = v
-                        break
-            except Exception:
-                pass
+        if snap and snap.program:
+            hold_stable = snap.program.waiting_for_confirmation
 
-        if pressure_val is not None:
-            pressure_ok = pressure_val < 1e-4
-        else:
-            pressure_ok = False
+        pressure_ok = snap.permissive_ok if snap is not None else False
+        permissive_reason = (
+            snap.permissive_reason
+            if (snap and snap.permissive_reason)
+            else "no pressure reading"
+        )
 
         ready = hold_stable and pressure_ok
+
+        if ready:
+            txt = "\u2705 Ready \u2014 temperature stable, pressure OK"
+            fg = 'green'
+        else:
+            reasons = []
+            if not hold_stable:
+                reasons.append("temperature not stable")
+            if not pressure_ok:
+                reasons.append(permissive_reason)
+            txt = "Waiting: " + ", ".join(reasons)
+            fg = 'gray'
+
+        self._qms_status_text = txt
 
         btn = getattr(self, '_qms_ramp_btn', None)
         status_var = getattr(self, '_qms_status_var', None)
 
-        if btn and status_var:
-            if ready:
-                btn.config(state='normal')
-                status_var.set("\u2705 Ready \u2014 temperature stable, pressure OK")
-                for widget in self._qms_btn_frame.winfo_children():
-                    if isinstance(widget, ttk.Label):
-                        widget.config(foreground='green')
-            else:
-                btn.config(state='disabled')
-                reasons = []
-                if not hold_stable:
-                    reasons.append("temperature not stable")
-                if not pressure_ok:
-                    if pressure_val is None:
-                        reasons.append("no pressure reading")
-                    else:
-                        reasons.append(f"pressure too high ({pressure_val:.1e} Torr)")
-                status_var.set("Waiting: " + ", ".join(reasons))
-                for widget in self._qms_btn_frame.winfo_children():
-                    if isinstance(widget, ttk.Label):
-                        widget.config(foreground='gray')
+        if btn:
+            btn.config(state='normal' if ready else 'disabled')
+        if status_var:
+            status_var.set(txt)
+        if getattr(self, '_qms_btn_frame', None):
+            for widget in self._qms_btn_frame.winfo_children():
+                if isinstance(widget, ttk.Label):
+                    widget.config(foreground=fg)
 
         self._qms_btn_gate_job = self.root.after(2000, self._poll_qms_gate)
+
+    def get_qms_status_text(self) -> str:
+        """Return the current QMS gate status text."""
+        return getattr(self, '_qms_status_text', "")
 
     def _on_qms_ramp_start(self):
         """
         Simultaneous QMS + Ramp launch.
-        1. Trigger MASsoft Start via pyautogui keyboard shortcut.
-        2. Write RAMP_START event to DataLogger CSV.
-        3. Signal the program executor to continue (if pausing between blocks).
+        1. Guard: Check pressure permissive (ADR 0004).
+        2. Trigger MASsoft Start via pyautogui keyboard shortcut.
+        3. Write RAMP_START event to DataLogger CSV.
+        4. Signal the program executor to continue (if pausing between blocks).
         """
+        snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
+        if snap is not None and not snap.permissive_ok:
+            reason = snap.permissive_reason or "Pressure interlock permissive not satisfied"
+            messagebox.showwarning("QMS Start Refused", f"Cannot start QMS: {reason}")
+            return
+
         import datetime
         try:
             import pyautogui
@@ -2793,7 +2926,6 @@ class MainWindow:
 
             windows = pyautogui.getWindowsWithTitle("MASsoft")
             if not windows:
-                from tkinter import messagebox
                 messagebox.showwarning(
                     "MASsoft Not Found",
                     "Could not find a window titled 'MASsoft'. "
@@ -2806,12 +2938,10 @@ class MainWindow:
             pyautogui.press('f5')
 
         except ImportError:
-            from tkinter import messagebox
             messagebox.showerror("Missing Library",
                                  "pyautogui is not installed. Run: pip install pyautogui")
             return
         except Exception as e:
-            from tkinter import messagebox
             messagebox.showerror("QMS Start Error", f"Could not start MASsoft:\n{e}")
             return
 
@@ -2820,6 +2950,12 @@ class MainWindow:
         if hasattr(self, 'logger') and self.logger is not None:
             if self.logger.is_logging():
                 self.logger.log_event("RAMP_START", ts)
+
+        # Release confirmation / continue
+        if hasattr(self, 'rig') and self.rig is not None:
+            self.rig.submit(ConfirmContinue())
+        if self._program_executor:
+            self._program_executor.confirm_and_continue()
 
         # Disable the button immediately — one-shot launch
         if hasattr(self, '_qms_ramp_btn'):
@@ -2840,15 +2976,7 @@ class MainWindow:
             # Power supply cutoff is handled by Rig / HeaterOutput (ADR 0003)
 
             # 3. Abort MASsoft scan via pyautogui (Escape key = Abort in MASsoft toolbar)
-            try:
-                import pyautogui
-                windows = pyautogui.getWindowsWithTitle("MASsoft")
-                if windows:
-                    windows[0].activate()
-                    time.sleep(0.1)
-                    pyautogui.press('escape')
-            except Exception:
-                pass
+            self._abort_massoft()
 
             # 4. Log the event
             if hasattr(self, 'logger') and self.logger and self.logger.is_logging():
@@ -2875,6 +3003,8 @@ class MainWindow:
         self.is_running = False
 
         if hasattr(self, 'rig') and self.rig:
+            self.rig.submit(SetOutput(False))
+            self.rig.submit(SetVoltage(0.0))
             self.rig.stop()
 
         # Stop camera feed and timelapse before destroying widgets
@@ -2897,13 +3027,6 @@ class MainWindow:
             if hasattr(self, 'rig') and self.rig:
                 self.rig.clear_run_record()
             self.logger.stop_logging()
-
-        if self.ps_controller:
-            try:
-                self.ps_controller.output_off()
-                self.ps_controller.set_voltage(0)
-            except Exception:
-                pass
 
         if self.xgs600:
             self.xgs600.disconnect()

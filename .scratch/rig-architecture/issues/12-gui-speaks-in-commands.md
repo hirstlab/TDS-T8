@@ -4,7 +4,7 @@
 
 **Blocked by:** 10, 11
 
-**Status:** ready-for-agent
+**Status:** done
 
 **Read** `docs/adr/0003-heater-output-arbitration-and-trips.md`, `docs/adr/0004-pressure-interlock-is-a-permissive.md`, `docs/adr/0005-practice-mode-is-a-rig-adapter.md` and `.scratch/rig-architecture/spec.md` (GUI) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -17,11 +17,22 @@ Requirements:
 - Practice toggle submits `SelectAdapter`; it is disabled while `snapshot.program.running` or logging is active.
 - Tests drive the GUI with Snapshots and assert on what is rendered and which commands were submitted — not on private attributes.
 
-- [ ] Rendering a tripped Snapshot shows the banner with kind and reason; a cleared one hides it
-- [ ] Reset button submits `ResetTrip`; a refused-reset Snapshot shows the refusal
-- [ ] QMS start is refused with the permissive reason when `permissive_ok` is false
-- [ ] Nudge/start/stop/confirm submit the matching commands and make no PS call
-- [ ] Practice toggle disabled while running or logging
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] Rendering a tripped Snapshot shows the banner with kind and reason; a cleared one hides it
+- [x] Reset button submits `ResetTrip`; a refused-reset Snapshot shows the refusal
+- [x] QMS start is refused with the permissive reason when `permissive_ok` is false
+- [x] Nudge/start/stop/confirm submit the matching commands and make no PS call
+- [x] Practice toggle disabled while running or logging
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+- 2026-09-24: Ticket 12 implemented and verified.
+  - Added non-modal trip banner (`_trip_banner_frame`, `_trip_label`, `_trip_refusal_label`, `_trip_reset_btn`) rendered directly from `Snapshot.heater`.
+  - Trips remain visible until snapshot shows latch cleared (`heater.state != "tripped"`).
+  - Refused reset displays command rejection reason from snapshot. `shutoff_unverified` displays prominent critical warning.
+  - Reset button submits `ResetTrip` command to Rig.
+  - All operator controls (`_nudge_voltage`, `_start_programmer_ramp`, `_stop_programmer_ramp_safe`, `_cut_power_output`, `_on_qms_confirmation_click`, `_on_ramp_start`, `set_voltage`, `set_output`) submit typed commands to Rig without direct power supply calls.
+  - QMS start is gated strictly by `snapshot.permissive_ok` (with `permissive_reason` surfaced on rejection); removed raw pressure polling from `_poll_qms_gate`.
+  - On `pressure_high` or `pressure_stale` trip, MASsoft abort is marshalled to Tk thread after verifying heater cutoff; abort failures surface error rather than being swallowed.
+  - Practice toggle submits `SelectAdapter` and is disabled while program is running or logging is active.
+  - All 19 unit tests in `tests/unit/test_gui_speaks_in_commands.py` pass; full test suite (418 passed) and all local CI gates pass.
