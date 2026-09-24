@@ -4,7 +4,7 @@
 
 **Blocked by:** 10, 11
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `docs/adr/0003-heater-output-arbitration-and-trips.md`, `docs/adr/0004-pressure-interlock-is-a-permissive.md`, `docs/adr/0005-practice-mode-is-a-rig-adapter.md` and `.scratch/rig-architecture/spec.md` (GUI) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
