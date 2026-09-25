@@ -4,7 +4,7 @@
 
 **Blocked by:** 14
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `AGENTS.md` §12.1 item 6 and `docs/adr/0003-heater-output-arbitration-and-trips.md` **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
