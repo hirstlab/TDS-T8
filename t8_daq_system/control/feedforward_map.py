@@ -519,8 +519,10 @@ def _parse_csv(path: str):
                         volt_col = 'PS_Voltage_Setpoint'
                     if volt_col is None and 'PS_Voltage' in sensors:
                         volt_col = 'PS_Voltage'
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Malformed #META: header; falls back to CSV data header below
+                    logger.debug("Failed to parse #META: header (%s); falling back to data header", e)
+
                 continue
 
             if line.startswith('#'):

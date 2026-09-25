@@ -32,6 +32,8 @@ from t8_daq_system.gui.program_panel import ProgramPanel
 from t8_daq_system.settings.app_settings import AppSettings
 import logging
 from t8_daq_system.gui.programmer_preview_plot import ProgrammerPreviewPlot
+
+
 from t8_daq_system.rig.rig import Rig
 from t8_daq_system.rig.t8_adapter import T8Adapter
 from t8_daq_system.rig.simulated import SimulatedRig
@@ -563,9 +565,12 @@ class MainWindow:
                     self._pinout_window.lift()
                     self._pinout_window.focus_set()
                     return
-            except tk.TclError:
-                pass
+            except tk.TclError as e:
+                # Existing pinout window was closed or destroyed; recreate below
+                _log.debug("Existing pinout window check failed (%s); recreating", e)
+
         self._pinout_window = PinoutDisplay(self.root, self.config, self._app_settings)
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # Camera button helpers
@@ -2741,8 +2746,11 @@ class MainWindow:
         if self._camera_panel is not None:
             try:
                 self._camera_panel.stop_camera()
-            except Exception:
-                pass
+            except Exception as e:
+                # Best-effort camera cleanup during window close; safe to continue closing
+                _log.warning("Error stopping camera on window close: %s", e)
+
+
 
         if self.is_logging:
             if self._run_record is not None:

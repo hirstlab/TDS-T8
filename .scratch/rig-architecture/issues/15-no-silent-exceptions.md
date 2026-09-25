@@ -4,7 +4,7 @@
 
 **Blocked by:** 14
 
-**Status:** in-progress
+**Status:** done
 
 **Read** `AGENTS.md` §12.1 item 6 and `docs/adr/0003-heater-output-arbitration-and-trips.md` **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
@@ -16,8 +16,19 @@ Requirements:
 - If a decision would change safety behaviour beyond what ADR 0003 already says, escalate instead of choosing.
 - Add to `test_architecture_rules.py`: no `except` handler under `t8_daq_system/` whose body is only `pass` or `...`.
 
-- [ ] The rule test passes with zero exceptions
-- [ ] Each changed handler on a heater/safety/shutdown path has a test that the failure is now visible (Snapshot, event row, or raised)
-- [ ] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
+- [x] The rule test passes with zero exceptions
+- [x] Each changed handler on a heater/safety/shutdown path has a test that the failure is now visible (Snapshot, event row, or raised)
+- [x] `ruff check .`, `python scripts/check_tests_first.py` and `pytest --tb=short -q` all pass
 
 ## Comments
+
+### Completed 2026-09-25:
+- Removed all 46 silent `except: pass` handlers across `t8_daq_system/`.
+- Propagated errors (`raise`) on safety callback failure paths in `SafetyMonitor` (`_on_warning`, `_on_limit_exceeded`, `_on_shutdown`).
+- Propagated `ValueError` on malformed threshold parsing in `HeaterOutput._extract_limit_from_reason`.
+- Added descriptive logging and safe comments on best-effort / cosmetic UI, hardware disconnect, and metadata parsing paths.
+- Added AST rule test `test_no_silent_exceptions` to `test_architecture_rules.py`.
+- Added tests in `test_safety_monitor.py` verifying callback exceptions propagate, and in `test_heater_output.py` verifying malformed trip reason parsing raises `ValueError`.
+- Added test in `test_power_supply.py` verifying `KeysightAnalogController` handles missing EF registers gracefully.
+- All gates pass: `ruff check .`, `python scripts/check_tests_first.py`, and `pytest --tb=short -q` (425 tests pass).
+

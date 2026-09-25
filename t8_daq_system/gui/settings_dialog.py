@@ -7,8 +7,12 @@ interface with sensor configuration, hardware settings, and axis scales.
 All fields map directly to AppSettings attributes.
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
+
+logger = logging.getLogger(__name__)
+
 
 
 class SettingsDialog(tk.Toplevel):
@@ -493,8 +497,10 @@ class SettingsDialog(tk.Toplevel):
         def _on_mousewheel(event):
             try:
                 canvas.yview_scroll(int(-1 * (event.delta / 120)), 'units')
-            except tk.TclError:
-                pass
+            except tk.TclError as e:
+                # Canvas widget destroyed; ignore mousewheel scroll event
+                logger.debug("Canvas scroll on destroyed widget ignored (%s)", e)
+
         canvas.bind_all('<MouseWheel>', _on_mousewheel)
         canvas.bind('<Destroy>', lambda e: canvas.unbind_all('<MouseWheel>'))
 
@@ -941,8 +947,9 @@ class SettingsDialog(tk.Toplevel):
             if i < len(self._tc_color_btns):
                 try:
                     self._tc_color_btns[i].configure(bg=color)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Cosmetic preview button color update fallback
+                    logger.debug("Could not set TC color button bg %r (%s)", color, e)
             svar.set(style)
             wvar.set(width)
 
@@ -959,8 +966,9 @@ class SettingsDialog(tk.Toplevel):
             if i < len(self._press_color_btns):
                 try:
                     self._press_color_btns[i].configure(bg=color)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Cosmetic preview button color update fallback
+                    logger.debug("Could not set pressure color button bg %r (%s)", color, e)
             svar.set(style)
             wvar.set(width)
 
@@ -970,8 +978,9 @@ class SettingsDialog(tk.Toplevel):
         try:
             self._ps_v_color_btn.configure(bg=s.ps_voltage_color)
             self._ps_i_color_btn.configure(bg=s.ps_current_color)
-        except Exception:
-            pass
+        except Exception as e:
+            # Cosmetic preview button color update fallback
+            logger.debug("Could not set PS color button bg (%s)", e)
         self._ps_v_style_var.set(s.ps_voltage_line_style)
         self._ps_i_style_var.set(s.ps_current_line_style)
         self._ps_v_width_var.set(s.ps_voltage_line_width)
@@ -981,8 +990,10 @@ class SettingsDialog(tk.Toplevel):
         self._pp_v_color_var = s.pp_voltage_color
         try:
             self._pp_v_color_btn.configure(bg=s.pp_voltage_color)
-        except Exception:
-            pass
+        except Exception as e:
+            # Cosmetic preview button color update fallback
+            logger.debug("Could not set PP color button bg (%s)", e)
+
         self._pp_v_style_var.set(s.pp_voltage_line_style)
         self._pp_v_width_var.set(s.pp_voltage_line_width)
 
