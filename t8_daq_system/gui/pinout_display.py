@@ -8,8 +8,12 @@ expects, and to confirm that unit conversions are working correctly by showing
 both the raw thermocouple voltage and the resulting temperature side-by-side.
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk
+
+logger = logging.getLogger(__name__)
+
 
 
 # Human-readable thermocouple type descriptions
@@ -797,8 +801,10 @@ class PinoutDisplay(tk.Toplevel):
     def _schedule_refresh(self):
         try:
             self.after(self.REFRESH_MS, self._do_refresh)
-        except tk.TclError:
-            pass  # Window was destroyed
+        except tk.TclError as e:
+            # Pinout window was destroyed; stop refresh loop
+            logger.debug("Pinout window destroyed; refresh loop stopped (%s)", e)
+
 
     def _do_refresh(self):
         """Update live value labels and status dots from stored readings."""

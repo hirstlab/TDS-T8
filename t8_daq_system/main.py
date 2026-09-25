@@ -40,8 +40,10 @@ if getattr(sys, 'frozen', False):
     import matplotlib.font_manager as fm
     try:
         fm._load_fontmanager = lambda try_read_cache=True: fm.FontManager()
-    except Exception:
-        pass
+    except Exception as e:
+        # Best-effort startup speedup in frozen mode; safe to continue if matplotlib internals changed
+        print(f"[FROZEN MODE] FontManager override skipped: {e}")
+
 
     print("[FROZEN MODE] Matplotlib optimization complete")
 

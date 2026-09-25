@@ -3,9 +3,13 @@ sensor_panel.py
 PURPOSE: Display current sensor values as text/numbers
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk
+
+logger = logging.getLogger(__name__)
 # Gauge status constants (mirrors status values reported by gauge readers)
+
 STATUS_VALID = 'valid'
 STATUS_UNDERRANGE = 'underrange'
 STATUS_OVERRANGE = 'overrange'
@@ -43,8 +47,10 @@ class SensorPanel:
             style.configure('Dimmed.TLabelframe', background='#cccccc')
             style.configure('Dimmed.TLabelframe.Label', background='#cccccc',
                             foreground='gray')
-        except Exception:
-            pass
+        except Exception as e:
+            # Cosmetic style definition fallback on headless/unsupported ttk themes
+            logger.debug("Could not configure Dimmed.TLabelframe style (%s)", e)
+
 
         i = 0  # grid index counter
 
@@ -223,8 +229,9 @@ class SensorPanel:
         if visible:
             try:
                 frame.configure(style='TLabelframe')
-            except Exception:
-                pass
+            except Exception as e:
+                # Cosmetic style update fallback if theme lacks TLabelframe
+                logger.debug("Could not configure TLabelframe on %s (%s)", name, e)
             if name in self.displays:
                 self.displays[name].configure(foreground='black')
             if name in self.status_labels:
@@ -232,12 +239,14 @@ class SensorPanel:
         else:
             try:
                 frame.configure(style='Dimmed.TLabelframe')
-            except Exception:
-                pass
+            except Exception as e:
+                # Cosmetic style update fallback if theme lacks Dimmed.TLabelframe
+                logger.debug("Could not configure Dimmed.TLabelframe on %s (%s)", name, e)
             if name in self.displays:
                 self.displays[name].configure(foreground='#aaaaaa')
             if name in self.status_labels:
                 self.status_labels[name].configure(foreground='#aaaaaa')
+
 
     # ──────────────────────────────────────────────────────────────────────
     # Value updates

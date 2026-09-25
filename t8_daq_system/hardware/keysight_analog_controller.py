@@ -17,7 +17,10 @@ WIRING:
     J1 Pin 15 -> FIO1         (Shut Off - pull HIGH to kill output)
 """
 
+import logging
 from labjack import ljm
+
+logger = logging.getLogger(__name__)
 
 
 class KeysightAnalogController:
@@ -176,8 +179,10 @@ class KeysightAnalogController:
             # which causes FIO0 to read back 1 even after writing 0.
             try:
                 ljm.eWriteName(self.handle, f"{self._DIO_ANALOG_EN}_EF_ENABLE", 0)
-            except Exception:
-                pass  # Not all T8 firmware versions expose this; safe to ignore
+            except Exception as e:
+                # EF registers are not supported on all T8 firmware; pin is explicitly set as output below
+                logger.debug("Could not clear EF on %s (%s); proceeding with pin output configuration", self._DIO_ANALOG_EN, e)
+
 
             # FIO pins default to input on the T8 — must set direction to output first
             self._set_pin_output(self._DIO_ANALOG_EN)

@@ -5,9 +5,13 @@ Includes metadata header for settings, units, and notes.
 """
 
 import csv
-import os
 import json
+import logging
+import os
 from datetime import datetime
+
+logger = logging.getLogger(__name__)
+
 
 
 class DataLogger:
@@ -215,9 +219,11 @@ class DataLogger:
                     if 'tc_types' in metadata and isinstance(metadata['tc_types'], str):
                         metadata['tc_types'] = [s.strip() for s in metadata['tc_types'].split(',')] if metadata['tc_types'] else []
                         
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    # Corrupted JSON metadata header line; data rows are still read
+                    logger.warning("Corrupted metadata header in %s (%s); continuing data read", filepath, e)
                 continue
+
 
             # Check for end time comment
             if line.startswith('#END_TIME:'):
@@ -311,9 +317,11 @@ class DataLogger:
                         'sample_rate_ms': metadata.get('sample_rate_ms'),
                         'notes': metadata.get('notes')
                     }
-                except json.JSONDecodeError:
-                    pass
+                except json.JSONDecodeError as e:
+                    # Corrupted JSON metadata header line; remaining file info still extracted
+                    logger.warning("Corrupted metadata header in %s (%s); continuing file info", filepath, e)
                 continue
+
 
             # Check for end time comment
             if line.startswith('#END_TIME:'):

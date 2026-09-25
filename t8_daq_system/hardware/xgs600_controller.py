@@ -5,8 +5,12 @@ KEY CONCEPT: Send text commands over serial, receive digital pressure readings d
 Protocol: #{address}{command}{data}\r -> >{data}\r or ?FF for error
 """
 
+import logging
 import serial
 import time
+
+logger = logging.getLogger(__name__)
+
 
 # XGS-600 manual: max 10 queries/second before responsiveness degrades.
 # Enforce 200ms minimum between successive commands.
@@ -113,10 +117,14 @@ class XGS600Controller:
                 print(f"XGS-600: Closing serial port {self.port}.")
             try:
                 self._serial.close()
-            except serial.SerialException:
-                pass
+            except serial.SerialException as e:
+                # Serial port may already be closed or disconnected by OS; state is cleared below
+                if self.debug:
+                    print(f"XGS-600: Error closing serial port {self.port}: {e}")
+                logger.debug("Error closing serial port %s (%s)", self.port, e)
         self._serial = None
         self._connected = False
+
 
     def send_command(self, command):
         """

@@ -308,6 +308,34 @@ class TestSafetyMonitorCallbacks(unittest.TestCase):
         self.assertIsInstance(event, SafetyEvent)
         self.assertEqual(event.sensor_name, "TC1")
 
+    def test_on_warning_callback_failure_propagates(self):
+        """Test that an exception in on_warning callback propagates instead of being swallowed."""
+        def bad_cb(*args):
+            raise RuntimeError("Warning callback crashed")
+        self.monitor.on_warning(bad_cb)
+        readings = {"TC1": 185.0}
+        with self.assertRaises(RuntimeError):
+            self.monitor.check_limits(readings)
+
+    def test_on_limit_exceeded_callback_failure_propagates(self):
+        """Test that an exception in on_limit_exceeded callback propagates."""
+        def bad_cb(*args):
+            raise RuntimeError("Limit exceeded callback crashed")
+        self.monitor.on_limit_exceeded(bad_cb)
+        readings = {"TC1": 210.0}
+        with self.assertRaises(RuntimeError):
+            self.monitor.check_limits(readings)
+
+    def test_on_shutdown_callback_failure_propagates(self):
+        """Test that an exception in on_shutdown callback propagates."""
+        def bad_cb(*args):
+            raise RuntimeError("Shutdown callback crashed")
+        self.monitor.on_shutdown(bad_cb)
+        readings = {"TC1": 210.0}
+        with self.assertRaises(RuntimeError):
+            self.monitor.check_limits(readings)
+
+
 
 class TestSafetyMonitorEventHistory(unittest.TestCase):
     """Tests for event history."""

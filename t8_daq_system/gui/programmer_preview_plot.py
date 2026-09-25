@@ -8,10 +8,14 @@ scale and the voltage segments are drawn there.
 A small animated dot tracks the programme's current position while it runs.
 """
 
+import logging
 import tkinter as tk
 import numpy as np
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+
+logger = logging.getLogger(__name__)
+
 
 # FF-10 — zone bar colours (index = zone number 0-based)
 _ZONE_COLORS = ['#aed6f1', '#a9dfbf', '#f9e79f', '#f1948a']
@@ -525,13 +529,16 @@ class ProgrammerPreviewPlot:
         if voltage_width:
             try:
                 self._v_width = int(voltage_width)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                # Invalid preview line width; keep current width
+                logger.debug("Invalid voltage_width %r (%s); keeping default", voltage_width, e)
         if current_width:
             try:
                 self._a_width = int(current_width)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                # Invalid preview line width; keep current width
+                logger.debug("Invalid current_width %r (%s); keeping default", current_width, e)
+
         self._ax_v.set_ylabel('Voltage (V)', color=self._v_color)
         self._ax_v.tick_params(axis='y', labelcolor=self._v_color)
         self._ax_a.set_ylabel('Current (A)', color=self._a_color, rotation=270, labelpad=15)
@@ -556,9 +563,11 @@ class ProgrammerPreviewPlot:
         if self._ax_zone is not None:
             try:
                 self.fig.delaxes(self._ax_zone)
-            except Exception:
-                pass
+            except Exception as e:
+                # Zone axes was already removed or detached; safe to clear reference
+                logger.debug("Failed to delaxes zone axes (%s)", e)
             self._ax_zone = None
+
     # FF-10 END
 
     @staticmethod

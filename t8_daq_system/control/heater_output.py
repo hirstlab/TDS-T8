@@ -473,6 +473,10 @@ class HeaterOutput:
             try:
                 parts = reason.split(">=")[1].strip().split()
                 return float(parts[0])
-            except (IndexError, ValueError):
-                pass
+            except (IndexError, ValueError) as err:
+                logger.error("Failed to parse threshold limit from trip reason %r: %s", reason, err)
+                raise ValueError(
+                    f"Malformed trip reason cannot be parsed for reset verification: {reason!r}"
+                ) from err
         return None
+

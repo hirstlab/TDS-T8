@@ -3,10 +3,14 @@ program_panel.py
 PURPOSE: Unified Program Mode UI for the block-based editor.
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ..control.program_block import VoltageRampBlock, StableHoldBlock, TempRampBlock
 from ..control.program_run import compute_preview
+
+logger = logging.getLogger(__name__)
+
 
 
 def _k_to_disp(temp_k, unit):
@@ -416,8 +420,10 @@ class ProgramPanel:
                 live_t = self._get_tc_temp_k(tc_name)
                 if live_t and live_t > 0:
                     start_t = live_t
-            except Exception:
-                pass
+            except Exception as e:
+                # Live TC temp unavailable for preview calculation; use default start temp
+                logger.debug("Failed to read live TC temperature for preview (%s)", e)
+
 
         times, voltages, temps_k, boundaries = compute_preview(
             self._blocks, start_temp_k=start_t, start_voltage=start_v
@@ -486,8 +492,10 @@ class ProgramPanel:
             try:
                 ff_warns = self._ff_map.validate_program(self._blocks)
                 warn_parts.extend(ff_warns)
-            except Exception:
-                pass
+            except Exception as e:
+                # Advisory feedforward feasibility check failed; safe to omit warning banner
+                logger.warning("Feedforward program validation failed: %s", e)
+
         self._warn_label.config(
             text="  \u26a0 " + warn_parts[0] if warn_parts else ""
         )

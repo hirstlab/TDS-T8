@@ -16,6 +16,7 @@ A horizontal scrollbar below the canvas lets the user browse history:
 Dragging back to 1.0 resumes live mode automatically.
 """
 
+import logging
 import tkinter as tk
 from tkinter import ttk
 from matplotlib.figure import Figure
@@ -23,6 +24,9 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from datetime import datetime, timedelta
 import matplotlib.dates as mdates
 from t8_daq_system.utils.helpers import convert_pressure, convert_temperature
+
+logger = logging.getLogger(__name__)
+
 
 
 class LivePlot:
@@ -524,13 +528,16 @@ class LivePlot:
         if ps_voltage_width:
             try:
                 self._ps_voltage_width = int(ps_voltage_width)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                # Invalid line width setting; keep existing width
+                logger.debug("Invalid ps_voltage_width %r (%s); keeping current", ps_voltage_width, e)
         if ps_current_width:
             try:
                 self._ps_current_width = int(ps_current_width)
-            except (ValueError, TypeError):
-                pass
+            except (ValueError, TypeError) as e:
+                # Invalid line width setting; keep existing width
+                logger.debug("Invalid ps_current_width %r (%s); keeping current", ps_current_width, e)
+
         # Cache pp_voltage overlay appearance settings
         if pp_voltage_color:
             self._pp_voltage_color = pp_voltage_color
@@ -610,8 +617,10 @@ class LivePlot:
                     self._overlay_line_v.set_linestyle(self._linestyle_str_to_mpl(ov_style))
                 if ov_width:
                     self._overlay_line_v.set_linewidth(int(ov_width))
-            except Exception:
-                pass
+            except Exception as e:
+                # Cosmetic overlay style update fallback
+                logger.debug("Failed to apply overlay styling (%s)", e)
+
 
     def set_programmer_overlay(self, times, voltages, currents=None):
         """Set dotted voltage preview overlay on the ps plot. Pass empty lists to clear.
@@ -968,9 +977,11 @@ class LivePlot:
             if self._overlay_line_v is not None:
                 try:
                     self._overlay_line_v.remove()
-                except (ValueError, NotImplementedError):
-                    pass
+                except (ValueError, NotImplementedError) as e:
+                    # Overlay line was already removed from figure; safe to reset reference
+                    logger.debug("Overlay line removal ignored (%s)", e)
                 self._overlay_line_v = None
+
 
             if self._overlay_start_time is not None:
                 # Convert relative seconds to absolute datetime for x-axis alignment

@@ -13,6 +13,7 @@ This module provides the pure SafetyEvaluator alongside the legacy SafetyMonitor
 """
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Dict, Optional, Callable, List, Mapping
 from dataclasses import dataclass, field
@@ -25,6 +26,9 @@ from t8_daq_system.settings.safety_limits import (
     STALE_ALLOWANCE_S,
     TEMP_OVERRIDE_C,
 )
+
+logger = logging.getLogger(__name__)
+
 
 
 @dataclass(frozen=True)
@@ -594,8 +598,9 @@ class SafetyMonitor:
         if self._on_warning:
             try:
                 self._on_warning(sensor_name, value, limit)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Safety warning callback failed: %s", e)
+                raise
 
     def _handle_violation(self, sensor_name: str, value: float, limit: float) -> bool:
         with self._lock:
@@ -612,8 +617,9 @@ class SafetyMonitor:
             if self._on_limit_exceeded:
                 try:
                     self._on_limit_exceeded(sensor_name, value, limit)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Safety limit exceeded callback failed: %s", e)
+                    raise
             return True
 
         return False
@@ -643,8 +649,9 @@ class SafetyMonitor:
             if hasattr(self, '_on_shutdown') and self._on_shutdown:
                 try:
                     self._on_shutdown(event)
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.error("Safety shutdown callback failed: %s", e)
+                    raise
 
         with self._lock:
             self._status = SafetyStatus.SHUTDOWN_TRIGGERED
@@ -652,8 +659,10 @@ class SafetyMonitor:
         if self._on_shutdown and not self.auto_shutoff:
             try:
                 self._on_shutdown(event)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.error("Safety shutdown callback failed: %s", e)
+                raise
+
 
     def emergency_shutdown(self) -> bool:
         """Immediately transition to shutdown triggered state."""

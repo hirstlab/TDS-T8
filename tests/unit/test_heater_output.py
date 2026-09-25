@@ -580,3 +580,12 @@ class TestHeaterOutputProperties:
 
                 output_enabled_prev = cmd.output_enabled
                 commanded_volts_prev = cmd.volts
+
+
+def test_extract_limit_from_malformed_reason_raises():
+    """Malformed trip reason with '>=' must raise ValueError instead of silently returning None."""
+    with pytest.raises(ValueError):
+        HeaterOutput._extract_limit_from_reason("TC_1 exceeded limit >= not_a_number °C")
+    with pytest.raises(ValueError):
+        HeaterOutput._extract_limit_from_reason("TC_1 exceeded limit >=")
+

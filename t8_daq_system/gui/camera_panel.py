@@ -15,13 +15,18 @@ Threading model:
   - Export thread: stitches frames into MP4 via imageio-ffmpeg after stop.
 """
 
-import tkinter as tk
-from tkinter import ttk, messagebox
-import threading
-import queue
+import importlib.util
+import logging
 import os
+import queue
+import threading
 import time
+import tkinter as tk
 from datetime import datetime
+from tkinter import messagebox, ttk
+
+logger = logging.getLogger(__name__)
+
 
 # ── Optional dependency guards ────────────────────────────────────────────────
 try:
@@ -36,12 +41,11 @@ try:
 except ImportError:
     PIL_AVAILABLE = False
 
-import importlib.util
-
 IMAGEIO_AVAILABLE = bool(
     importlib.util.find_spec("imageio") is not None
     and importlib.util.find_spec("imageio_ffmpeg") is not None
 )
+
 
 
 class CameraPanel(ttk.Frame):
@@ -106,8 +110,10 @@ class CameraPanel(ttk.Frame):
             s.map(cls._STYLE_SNAP_ERR,
                   background=[('active', '#b71c1c'), ('pressed', '#7f0000')],
                   foreground=[('active', 'white'), ('pressed', 'white')])
-        except Exception:
-            pass  # Non-clam theme — degrade gracefully
+        except Exception as e:
+            # Non-clam theme — degrade gracefully without custom active/pressed button map
+            logger.debug("Could not configure clam theme styles (%s)", e)
+
 
     def __init__(self, parent, log_folder: str, camera_index: int = 0,
                  show_internal_buttons: bool = True, timelapse_interval_s: int = 60,
@@ -230,16 +236,18 @@ class CameraPanel(ttk.Frame):
         if self._ext_snapshot_btn is not None:
             try:
                 self._ext_snapshot_btn.config(state=str(self._snapshot_btn['state']))
-            except Exception:
-                pass
+            except Exception as e:
+                # External snapshot button may be destroyed; sync skipped
+                logger.debug("Failed to sync external snapshot button state (%s)", e)
         if self._ext_timelapse_btn is not None:
             try:
                 self._ext_timelapse_btn.config(
                     state=str(self._timelapse_btn['state']),
                     text=str(self._timelapse_btn['text'])
                 )
-            except Exception:
-                pass
+            except Exception as e:
+                # External timelapse button may be destroyed; sync skipped
+                logger.debug("Failed to sync external timelapse button state (%s)", e)
 
     def _apply_snapshot_btn_style(self, style_name: str):
         """Apply a ttk style to the snapshot button and any registered external counterpart."""
@@ -247,8 +255,9 @@ class CameraPanel(ttk.Frame):
             if btn is not None:
                 try:
                     btn.config(style=style_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Button style update fallback if widget is destroyed
+                    logger.debug("Failed to set snapshot button style (%s)", e)
 
     def _apply_timelapse_btn_style(self, style_name: str):
         """Apply a ttk style to the timelapse button and any registered external counterpart."""
@@ -256,8 +265,9 @@ class CameraPanel(ttk.Frame):
             if btn is not None:
                 try:
                     btn.config(style=style_name)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Button style update fallback if widget is destroyed
+                    logger.debug("Failed to set timelapse button style (%s)", e)
 
     def _start_recording_pulse(self):
         """Start the pulsing red colour animation on the timelapse button."""
@@ -278,10 +288,12 @@ class CameraPanel(ttk.Frame):
         if self._pulse_after_id is not None:
             try:
                 self.after_cancel(self._pulse_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                # Pulse timer already expired or cancelled
+                logger.debug("Failed to cancel pulse timer (%s)", e)
             self._pulse_after_id = None
         self._apply_timelapse_btn_style('TButton')
+
 
     def show_overlay_buttons(self):
         """Place snapshot/timelapse buttons as a compact overlay on the panel's bottom-left."""
@@ -321,9 +333,11 @@ class CameraPanel(ttk.Frame):
         if self._feed_after_id is not None:
             try:
                 self.after_cancel(self._feed_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                # Feed timer already expired or cancelled
+                logger.debug("Failed to cancel feed timer (%s)", e)
             self._feed_after_id = None
+
         self._stop_capture.set()
         if self._capture_thread is not None:
             self._capture_thread.join(timeout=2.0)
@@ -416,8 +430,10 @@ class CameraPanel(ttk.Frame):
             # Drop old frame if queue is full — display always gets freshest frame
             try:
                 self._frame_queue.put_nowait(frame)
-            except queue.Full:
-                pass
+            except queue.Full as e:
+                # Frame queue full; drop current frame so display thread catches up
+                logger.debug("Camera frame queue full; frame dropped (%s)", e)
+
 
     def _schedule_feed_update(self):
         if self._camera_active:
@@ -474,8 +490,9 @@ class CameraPanel(ttk.Frame):
         if self._ext_snapshot_btn is not None:
             try:
                 self._ext_snapshot_btn.config(state='disabled')
-            except Exception:
-                pass
+            except Exception as e:
+                # External snapshot button may be destroyed; state update skipped
+                logger.debug("Failed to disable external snapshot button (%s)", e)
 
         ts   = datetime.now().strftime('%Y%m%d_%H%M%S')
         path = os.path.join(self._photos_folder, f'snapshot_{ts}.jpg')
@@ -500,8 +517,10 @@ class CameraPanel(ttk.Frame):
         if self._ext_snapshot_btn is not None:
             try:
                 self._ext_snapshot_btn.config(state='normal')
-            except Exception:
-                pass
+            except Exception as e:
+                # External snapshot button may be destroyed; state update skipped
+                logger.debug("Failed to enable external snapshot button (%s)", e)
+
 
     def _set_status(self, text: str, color: str = 'gray'):
         self._status_lbl.config(text=text, foreground=color)
@@ -681,8 +700,9 @@ class CameraPanel(ttk.Frame):
             if self._feed_after_id is not None:
                 try:
                     self.after_cancel(self._feed_after_id)
-                except Exception:
-                    pass
+                except Exception as e:
+                    # Feed timer already cancelled or widget destroyed
+                    logger.debug("Failed to cancel feed timer on camera stop (%s)", e)
                 self._feed_after_id = None
 
             self._stop_capture.set()
@@ -721,9 +741,11 @@ class CameraPanel(ttk.Frame):
         if self._feed_after_id is not None:
             try:
                 self.after_cancel(self._feed_after_id)
-            except Exception:
-                pass
+            except Exception as e:
+                # Feed timer already cancelled or widget destroyed
+                logger.debug("Failed to cancel feed timer in stop_camera (%s)", e)
             self._feed_after_id = None
+
 
         # Stop capture thread
         self._stop_capture.set()

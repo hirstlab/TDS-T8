@@ -296,3 +296,41 @@ def test_practice_mode_identifier_only_under_rig_and_gui_toggle():
         + "\n".join(violations)
     )
 
+
+def test_no_silent_exceptions():
+    """
+    Rule 7: No `except` handler whose body is only `pass` or `...` anywhere
+    under `t8_daq_system/` (AGENTS.md §12.1 item 6, ADR 0003, Ticket 15).
+    """
+    violations = []
+
+    def is_silent_body(body: list[ast.stmt]) -> bool:
+        if not body:
+            return True
+        return all(
+            isinstance(stmt, ast.Pass)
+            or (
+                isinstance(stmt, ast.Expr)
+                and isinstance(stmt.value, ast.Constant)
+                and stmt.value.value is ...
+            )
+            for stmt in body
+        )
+
+    for py_file in _iter_python_files(PACKAGE_ROOT):
+        rel_path = py_file.relative_to(REPO_ROOT)
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(py_file))
+
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ExceptHandler):
+                if is_silent_body(node.body):
+                    exc_name = ast.unparse(node.type) if node.type else "bare"
+                    violations.append(f"{rel_path}:{node.lineno} except {exc_name}")
+
+    assert not violations, (
+        "Forbidden silent except handler(s) found under t8_daq_system/:\n"
+        + "\n".join(violations)
+    )
+
+

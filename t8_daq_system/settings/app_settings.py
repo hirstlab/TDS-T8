@@ -9,9 +9,13 @@ No external JSON config files are used. On first launch (or if the registry
 key has never been written) load() silently returns all defaults.
 """
 
+import logging
 import winreg
 
+logger = logging.getLogger(__name__)
+
 # Registry key path under HKCU
+
 _REG_KEY = r"Software\T8_DAQ_System"
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -229,11 +233,11 @@ class AppSettings:
                     raw_value, _ = winreg.QueryValueEx(key, field)
                     val = _coerce(raw_value, kind, default)
                     setattr(self, field, val)
-                    pass  # field loaded successfully
-                except (FileNotFoundError, OSError):
+                except (FileNotFoundError, OSError) as e:
                     # Individual value missing — keep default
-                    pass
+                    logger.debug("Registry value %s missing (%s); keeping default %r", field, e, default)
         finally:
+
             winreg.CloseKey(key)
 
         # Migrate unsupported temperature unit: F is no longer selectable
@@ -379,8 +383,9 @@ def _coerce(raw, kind: str, default):
             return str(raw).strip().lower() in ("1", "true", "yes")
         if kind == "str":
             return str(raw)
-    except (ValueError, TypeError):
-        pass
+    except (ValueError, TypeError) as e:
+        # Type coercion failed; use default value
+        logger.debug("Coercion of %r to %s failed (%s); using default %r", raw, kind, e, default)
     return default
 
 
@@ -396,5 +401,7 @@ def _write_value(key, name: str, value, kind: str) -> None:
             winreg.SetValueEx(key, name, 0, winreg.REG_DWORD, 1 if value else 0)
         elif kind == "str":
             winreg.SetValueEx(key, name, 0, winreg.REG_SZ, str(value))
-    except (OSError, TypeError):
-        pass  # Fail silently for individual values
+    except (OSError, TypeError) as e:
+        # Failed to persist individual registry value; logged and skipped
+        logger.warning("Failed to write registry value %s=%r (%s)", name, value, e)
+

@@ -42,6 +42,21 @@ class TestKeysightAnalogController(unittest.TestCase):
         KeysightAnalogController(None, rated_max_volts=6.0, rated_max_amps=180.0)
         mock_ljm.eWriteName.assert_not_called()
 
+    def test_init_analog_mode_tolerates_missing_ef_enable_register(self):
+        """If FIO0_EF_ENABLE raises (firmware lacks EF registers), analog mode still configures FIO0=0."""
+        def side_effect(handle, name, value):
+            if name == "FIO0_EF_ENABLE":
+                raise RuntimeError("Register not found")
+            return None
+        mock_ljm.reset_mock()
+        mock_ljm.eWriteName.side_effect = side_effect
+        mock_ljm.eReadName.return_value = 0
+        KeysightAnalogController(self.handle, rated_max_volts=6.0, rated_max_amps=180.0)
+        fio0_calls = [c for c in mock_ljm.eWriteName.call_args_list if c[0][1] == "FIO0"]
+        self.assertTrue(fio0_calls)
+        self.assertEqual(fio0_calls[0][0][2], 0)
+
+
     # ── Voltage scaling ───────────────────────────────────────────────────────
 
     def test_set_voltage_scales_to_dac(self):
