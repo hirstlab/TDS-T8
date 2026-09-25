@@ -4,7 +4,7 @@
 
 **Blocked by:** 13
 
-**Status:** ready-for-agent
+**Status:** in-progress
 
 **Read** `AGENTS.md` §12, `.scratch/rig-architecture/spec.md` (Package layout — Retired; Testing Decisions §1 and §4) **first.** `docs/adr/0001-tests-first-and-no-muted-failures.md` is binding.
 
