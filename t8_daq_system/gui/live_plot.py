@@ -20,10 +20,9 @@ import tkinter as tk
 from tkinter import ttk
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-import matplotlib.dates as mdates
 from datetime import datetime, timedelta
-from t8_daq_system.utils.helpers import convert_temperature
-from t8_daq_system.hardware.frg702_reader import FRG702Reader
+import matplotlib.dates as mdates
+from t8_daq_system.utils.helpers import convert_pressure, convert_temperature
 
 
 class LivePlot:
@@ -823,7 +822,7 @@ class LivePlot:
                 # Unit conversion: convert from data unit to display unit
                 if data_press_unit != self._press_unit:
                     values = [
-                        FRG702Reader.convert_pressure(v, data_press_unit, self._press_unit)
+                        convert_pressure(v, data_press_unit, self._press_unit)
                         if v is not None else None
                         for v in values
                     ]

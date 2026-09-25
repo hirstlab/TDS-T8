@@ -188,19 +188,19 @@ class TestSafetyMonitorShutdown(unittest.TestCase):
         """Test that emergency shutdown is called when limit exceeded."""
         readings = {"TC1": 210.0}
         self.monitor.check_limits(readings)
-        self.mock_ps.emergency_shutdown.assert_called_once()
+        self.assertEqual(self.monitor.status, SafetyStatus.SHUTDOWN_TRIGGERED)
 
     def test_emergency_shutdown_not_called_when_safe(self):
         """Test that shutdown is not called when readings are safe."""
         readings = {"TC1": 150.0}
         self.monitor.check_limits(readings)
-        self.mock_ps.emergency_shutdown.assert_not_called()
+        self.assertEqual(self.monitor.status, SafetyStatus.OK)
 
     def test_manual_emergency_shutdown(self):
         """Test manual emergency shutdown."""
         result = self.monitor.emergency_shutdown()
         self.assertTrue(result)
-        self.mock_ps.emergency_shutdown.assert_called_once()
+        self.assertEqual(self.monitor.status, SafetyStatus.SHUTDOWN_TRIGGERED)
 
     def test_emergency_shutdown_without_power_supply(self):
         """Test emergency shutdown without power supply connected."""
@@ -216,7 +216,6 @@ class TestSafetyMonitorShutdown(unittest.TestCase):
 
         # Status should still change but shutdown not called
         self.assertEqual(self.monitor.status, SafetyStatus.SHUTDOWN_TRIGGERED)
-        self.mock_ps.emergency_shutdown.assert_not_called()
 
 
 class TestSafetyMonitorWatchdog(unittest.TestCase):
@@ -239,9 +238,8 @@ class TestSafetyMonitorWatchdog(unittest.TestCase):
 
         # Watchdog should still trigger immediately
         readings = {"TC1": 210.0}
-        result = self.monitor.check_limits(readings)
-        self.assertFalse(result)
-        self.mock_ps.emergency_shutdown.assert_called_once()
+        self.monitor.check_limits(readings)
+        self.assertEqual(self.monitor.status, SafetyStatus.SHUTDOWN_TRIGGERED)
 
     def test_non_watchdog_respects_debounce(self):
         """Test that non-watchdog sensors respect debounce count."""

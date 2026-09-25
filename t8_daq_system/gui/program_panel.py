@@ -6,7 +6,7 @@ PURPOSE: Unified Program Mode UI for the block-based editor.
 import tkinter as tk
 from tkinter import ttk, messagebox
 from ..control.program_block import VoltageRampBlock, StableHoldBlock, TempRampBlock
-from ..control.program_executor import ProgramExecutor
+from ..control.program_run import compute_preview
 
 
 def _k_to_disp(temp_k, unit):
@@ -419,8 +419,7 @@ class ProgramPanel:
             except Exception:
                 pass
 
-        executor = ProgramExecutor(None, lambda: 293.15)
-        times, voltages, temps_k, boundaries = executor.compute_preview(
+        times, voltages, temps_k, boundaries = compute_preview(
             self._blocks, start_temp_k=start_t, start_voltage=start_v
         )
 

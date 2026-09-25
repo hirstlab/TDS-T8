@@ -66,23 +66,11 @@ def test_labjack_and_serial_only_under_hardware():
     assert not violations, "Forbidden hardware library imports outside hardware/:\n" + "\n".join(violations)
 
 
-def test_hardware_imported_only_under_rig_and_transitional_list():
+def test_hardware_imported_only_under_rig():
     """
-    Rule 2: `t8_daq_system.hardware` is imported only under `rig/` and allowed transitional files.
+    Rule 2: `t8_daq_system.hardware` is imported only under `rig/` (ADR 0002).
+    No transitional exceptions remain (Ticket 14).
     """
-    # Explicit list of transitional importers outside rig/ that still exist today.
-    # Each entry includes a comment naming the ticket that removes it.
-    TRANSITIONAL_ALLOWED = {
-        # Ticket 14: DataAcquisition deletion
-        Path("t8_daq_system/core/data_acquisition.py"),
-        # Ticket 05/10: MainWindow transitional PS access / reader references
-        Path("t8_daq_system/gui/main_window.py"),
-        # Ticket 12: live_plot pressure conversion cleanup
-        Path("t8_daq_system/gui/live_plot.py"),
-        # Ticket 12: sensor_panel status codes cleanup
-        Path("t8_daq_system/gui/sensor_panel.py"),
-    }
-
     violations = []
 
     for py_file in _iter_python_files(PACKAGE_ROOT):
@@ -92,14 +80,11 @@ def test_hardware_imported_only_under_rig_and_transitional_list():
         if rel_parts[0] in ("hardware", "rig"):
             continue
 
-        if rel_path in TRANSITIONAL_ALLOWED:
-            continue
-
         for lineno, mod_name in _get_imports(py_file):
             if mod_name.startswith("t8_daq_system.hardware") or mod_name.startswith("hardware"):
                 violations.append(f"{rel_path}:{lineno} imports {mod_name}")
 
-    assert not violations, "Forbidden t8_daq_system.hardware imports outside rig/ and transitional allowlist:\n" + "\n".join(violations)
+    assert not violations, "Forbidden t8_daq_system.hardware imports outside rig/:\n" + "\n".join(violations)
 
 
 def test_heater_calls_only_under_rig_and_hardware():
@@ -107,9 +92,9 @@ def test_heater_calls_only_under_rig_and_hardware():
     Rule 4: Calls to write_voltage, set_output, set_voltage, output_on, output_off,
     and emergency_shutdown appear only under rig/ and hardware/.
 
-    These method calls represent direct hardware control.  Any caller outside those
+    These method calls represent direct hardware control. Any caller outside those
     two packages violates ADR 0003 (one writer of the heater).
-    Transitional callers are listed below with the ticket that removes them.
+    No transitional exceptions remain (Ticket 14).
     """
     FORBIDDEN_CALL_NAMES = {
         "write_voltage",
@@ -119,18 +104,6 @@ def test_heater_calls_only_under_rig_and_hardware():
         "output_off",
         "emergency_shutdown",
     }
-    # Explicit transitional allowlist: files outside rig/ and hardware/ that still
-    # hold these calls today, with the ticket responsible for removing them.
-    TRANSITIONAL_ALLOWED = {
-        # Ticket 14: ProgramExecutor deletion removes set_voltage/output_on/set_current
-        Path("t8_daq_system/control/program_executor.py"),
-        # Ticket 14: SafetyMonitor direct hardware calls removed with legacy monitor
-        Path("t8_daq_system/control/safety_monitor.py"),
-        # Ticket 05/10: MainWindow transitional PS access / output_on calls
-        Path("t8_daq_system/gui/main_window.py"),
-        # Ticket 14: PowerSupplyPanel direct output_off call
-        Path("t8_daq_system/gui/power_supply_panel.py"),
-    }
 
     violations = []
     for py_file in _iter_python_files(PACKAGE_ROOT):
@@ -138,8 +111,6 @@ def test_heater_calls_only_under_rig_and_hardware():
         rel_path = py_file.relative_to(REPO_ROOT)
 
         if rel_parts[0] in ("hardware", "rig"):
-            continue
-        if rel_path in TRANSITIONAL_ALLOWED:
             continue
 
         source = py_file.read_text(encoding="utf-8")
@@ -153,9 +124,92 @@ def test_heater_calls_only_under_rig_and_hardware():
                     )
 
     assert not violations, (
-        "Hardware-control calls outside rig/ and hardware/ "
-        "(add transitional entries with ticket numbers for known callers):\n"
+        "Hardware-control calls outside rig/ and hardware/:\n"
         + "\n".join(violations)
+    )
+
+
+def test_no_sleep_under_control_run_record_and_rig():
+    """
+    Rule 6: The only `time.sleep` under `control/`, `data/run_record.py` and `rig/`
+    is inside `RealClock.sleep_until` (ADR 0002, Ticket 14).
+    """
+    targets: list[Path] = []
+    control_dir = PACKAGE_ROOT / "control"
+    if control_dir.exists():
+        targets.extend(_iter_python_files(control_dir))
+    run_record_file = PACKAGE_ROOT / "data" / "run_record.py"
+    if run_record_file.exists():
+        targets.append(run_record_file)
+    rig_dir = PACKAGE_ROOT / "rig"
+    if rig_dir.exists():
+        targets.extend(_iter_python_files(rig_dir))
+
+    violations = []
+    real_clock_path = PACKAGE_ROOT / "rig" / "clock.py"
+
+    for py_file in targets:
+        rel_path = py_file.relative_to(REPO_ROOT)
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(py_file))
+
+        class SleepVisitor(ast.NodeVisitor):
+            def __init__(self):
+                self.current_class: str | None = None
+                self.current_func: str | None = None
+
+            def visit_ClassDef(self, node: ast.ClassDef):
+                old_cls = self.current_class
+                self.current_class = node.name
+                self.generic_visit(node)
+                self.current_class = old_cls
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                old_func = self.current_func
+                self.current_func = node.name
+                self.generic_visit(node)
+                self.current_func = old_func
+
+            def visit_Call(self, node: ast.Call):
+                func = node.func
+                # Check for time.sleep(...) or sleep(...)
+                is_sleep = False
+                if isinstance(func, ast.Attribute) and func.attr == "sleep":
+                    is_sleep = True
+                elif isinstance(func, ast.Name) and func.id == "sleep":
+                    is_sleep = True
+
+                if is_sleep:
+                    # Allowed only inside RealClock.sleep_until in rig/clock.py
+                    if (
+                        py_file == real_clock_path
+                        and self.current_class == "RealClock"
+                        and self.current_func == "sleep_until"
+                    ):
+                        return
+                    violations.append(
+                        f"{rel_path}:{node.lineno} calls sleep in "
+                        f"{self.current_class or ''}.{self.current_func or ''}"
+                    )
+                self.generic_visit(node)
+
+        SleepVisitor().visit(tree)
+
+    assert not violations, (
+        "Forbidden time.sleep found (only RealClock.sleep_until may sleep):\n"
+        + "\n".join(violations)
+    )
+
+
+def test_data_acquisition_and_program_executor_retired():
+    """
+    DataAcquisition and ProgramExecutor modules no longer exist and nothing imports them.
+    """
+    assert not (PACKAGE_ROOT / "core" / "data_acquisition.py").exists(), (
+        "t8_daq_system/core/data_acquisition.py must be deleted"
+    )
+    assert not (PACKAGE_ROOT / "control" / "program_executor.py").exists(), (
+        "t8_daq_system/control/program_executor.py must be deleted"
     )
 
 

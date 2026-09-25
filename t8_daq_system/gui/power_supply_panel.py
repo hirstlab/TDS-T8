@@ -220,9 +220,7 @@ class PowerSupplyPanel:
         self._on_output_change = callback
 
     def emergency_off(self):
-        """Emergency output off - called by safety monitor."""
-        if self.controller:
-            self.controller.output_off()
+        """Emergency output off - called on safety trip."""
         self._output_on = False
         self._update_output_indicator()
         self._show_error("EMERGENCY SHUTDOWN TRIGGERED")

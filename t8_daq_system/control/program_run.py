@@ -95,10 +95,24 @@ class ProgramRun:
 
         # TempRamp run history for feedforward learning
         self._run_log: list[tuple[float, float, float, float]] = []
+        self._last_run_record: dict[str, Any] | None = None
 
         # Events accumulated between take_events() calls.
         # The Rig reads these after each step() and relays them to RunRecord.
         self._pending_events: list[tuple[str, str]] = []
+
+    def get_pid_logger(self) -> PIDRunLogger:
+        """Return the PIDRunLogger instance."""
+        return self._pid_logger
+
+    def compute_preview(
+        self,
+        blocks: list[Any],
+        start_temp_k: float = 293.15,
+        start_voltage: float = 0.0,
+    ) -> tuple[list[float], list[float], list[float], list[float]]:
+        """Compute expected voltage/temperature profile for given blocks."""
+        return compute_preview(blocks, start_temp_k=start_temp_k, start_voltage=start_voltage)
 
     # ------------------------------------------------------------------
     # Public lifecycle API
@@ -406,6 +420,7 @@ class ProgramRun:
             "ki_used": self._pid._ki,
             "kd_used": self._pid._kd,
         }
+        self._last_run_record = record
         try:
             self._pid_logger.save_run(record)
         except Exception as exc:
@@ -415,3 +430,74 @@ class ProgramRun:
             self._ff_map.append_run(self._run_log, target_rate)
         except Exception as exc:
             logger.warning("ProgramRun: feedforward map append_run failed: %s", exc)
+
+
+def compute_preview(
+    blocks: list[Any],
+    start_temp_k: float = 293.15,
+    start_voltage: float = 0.0,
+) -> tuple[list[float], list[float], list[float], list[float]]:
+    """
+    Compute the expected voltage and temperature profile for the given blocks.
+
+    Returns:
+        (times, voltages, temps_k, block_boundaries)
+    """
+    times = [0.0]
+    voltages = [start_voltage]
+    temps_k = [start_temp_k]
+    boundaries = [0.0]
+
+    current_time = 0.0
+    current_v = start_voltage
+    current_t = start_temp_k
+
+    for block in blocks:
+        if block.block_type == "voltage_ramp":
+            dur = block.duration_sec
+            steps = max(1, int(dur))
+            v_start = block.start_voltage
+            v_end = block.end_voltage
+            for i in range(1, steps + 1):
+                t = current_time + i
+                p = i / steps
+                v = v_start + (v_end - v_start) * p
+                times.append(t)
+                voltages.append(v)
+                temps_k.append(current_t)
+            current_time += steps
+            current_v = v_end
+
+        elif block.block_type == "stable_hold":
+            dur = block.hold_duration_sec
+            steps = max(1, int(dur))
+            for i in range(1, steps + 1):
+                times.append(current_time + i)
+                voltages.append(current_v)
+                temps_k.append(block.target_temp_k)
+            current_time += steps
+            current_t = block.target_temp_k
+
+        elif block.block_type == "temp_ramp":
+            rate_k_per_sec = abs(block.rate_k_per_min / 60.0)
+            if rate_k_per_sec > 0:
+                dur = abs(block.end_temp_k - current_t) / rate_k_per_sec
+            else:
+                dur = 0
+
+            steps = max(1, int(dur))
+            t_start = current_t
+            t_end = block.end_temp_k
+            for i in range(1, steps + 1):
+                t = current_time + i
+                p = i / steps
+                temp = t_start + (t_end - t_start) * p
+                times.append(t)
+                voltages.append(current_v)
+                temps_k.append(temp)
+            current_time += steps
+            current_t = t_end
+
+        boundaries.append(current_time)
+
+    return times, voltages, temps_k, boundaries

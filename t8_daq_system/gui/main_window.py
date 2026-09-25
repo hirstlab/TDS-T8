@@ -18,10 +18,6 @@ import os
 import sys
 
 from t8_daq_system.utils.startup_profiler import profiler
-from t8_daq_system.hardware.labjack_connection import LabJackConnection
-from t8_daq_system.hardware.xgs600_controller import XGS600Controller
-from t8_daq_system.hardware.frg702_reader import FRG702Reader
-from t8_daq_system.hardware.keysight_analog_controller import KeysightAnalogController
 from t8_daq_system.control.safety_monitor import SafetyMonitor, SafetyStatus
 from t8_daq_system.data.data_buffer import DataBuffer
 from t8_daq_system.data.data_logger import DataLogger, create_metadata_dict
@@ -32,7 +28,6 @@ from t8_daq_system.utils.helpers import convert_pressure, convert_temperature
 from t8_daq_system.gui.dialogs import LoggingDialog, LoadCSVDialog
 from t8_daq_system.gui.settings_dialog import SettingsDialog
 from t8_daq_system.gui.pinout_display import PinoutDisplay
-from t8_daq_system.control.program_executor import ProgramExecutor
 from t8_daq_system.gui.program_panel import ProgramPanel
 from t8_daq_system.settings.app_settings import AppSettings
 import logging
@@ -187,15 +182,13 @@ class MainWindow:
         profiler.checkpoint("Root window properties set")
 
         profiler.section("LabJack Hardware Connection")
-        profiler.checkpoint("Creating LabJackConnection instance")
-        # Initialize LabJack hardware
-        self.connection = LabJackConnection()
-        profiler.checkpoint("LabJackConnection instance created (not connected yet)")
+        profiler.checkpoint("Rig and Adapter Initialization")
         # LabJack reconnect guard
         self._last_labjack_read_failed = False
         self._pressure_interlock_fired = False
 
         profiler.section("Rig and Adapter Initialization")
+        self.connection = None
         if rig is not None:
             self.rig = rig
             self._hardware_adapter = getattr(rig, '_hardware_adapter', None)
@@ -205,7 +198,7 @@ class MainWindow:
             tc_names = [tc['name'] for tc in self.config['thermocouples'] if tc.get('enabled', True)]
             gauge_names = [g['name'] for g in self.config.get('frg702_gauges', []) if g.get('enabled', True)]
             self.clock = RealClock()
-            self._hardware_adapter = T8Adapter(config=self.config, connection=self.connection)
+            self._hardware_adapter = T8Adapter(config=self.config)
             self._practice_adapter = SimulatedRig(clock=self.clock, tc_names=tc_names, gauge_names=gauge_names)
             initial_adapter = self._hardware_adapter
 
@@ -223,31 +216,16 @@ class MainWindow:
 
         profiler.section("XGS-600 Controller Connection")
         profiler.checkpoint("Initializing XGS-600 variables")
-        # Initialize XGS-600 controller
+        # Legacy reader placeholders
         self.xgs600 = None
         self.frg702_reader = None
         self.tc_reader = None
-        profiler.checkpoint("XGS-600 variables initialized (not connected yet)")
+        profiler.checkpoint("XGS-600 variables initialized (managed by Rig)")
 
         profiler.section("Analog Power Supply Controller")
-        profiler.checkpoint("Analog PS controller will be created after T8 connects")
-        # The analog controller is initialized in _initialize_power_supply() once
-        # the LabJack T8 handle is available.  No separate network connection needed.
         self.ps_controller = None
-        profiler.checkpoint("Analog PS controller placeholder set")
 
         profiler.section("Control Systems Initialization")
-        # Unified Program Mode
-        self._program_executor = ProgramExecutor(
-            power_supply=None,
-            get_temp_k_fn_provider=self._get_tc_reading_k_provider,
-            on_block_start=self._on_program_block_start,
-            on_block_complete=self._on_program_block_complete,
-            on_program_complete=self._on_program_complete,
-            on_status=self._on_program_status,
-            rig=self.rig,
-        )
-        self._program_executor.on_waiting_for_confirmation = self._on_waiting_for_qms_confirmation
         self._program_panel  = None
         self._camera_panel   = None
         self._qms_confirm_frame = None   # Created/destroyed with programmer panel
@@ -653,51 +631,20 @@ class MainWindow:
         try:
             print("[DEFERRED] Starting hardware initialization...")
 
-            # Connect to LabJack T8
-            if self.connection:
-                print("[DEFERRED] Connecting to LabJack T8...")
-                if self.connection.connect():
-                    print("[DEFERRED] T8 connected successfully")
-
-                    # Create thermocouple reader now that we're connected
-                    if self.tc_reader is None:
-                        if self._initialize_hardware_readers():
-                            print("[DEFERRED] Hardware readers initialized")
-
-                    # Initialize the analog power supply controller using the T8 handle.
-                    # No separate network connection is needed — the DAC/AIN channels on
-                    # the T8 are the sole interface once the J1 wiring is in place.
-                    if self.config.get('power_supply', {}).get('enabled', True):
-                        if self._initialize_power_supply():
-                            print("[DEFERRED] Analog power supply controller initialized")
-                        else:
-                            print("[DEFERRED] Analog PS init failed — running without PS")
-
-                    # Update button states
-                    self._update_connection_state(True)
-                else:
-                    print("[DEFERRED] T8 connection failed")
-                    self._last_labjack_read_failed = True
-                    self._update_connection_state(False)
-
-            # Connect to XGS-600 if configured
-            if self.config.get('xgs600', {}).get('enabled', False):
-                print("[DEFERRED] Connecting to XGS-600...")
-                if self._connect_xgs600():
-                    print("[DEFERRED] XGS-600 connected")
-
-            print("[DEFERRED] Hardware initialization complete")
+            print("[DEFERRED] Hardware initialization managed by Rig loop")
             self._hardware_init_attempted = True
 
             # FF-8 START — seed feedforward map from historical CSVs in background
-            import threading as _threading
-            def _ff_ingest_thread():
-                try:
-                    self._program_executor._ff_map.scan_log_folder(self.log_folder)
-                except Exception as _exc:
-                    print(f"[FF-ingest] Background scan error (non-fatal): {_exc}")
-            _threading.Thread(target=_ff_ingest_thread, daemon=True,
-                              name='FF-LogIngest').start()
+            prog_run = getattr(self.rig, '_program_run', None)
+            if prog_run and hasattr(prog_run, '_ff_map'):
+                import threading as _threading
+                def _ff_ingest_thread():
+                    try:
+                        prog_run._ff_map.scan_log_folder(self.log_folder)
+                    except Exception as _exc:
+                        print(f"[FF-ingest] Background scan error (non-fatal): {_exc}")
+                _threading.Thread(target=_ff_ingest_thread, daemon=True,
+                                  name='FF-LogIngest').start()
             # FF-8 END
 
         except Exception as exc:
@@ -1189,12 +1136,12 @@ class MainWindow:
         self._programmer_panel = ProgramPanel(
             parent_frame=self._programmer_panel_frame,
             preview_plot=self._programmer_preview_plot,
-            get_initial_state_fn=lambda: (self._get_latest_tc_reading_k("TC_1"), (self.daq._last_all_readings.get('PS_Voltage') or 0.0) if self.daq else 0.0),
+            get_initial_state_fn=lambda: (self._get_latest_tc_reading_k("TC_1"), self._latest_snapshot.ps_volts if self._latest_snapshot else 0.0),
             on_program_change=self._update_run_button_state,
             tc_names=sorted(self._tc_names),
             get_unit_fn=lambda: getattr(self, 't_unit_var', None) and self.t_unit_var.get() or 'K',
             get_tc_temp_k_fn=self._get_latest_tc_reading_k,
-            ff_map=getattr(self._program_executor, '_ff_map', None),  # FF-10
+            ff_map=getattr(getattr(self.rig, '_program_run', None), '_ff_map', None),  # FF-10
         )
         
         # Restore saved blocks from before the programmer was last closed
@@ -1323,9 +1270,8 @@ class MainWindow:
         all_readings['PS_Voltage_Setpoint'] = snap.commanded_volts
         all_readings['PS_CC_Limit'] = 180.0
 
-        prog_executor = getattr(self, '_program_executor', None)
-        if prog_executor and prog_executor.is_running():
-            all_readings['Block_Index'] = prog_executor.current_block_index + 1
+        if snap.program.running and snap.program.block_index is not None:
+            all_readings['Block_Index'] = snap.program.block_index + 1
         else:
             all_readings['Block_Index'] = None
 
@@ -1526,17 +1472,15 @@ class MainWindow:
         # 4. Release executor / submit ConfirmContinue to Rig
         if hasattr(self, 'rig') and self.rig is not None:
             self.rig.submit(ConfirmContinue())
-        if self._program_executor:
-            self._program_executor.confirm_and_continue()
 
         self.status_var.set("QMS triggered — ramp continuing")
 
     def _show_pid_run_summary(self):
         """Show a post-run PID performance summary and offer to update settings gains."""
-        executor = getattr(self, '_program_executor', None)
-        if executor is None:
+        prog_run = getattr(self.rig, '_program_run', None)
+        if prog_run is None:
             return
-        record = getattr(executor, '_last_run_record', None)
+        record = getattr(prog_run, '_last_run_record', None)
         if record is None:
             return
 
@@ -1655,22 +1599,17 @@ class MainWindow:
 
         # Submit LoadProgram and StartProgram commands to Rig
         if hasattr(self, 'rig') and self.rig is not None:
+            prog_run = getattr(self.rig, '_program_run', None)
+            if prog_run is not None:
+                prog_run._pid.update_gains(
+                    self._app_settings.pid_kp,
+                    self._app_settings.pid_ki,
+                    self._app_settings.pid_kd,
+                    output_max=self._app_settings.pid_output_max,
+                    windup_limit=self._app_settings.pid_windup_limit,
+                )
             self.rig.submit(LoadProgram(program=blocks))
             self.rig.submit(StartProgram())
-
-        # Load and start executor if present
-        if self._program_executor:
-            self._program_executor.load_program(blocks)
-
-            # Apply all PID settings from AppSettings before every run
-            self._program_executor._pid.update_gains(
-                self._app_settings.pid_kp,
-                self._app_settings.pid_ki,
-                self._app_settings.pid_kd,
-                output_max=self._app_settings.pid_output_max,
-                windup_limit=self._app_settings.pid_windup_limit,
-            )
-            self._program_executor.start()
 
         self._programmer_ramp_running = True
         self.run_ramp_btn.config(text="Stop Program")
@@ -1680,8 +1619,6 @@ class MainWindow:
         """Stop the running program safely."""
         if hasattr(self, 'rig') and self.rig is not None:
             self.rig.submit(StopProgram())
-        if self._program_executor and self._program_executor.is_running():
-            self._program_executor.stop()
         self._programmer_ramp_running = False
         self.run_ramp_btn.config(text="Run Program")
         self.status_var.set("Program Stopped")
@@ -1701,10 +1638,6 @@ class MainWindow:
             self.rig.submit(StopProgram())
             self.rig.submit(SetOutput(False))
             self.rig.submit(SetVoltage(0.0))
-
-        # Stop program executor if running
-        if self._program_executor and self._program_executor.is_running():
-            self._program_executor.stop()
 
         # Reset run state
         self._programmer_ramp_running = False
@@ -2093,10 +2026,6 @@ class MainWindow:
         self.root.after(0, self._handle_safety_shutdown)
 
     def _handle_safety_shutdown(self):
-        # Stop program executor if running
-        if self._program_executor and self._program_executor.is_running():
-            self._program_executor.stop()
-
         # Update safety display (power supply cutoff is handled by Rig/HeaterOutput)
         self._update_safety_display(SafetyStatus.SHUTDOWN_TRIGGERED)
 
@@ -2468,35 +2397,8 @@ class MainWindow:
         return True
 
     def _connect_xgs600(self):
-        xgs_config = self.config.get('xgs600', {})
-        if not xgs_config.get('enabled', False):
-            return False
-
-        try:
-            self.xgs600 = XGS600Controller(
-                port=xgs_config['port'],
-                baudrate=xgs_config.get('baudrate', 9600),
-                timeout=xgs_config.get('timeout', 1.0),
-                address=xgs_config.get('address', '00'),
-                debug=False # Enable verbose serial logging for debugging
-            )
-            if not self.xgs600.connect(silent=True):
-                self.xgs600 = None
-                return False
-
-            frg702_config = self.config.get('frg702_gauges', [])
-            if frg702_config:
-                self.frg702_reader = FRG702Reader(self.xgs600, frg702_config)
-
-            # Update live DAQ engine if running
-            if self.daq:
-                self.daq.update_readers(frg702_reader=self.frg702_reader)
-
-            print("XGS-600 controller connected, FRG-702 reader initialized")
-            return True
-        except Exception:
-            self.xgs600 = None
-            return False
+        """Deprecated: XGS-600 hardware connection is managed by T8Adapter / Rig (ADR 0002)."""
+        return True
 
     def _check_keysight_monitor_config(self):
         """
@@ -2527,60 +2429,8 @@ class MainWindow:
         print("No configuration changes needed.")
 
     def _initialize_power_supply(self):
-        try:
-            handle = self.connection.get_handle()
-            ps_config = self.config.get('power_supply', {})
-            enabled = ps_config.get('enabled', False)
-
-            print(f"[DEBUG] _initialize_power_supply: enabled={enabled}, handle_is_none={handle is None}")
-
-            if not enabled:
-                print("[DEBUG] Power supply is disabled in config. Setting ps_controller to None.")
-                self.ps_controller = None
-                self.ps_resource_var.set("None")
-                return True
-
-            if handle is None:
-                print("[DEBUG] Cannot initialize power supply: LabJack handle is None")
-                return False
-
-            # Verify impedance is OK
-            self._verify_t8_input_impedance()
-            
-            # Monitoring range is fixed to 0-5V (SW1 Switch 4 DOWN)
-            switch_position = 'down'
-
-            self.ps_controller = KeysightAnalogController(
-                handle,
-                rated_max_volts=ps_config.get('rated_max_volts', 6.0),
-                rated_max_amps=ps_config.get('rated_max_amps', 180.0), # Fixed to PSU rating
-                voltage_limit=ps_config.get('default_voltage_limit', 6.0),
-                current_limit=ps_config.get('default_current_limit', 10.0), # Limited for sample safety
-                voltage_pin=ps_config.get('voltage_pin', "DAC0"),
-                current_pin=ps_config.get('current_pin', "DAC1"),
-                voltage_monitor_pin=ps_config.get('voltage_monitor_pin', "AIN4"),
-                current_monitor_pin=ps_config.get('current_monitor_pin', "AIN5"),
-                switch_4_position=switch_position,
-                debug=False
-            )
-
-            # Update live DAQ engine if running
-            if self.daq:
-                self.daq.update_readers(ps_controller=self.ps_controller)
-
-            if self._program_executor:
-                self._program_executor.set_power_supply(self.ps_controller)
-
-            v_pin = ps_config.get('voltage_pin', 'DAC0')
-            i_pin = ps_config.get('current_pin', 'DAC1')
-            self.ps_resource_var.set(f"Analog ({v_pin}/{i_pin})")
-
-            print(f"Analog power supply controller initialized successfully (Range: {switch_position})")
-            self.ps_controller.run_diagnostics()
-            return True
-        except Exception as e:
-            print(f"Failed to initialize analog PS controller: {e}")
-            return False
+        """Deprecated: Power supply control is managed by T8Adapter / Rig (ADR 0002)."""
+        return True
 
     # ── Feature 3: Manual Voltage Nudge ──────────────────────────────────────
 
@@ -2837,8 +2687,6 @@ class MainWindow:
         # Release confirmation / continue
         if hasattr(self, 'rig') and self.rig is not None:
             self.rig.submit(ConfirmContinue())
-        if self._program_executor:
-            self._program_executor.confirm_and_continue()
 
         # Disable the button immediately — one-shot launch
         if hasattr(self, '_qms_ramp_btn'):
@@ -2852,9 +2700,8 @@ class MainWindow:
     def _on_pressure_interlock(self, pressure_torr):
         """Emergency: pressure exceeded 1e-4 Torr. Stop QMS and power supply."""
         def _shutdown():
-            # 1. Stop program executor if running (must stop BEFORE power supply off)
-            if self._program_executor and self._program_executor.is_running():
-                self._program_executor.stop()
+            # Stop running program
+            self._stop_programmer_ramp_safe()
 
             # Power supply cutoff is handled by Rig / HeaterOutput (ADR 0003)
 
@@ -2897,12 +2744,6 @@ class MainWindow:
             except Exception:
                 pass
 
-        if self.daq:
-            self.daq.stop_fast_acquisition()
-
-        if self._program_executor and self._program_executor.is_running():
-            self._program_executor.stop()
-
         if self.is_logging:
             if self._run_record is not None:
                 self._run_record.stop()
@@ -2932,17 +2773,13 @@ class MainWindow:
             # 1. Re-apply settings and rebuild config
             self._apply_settings_to_gui()
             
-            # 2. Force hardware readers to re-sync if possible
-            if self.daq:
-                self.daq.update_readers(config=self.config)
-            
-            # 3. Reset plot skip counters to force immediate redraw
+            # 2. Reset plot skip counters to force immediate redraw
             self._plot_skip_counter = 0
             
-            # 4. Process all pending events
+            # 3. Process all pending events
             self.root.update_idletasks()
             
-            # 5. Explicitly redraw the canvases
+            # 4. Explicitly redraw the canvases
             for plot_attr in ('plot_tc', 'plot_pressure', 'plot_ps'):
                 if hasattr(self, plot_attr):
                     plot = getattr(self, plot_attr)
@@ -2957,9 +2794,17 @@ class MainWindow:
             import traceback
             traceback.print_exc()
 
+    def get_pid_logger(self):
+        """Return the active PIDRunLogger from Rig/ProgramRun."""
+        prog_run = getattr(self.rig, '_program_run', None) if hasattr(self, 'rig') and self.rig else None
+        if prog_run is not None:
+            return prog_run.get_pid_logger()
+        from t8_daq_system.control.temp_ramp_pid import PIDRunLogger
+        return PIDRunLogger()
+
     def _open_pid_log_viewer(self):
         """Open a scrollable dialog showing all logged PID ramp runs with suggestions."""
-        pid_logger = self._program_executor.get_pid_logger()
+        pid_logger = self.get_pid_logger()
         runs = pid_logger.get_all_runs()
 
         win = tk.Toplevel(self.root)

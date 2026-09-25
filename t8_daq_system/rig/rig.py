@@ -548,6 +548,10 @@ class Rig:
                         [Trip(kind="labjack_lost", reason=f"Shut-off write failed: {err}")],
                         snap_for_heater,
                     )
+                    if self._program_run is not None:
+                        self._program_run.stop()
+                    from t8_daq_system.control.heater_output import HeaterCommand
+                    cmd = HeaterCommand(output_enabled=False, volts=0.0)
 
                 # 2. Voltage (DAC0)
                 try:
@@ -560,6 +564,10 @@ class Rig:
                         [Trip(kind="labjack_lost", reason=f"Voltage write failed: {err}")],
                         snap_for_heater,
                     )
+                    if self._program_run is not None:
+                        self._program_run.stop()
+                    from t8_daq_system.control.heater_output import HeaterCommand
+                    cmd = HeaterCommand(output_enabled=False, volts=0.0)
 
             self._output_enabled = cmd.output_enabled
             self._commanded_volts = cmd.volts

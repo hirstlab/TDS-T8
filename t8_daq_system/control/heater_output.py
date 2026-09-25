@@ -313,6 +313,8 @@ class HeaterOutput:
         if current_enabled and not snapshot.permissive_ok:
             current_enabled = False
             current_volts = 0.0
+            if snapshot.program and snapshot.program.running:
+                stop_program = True
             if refusal_reason is None:
                 refusal_reason = f"Output disabled: {snapshot.permissive_reason or 'permissive lost'}"
 
