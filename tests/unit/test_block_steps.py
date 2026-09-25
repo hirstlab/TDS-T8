@@ -234,22 +234,49 @@ def test_step_exceptions_propagate():
         step_temp_ramp(block_t, temp_k=None, elapsed_s=0.5, now_s=10.5, ctx=ctx)
 
 
-def test_step_raising_propagates_through_executor_block(monkeypatch):
-    """Verify that an exception raised by a block step propagates out of _execute_block without being swallowed."""
-    from t8_daq_system.control.program_executor import ProgramExecutor
+def test_step_raising_propagates_through_program_run(monkeypatch):
+    """Verify that an exception raised by a block step turns into a program_error trip in ProgramRun."""
+    from t8_daq_system.control.program_run import ProgramRun
+    from t8_daq_system.rig.snapshot import Snapshot, SourceStatus, HeaterStatus, ProgramStatus
 
-    ex = ProgramExecutor(power_supply=None)
-    ex._running = True
+    pr = ProgramRun()
     block = TempRampBlock(rate_k_per_min=60.0, end_temp_k=303.0, tc_name="TC_1")
+    pr.load([block])
+
+    snap = Snapshot(
+        t=100.0,
+        wall_time=1700000000.0,
+        tc_c={"TC_1": 25.0},
+        tc_raw_v={"TC_1": 0.001},
+        pressure_torr={"FRG702_Chamber": 1e-6},
+        source_age_s={"TC_1": 0.0, "FRG702_Chamber": 0.0},
+        ps_volts=0.0,
+        ps_amps=0.0,
+        commanded_volts=0.0,
+        output_enabled=True,
+        labjack=SourceStatus(state="connected"),
+        xgs=SourceStatus(state="connected"),
+        heater=HeaterStatus(state="on"),
+        program=ProgramStatus(),
+        permissive_ok=True,
+        permissive_reason=None,
+        adapter="simulated",
+    )
+    pr.start(snap, now_s=100.0)
 
     def _faulty_step(*args, **kwargs):
         raise ValueError("simulated step mathematical fault")
 
     monkeypatch.setattr(
-        "t8_daq_system.control.program_executor.step_temp_ramp",
+        "t8_daq_system.control.program_run._block_steps.step_temp_ramp",
         _faulty_step,
     )
 
-    with pytest.raises(ValueError, match="simulated step mathematical fault"):
-        ex._execute_block(block)
+    pr.step(snap, now_s=100.0)  # Phase 2 -> 1
+    pr.step(snap, now_s=100.5)  # Phase 1 -> 0
+    trip = pr.step(snap, now_s=101.0)  # Phase 0: calls step_temp_ramp
+    assert trip is not None
+    assert trip.kind == "program_error"
+    assert "simulated step mathematical fault" in trip.reason
+
 

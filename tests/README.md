@@ -41,5 +41,4 @@ pytest tests/simulation/ -m simulation -v              # ~1 min
 
 ## Adding new tests
 
-- Unit tests (no threading): `tests/unit/`, mark with `@pytest.mark.unit`
-- New hardware mock methods: add to `MockPowerSupplyController` in `tests/mock_ps.py`
+- New hardware mock methods: add to `SimulatedRig` in `t8_daq_system/rig/simulated.py`

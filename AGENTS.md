@@ -100,21 +100,28 @@ Before editing any file, understand what it owns:
 |------|------|
 | `temp_ramp_pid.py` | `PIDController` (anti-windup, derivative-on-measurement, slew-rate limiter) + `PIDRunLogger` (saves JSON run history to `logs/pid_runs.json`). **No GUI imports.** |
 | `heater_output.py` | `HeaterOutput` — pure arbiter of Safety > Operator > Program, holds trip latch, enforces CV-only. |
-| `program_executor.py` | `ProgramExecutor` — runs block lists (Voltage Ramp, Hold, TempRamp) in a background thread. Manages soft-start phase before PID handoff. |
+| `program_run.py` | `ProgramRun` — stepped by the Rig loop every control tick (0.5 s). Manages block lists (Voltage Ramp, Hold, TempRamp) and soft-start phase before PID handoff. |
+| `block_steps.py` | `StepState`, block step protocols and transition logic for `ProgramRun`. |
 | `ramp_profile.py` | `RampProfile`, `RampStep`, `StepType`, `ControlMode` data classes. |
 | `ramp_executor.py` | Executes `RampProfile` instances (voltage mode). |
-| `safety_monitor.py` | `SafetyMonitor` — per-sensor temperature limits, warning/shutdown callbacks, restart lock. |
+| `safety_monitor.py` | `SafetyEvaluator` (pure function evaluating Snapshot against safety limits) and `SafetyMonitor`. |
 
-### `core/`
+### `rig/`
 | File | Owns |
 |------|------|
-| `data_acquisition.py` | `DataAcquisition` — background polling thread, calls `read_all_sensors()`, feeds `SafetyMonitor`, fires `on_new_data` callback. Holds latest TC readings in a thread-safe dict for `ProgramExecutor`. |
+| `rig.py` | `Rig` — single owner of hardware communication, single-threaded timing loop, Snapshot publication, HeaterOutput resolution. (ADR 0002) |
+| `simulated.py` | `SimulatedRig` — in-memory rig adapter with physical tungsten simulation for practice mode and testing. (ADR 0005) |
+| `t8_adapter.py` | `T8Adapter` — live hardware adapter interfacing with LabJack T8 and XGS-600. |
+| `snapshot.py` | `Snapshot`, `HeaterStatus`, `ProgramStatus`, `SourceStatus` immutable dataclasses. |
+| `commands.py` | Immutable command dataclasses sent to Rig (`SetVoltage`, `SetOutput`, `Nudge`, `ResetTrip`, `LoadProgram`, `StartProgram`, `StopProgram`, `ConfirmContinue`, `SelectAdapter`, `UpdateConfig`). |
+| `clock.py` | `Clock`, `RealClock`, `ManualClock` for testable deterministic time. |
 
 ### `data/`
 | File | Owns |
 |------|------|
 | `data_buffer.py` | In-memory rolling circular buffer keyed by sensor name. |
 | `data_logger.py` | CSV writer with metadata header. `load_csv_with_metadata()` for post-run replay. |
+| `run_record.py` | `RunRecord` — background CSV writer consuming immutable Snapshots from the Rig loop. |
 
 ### `gui/`
 | File | Owns |
@@ -132,6 +139,7 @@ Before editing any file, understand what it owns:
 | File | Owns |
 |------|------|
 | `app_settings.py` | Persists to Windows Registry (`HKCU\Software\T8_DAQ_System`). All user-configurable values. `get_tc_pin_list()`, `get_tc_name_list()`, `get_frg_name_list()` helpers generate correct per-sensor lists. |
+| `safety_limits.py` | System-wide safety constants (interlock thresholds, stale allowance, rate limits). |
 
 ### `utils/`
 | File | Owns |
@@ -143,10 +151,9 @@ Before editing any file, understand what it owns:
 ## 5. Design Patterns — Follow These Exactly
 
 ### 5.1 Thread safety
-- `DataAcquisition` runs in a **background thread**.
-- `ProgramExecutor` runs in a **background thread**.
+- The `Rig` module runs the single hardware I/O and control loop in a **background thread**.
 - **All GUI updates must be marshalled to the main thread** via `root.after(0, callback)`. Never call `tk` widget methods from a background thread.
-- The TC readings dict in `DataAcquisition` is protected by `self._tc_readings_lock`. Use the lock when reading/writing it from outside the acquisition thread.
+- Snapshots published by `Rig` are immutable dataclasses, safe to read across threads without locks.
 
 ### 5.2 Sensor naming
 Always use the naming convention:
@@ -157,15 +164,15 @@ Always use the naming convention:
 Names are user-configurable in `AppSettings`. Never hardcode `"TC_1"` unless you are reading from `sensor_config.json` defaults.
 
 ### 5.3 Temperature units inside control code
-- All PID and `ProgramExecutor` internals use **Kelvin**.
-- `DataAcquisition.get_tc_kelvin_by_name()` returns Kelvin — the EF register gives Celsius, which is converted with `+273.15` **inside that function**. Do not add another `+273.15` anywhere in the calling code.
+- All PID and `ProgramRun` internals use **Kelvin**.
+- Snapshot `tc_c` contains readings in Celsius (from the hardware EF registers); conversion to Kelvin (`+ 273.15`) is performed when evaluating setpoints and control steps inside `ProgramRun`.
 - The GUI and CSV display in the user's selected unit (C/F/K). Use `helpers.convert_temperature()` for all display conversions.
 
 ### 5.4 Control layer purity
 Files in `control/` and `utils/` must **never import from `gui/`** or `tkinter`. They are pure logic/data modules. This is required for testability — the full test suite mocks all hardware but runs `control/` code directly.
 
 ### 5.5 Practice mode
-Practice mode is the `Rig` module running the `SimulatedRig` adapter (ADR 0005). No `practice_mode` branch exists in control, acquisition, safety, or record code. Commanded voltage drives a physical tungsten thermal simulation (`TungstenSim`), producing realistic temperature and current. The real PID, feedforward, safety evaluator, Heater output and Run record run identically in practice as on live hardware.
+Practice mode is the `Rig` module running the `SimulatedRig` adapter (ADR 0005). No `practice_mode` branch exists in control, safety, or record code. Commanded voltage drives a physical tungsten thermal simulation (`TungstenSim`), producing realistic temperature and current. The real PID, feedforward, safety evaluator, Heater output and Run record run identically in practice as on live hardware.
 
 ### 5.6 AppSettings
 User settings persist across launches. When adding a new user-configurable field:
@@ -355,5 +362,7 @@ _Updated on 2026-09-21 18:05. Implement this. If something in it is wrong, say s
    - Ticket 10 done: `10-program-run-on-the-rig-loop.md`
    - Ticket 11 done: `11-run-record-writes-the-csv.md`
    - Ticket 12 done: `12-gui-speaks-in-commands.md`
-   - Next ticket: `13-practice-mode-is-the-simulated-rig.md`
+   - Ticket 13 done: `13-practice-mode-is-the-simulated-rig.md`
+   - Ticket 14 done: `14-retire-the-old-modules.md`
+   - Next ticket: `15-no-silent-exceptions.md`
 <!-- ACTIVE-PLAN:END -->

@@ -638,21 +638,26 @@ class SafetyMonitor:
             self._status = SafetyStatus.LIMIT_EXCEEDED
 
         if self.auto_shutoff:
-            self.emergency_shutdown()
+            with self._lock:
+                self._status = SafetyStatus.SHUTDOWN_TRIGGERED
+            if hasattr(self, '_on_shutdown') and self._on_shutdown:
+                try:
+                    self._on_shutdown(event)
+                except Exception:
+                    pass
 
         with self._lock:
             self._status = SafetyStatus.SHUTDOWN_TRIGGERED
 
-        if self._on_shutdown:
+        if self._on_shutdown and not self.auto_shutoff:
             try:
                 self._on_shutdown(event)
             except Exception:
                 pass
 
     def emergency_shutdown(self) -> bool:
-        """Immediately shut off the power supply output."""
+        """Immediately transition to shutdown triggered state."""
         if self.power_supply is None:
-            print("WARNING: No power supply connected for emergency shutdown")
             return False
 
         event = SafetyEvent(
@@ -668,23 +673,8 @@ class SafetyMonitor:
             self._event_history.append(event)
             if len(self._event_history) > self._max_history:
                 self._event_history.pop(0)
-
-        try:
-            success = self.power_supply.emergency_shutdown()
-            if success:
-                print("SAFETY: Emergency shutdown successful")
-                return True
-            else:
-                print("SAFETY: Emergency shutdown may have failed - verify manually!")
-                return False
-        except Exception as e:
-            print(f"SAFETY: Emergency shutdown error: {e}")
-            try:
-                self.power_supply.output_off()
-                return True
-            except Exception:
-                pass
-            return False
+            self._status = SafetyStatus.SHUTDOWN_TRIGGERED
+        return True
 
     def can_restart(self) -> bool:
         """Check if the power supply can be restarted after emergency shutdown.

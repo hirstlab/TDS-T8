@@ -15,12 +15,8 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 import pytest
 
-from t8_daq_system.control.program_executor import ProgramExecutor
 from t8_daq_system.gui.main_window import MainWindow
-from t8_daq_system.rig.clock import ManualClock
-from t8_daq_system.rig.rig import Rig
-from t8_daq_system.rig.simulated import SimulatedRig
-from t8_daq_system.rig.snapshot import Snapshot, SourceStatus, HeaterStatus, ProgramStatus
+from t8_daq_system.rig.snapshot import HeaterStatus, ProgramStatus, Snapshot, SourceStatus
 
 pytestmark = pytest.mark.unit
 
@@ -121,16 +117,14 @@ class TestGuiReadsRig:
         assert mock_ps_controller.get_current.call_count == 0
 
     def test_executor_control_temperature_equals_snapshot_value(self):
-        """Criterion 2: Executor's control temperature for a tick equals the Snapshot's value."""
-        clock = ManualClock()
-        sim = SimulatedRig(clock=clock, tc_names=["TC_1"])
-        rig = Rig(adapter=sim, clock=clock)
+        """Criterion 2: Program control temperature for a tick equals the Snapshot's value."""
+        from t8_daq_system.control.program_block import TempRampBlock
+        from t8_daq_system.control.program_run import ProgramRun
 
-        # Set up a Snapshot with a known temperature in Celsius
         target_temp_c = 345.6
         snapshot = Snapshot(
-            t=clock.now(),
-            wall_time=clock.wall_time(),
+            t=0.0,
+            wall_time=0.0,
             tc_c={"TC_1": target_temp_c},
             tc_raw_v={"TC_1": 0.012},
             pressure_torr={"FRG702_Chamber": 1e-7},
@@ -147,18 +141,11 @@ class TestGuiReadsRig:
             permissive_reason=None,
             adapter="simulated",
         )
-        with rig._latest_lock:
-            rig._latest = snapshot
 
-        # Instantiate ProgramExecutor backed by the rig
-        mock_ps = MagicMock()
-        executor = ProgramExecutor(power_supply=mock_ps, rig=rig)
+        program_run = ProgramRun()
+        block = TempRampBlock(rate_k_per_min=60.0, end_temp_k=1000.0, tc_name="TC_1")
+        measured_k = program_run._read_temp_k(block, snapshot)
 
-        # Step/read temperature for TC_1
-        provider_fn = executor._get_temp_k_provider("TC_1")
-        measured_k = provider_fn()
-
-        # Expected in Kelvin: Celsius + 273.15
         expected_k = target_temp_c + 273.15
         assert measured_k == pytest.approx(expected_k, abs=1e-6)
 
@@ -172,23 +159,12 @@ class TestGuiReadsRig:
     def test_pressure_interlock_stops_executor_before_supply_off_and_compares_in_torr(
         self, mock_settings_cls, mock_camera_panel, mock_sensor_panel, mock_plot, mock_tk, mock_showerror
     ):
-        """Criterion 3: Pressure-interlock stops executor BEFORE turning supply off, and compares in Torr."""
+        """Criterion 3: Pressure-interlock stops program and compares in Torr."""
+        from t8_daq_system.rig.commands import StopProgram
+
         _make_mock_settings(mock_settings_cls)
         mock_rig = MagicMock()
         app = MainWindow(rig=mock_rig)
-
-        # Spy tracking call order
-        call_order = []
-        mock_executor = MagicMock()
-        mock_executor.is_running.return_value = True
-        mock_executor.stop.side_effect = lambda: call_order.append("executor_stop")
-
-        mock_ps = MagicMock()
-        mock_ps.set_voltage.side_effect = lambda v: call_order.append(f"set_voltage_{v}")
-        mock_ps.output_off.side_effect = lambda: call_order.append("output_off")
-
-        app._program_executor = mock_executor
-        app.ps_controller = mock_ps
 
         # Case A: Snapshot with pressure safe in Torr (e.g. 5e-5 Torr) -> should NOT trip
         safe_snapshot = Snapshot(
@@ -211,7 +187,7 @@ class TestGuiReadsRig:
             adapter="simulated",
         )
         app._on_snapshot(safe_snapshot)
-        assert len(call_order) == 0, "Safe pressure in Torr must not trip interlock"
+        assert mock_rig.submit.call_count == 0, "Safe pressure in Torr must not trip interlock"
 
         # Case B: Snapshot with pressure exceeding 1e-4 Torr (e.g. 2e-4 Torr)
         tripping_snapshot = Snapshot(
@@ -246,7 +222,6 @@ class TestGuiReadsRig:
         assert shutdown_cb is not None, "root.after(0, _shutdown) was not scheduled"
         shutdown_cb()
 
-        assert "executor_stop" in call_order
-        # Per Ticket 08 / ADR 0003, _on_pressure_interlock stops writing the supply directly;
-        # power supply cutoff is handled solely by Rig / HeaterOutput
-        assert "output_off" not in call_order
+        # StopProgram submitted to Rig
+        stop_cmds = [c for (c,), _ in mock_rig.submit.call_args_list if isinstance(c, StopProgram)]
+        assert len(stop_cmds) >= 1, "StopProgram was not submitted to Rig on interlock trip"

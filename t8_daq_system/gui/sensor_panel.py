@@ -5,10 +5,12 @@ PURPOSE: Display current sensor values as text/numbers
 
 import tkinter as tk
 from tkinter import ttk
-from t8_daq_system.hardware.frg702_reader import (
-    STATUS_VALID, STATUS_UNDERRANGE, STATUS_OVERRANGE,
-    STATUS_SENSOR_ERROR_NO_SUPPLY, STATUS_SENSOR_ERROR_PIRANI_DEFECTIVE,
-)
+# Gauge status constants (mirrors status values reported by gauge readers)
+STATUS_VALID = 'valid'
+STATUS_UNDERRANGE = 'underrange'
+STATUS_OVERRANGE = 'overrange'
+STATUS_SENSOR_ERROR_NO_SUPPLY = 'error_no_supply'
+STATUS_SENSOR_ERROR_PIRANI_DEFECTIVE = 'error_pirani_defective'
 
 
 class SensorPanel:

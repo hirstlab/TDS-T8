@@ -1,56 +1,126 @@
 """
-Layer 4: State-sync invariant checker.
-InvariantChecker hooks into on_status callback and asserts safety properties every tick.
+Layer 4: State-sync invariant checker on Rig + SimulatedRig.
+
+WHY THIS EXISTS
+---------------
+ADR 0002 / ADR 0003: All state originates from immutable Snapshots published
+by the Rig loop each tick. These tests assert safety invariants across
+VoltageRamp, StableHold, and TempRamp:
+  1. block_index is monotonically non-decreasing
+  2. block_index < len(blocks) while running
+  3. When output is disabled, commanded voltage is 0.0 V (instant cutoff)
 """
+from __future__ import annotations
+
+from typing import Any
 import pytest
-import threading
-from t8_daq_system.control.program_block import VoltageRampBlock, StableHoldBlock, TempRampBlock
-from t8_daq_system.control.program_executor import ProgramExecutor
-from tests.mock_ps import MockPowerSupplyController, fast_executor_time
+
+from t8_daq_system.control.heater_output import HeaterOutput
+from t8_daq_system.control.program_block import (
+    StableHoldBlock,
+    TempRampBlock,
+    VoltageRampBlock,
+)
+from t8_daq_system.control.program_run import ProgramRun
+from t8_daq_system.control.safety_monitor import SafetyEvaluator
+from t8_daq_system.rig.adapter import RawReadings, RigAdapter
+from t8_daq_system.rig.clock import ManualClock
+from t8_daq_system.rig.commands import LoadProgram, StartProgram
+from t8_daq_system.rig.rig import Rig
+from t8_daq_system.rig.simulated import SimulatedRig
 
 pytestmark = pytest.mark.integration
 
-WALL_TIMEOUT = 30
+
+class CallSpyAdapter(RigAdapter):
+    """Spy wrapper around RigAdapter to record calls and optionally override tc_c."""
+
+    def __init__(self, target: RigAdapter) -> None:
+        self._target = target
+        self.calls: list[object] = []
+        self.override_tc_c: dict[str, float | None] | None = None
+
+    def connect(self) -> bool:
+        self.calls.append("connect")
+        return self._target.connect()
+
+    def disconnect(self) -> None:
+        self.calls.append("disconnect")
+        self._target.disconnect()
+
+    def is_connected(self) -> bool:
+        return self._target.is_connected()
+
+    def read(self) -> RawReadings:
+        self.calls.append("read")
+        r = self._target.read()
+        if self.override_tc_c is not None:
+            new_tc = dict(r.tc_c)
+            new_tc.update(self.override_tc_c)
+            return RawReadings(
+                tc_c=new_tc,
+                tc_raw_v=r.tc_raw_v,
+                pressure_torr=r.pressure_torr,
+                pressure_valid=r.pressure_valid,
+                ps_volts=r.ps_volts,
+                ps_amps=r.ps_amps,
+                shutoff_readback=r.shutoff_readback,
+            )
+        return r
+
+    def write_voltage(self, volts: float) -> None:
+        self.calls.append(("write_voltage", volts))
+        self._target.write_voltage(volts)
+
+    def set_output(self, enabled: bool) -> None:
+        self.calls.append(("set_output", enabled))
+        self._target.set_output(enabled)
+
+    def pin_current_limit(self) -> None:
+        self.calls.append("pin_current_limit")
+        self._target.pin_current_limit()
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._target, name)
 
 
 class InvariantChecker:
     """
-    Attaches to on_status callback. Asserts invariants every tick.
-    Violations are recorded with a timestamp; any violation fails the test.
+    Checks Snapshot invariants every tick.
+    Violations are recorded; any violation fails the test.
     """
 
-    def __init__(self, executor, ps):
-        self._executor = executor
-        self._ps = ps
-        self.violations = []
+    def __init__(self, num_blocks: int):
+        self.num_blocks = num_blocks
+        self.violations: list[str] = []
         self._tick = 0
         self._last_block_index = -1
 
-    def check(self, status):
+    def check(self, snap):
         tick = self._tick
         self._tick += 1
-        ex = self._executor
-        ps = self._ps
 
-        # Invariant 1: block_index is monotonically non-decreasing
-        bi = status.get('block_index', 0)
-        if bi < self._last_block_index:
-            self.violations.append(
-                f"tick={tick}: block_index went backwards {self._last_block_index} -> {bi}"
-            )
-        self._last_block_index = bi
+        prog = snap.program
 
-        # Invariant 2: block_index < len(blocks) while running
-        if ex.is_running() and bi >= len(ex._blocks):
-            self.violations.append(
-                f"tick={tick}: block_index={bi} >= len(blocks)={len(ex._blocks)} while running"
-            )
+        # Invariant 1: block_index is monotonically non-decreasing while running
+        if prog.running:
+            bi = prog.block_index
+            if bi < self._last_block_index:
+                self.violations.append(
+                    f"tick={tick}: block_index went backwards {self._last_block_index} -> {bi}"
+                )
+            self._last_block_index = bi
 
-        # Invariant 3: if PS output is off, voltage commanded should eventually be 0
-        # (can't enforce same-tick due to async, but record if voltage > 0 and output is off)
-        if not ps.is_output_on() and status.get('voltage_v', 0.0) > 0.5:
+            # Invariant 2: block_index < len(blocks) while running
+            if bi >= self.num_blocks:
+                self.violations.append(
+                    f"tick={tick}: block_index={bi} >= len(blocks)={self.num_blocks} while running"
+                )
+
+        # Invariant 3: if heater output is disabled, commanded voltage must be 0.0 V
+        if not snap.output_enabled and snap.commanded_volts > 0.0:
             self.violations.append(
-                f"tick={tick}: voltage_v={status['voltage_v']:.2f}V commanded but output is off"
+                f"tick={tick}: commanded_volts={snap.commanded_volts:.2f}V but output is disabled"
             )
 
     def assert_no_violations(self):
@@ -59,31 +129,55 @@ class InvariantChecker:
             pytest.fail(msg)
 
 
-def _run_with_invariants(blocks, temp_k=300.0, timeout=WALL_TIMEOUT):
-    ps = MockPowerSupplyController()
-    ps.reset()
+def _run_with_invariants(blocks: list, temp_k: float = 300.0, max_ticks: int = 150):
+    clock = ManualClock(start_time=100.0)
+    sim = SimulatedRig(
+        clock=clock,
+        tc_names=["TC_1"],
+        gauge_names=["FRG702_Chamber"],
+    )
+    spy = CallSpyAdapter(sim)
+    spy.override_tc_c = {"TC_1": temp_k - 273.15}
+    program_run = ProgramRun()
+    heater_output = HeaterOutput()
+    safety_evaluator = SafetyEvaluator()
+    rig = Rig(
+        adapter=spy,
+        clock=clock,
+        sample_rate_ms=500,
+        tc_names=["TC_1"],
+        gauge_names=["FRG702_Chamber"],
+        heater_output=heater_output,
+        safety_evaluator=safety_evaluator,
+        program_run=program_run,
+    )
 
-    completed = threading.Event()
-    def provider(tc_name):
-        return lambda: temp_k
+    checker = InvariantChecker(num_blocks=len(blocks))
 
-    ex = ProgramExecutor(ps, provider, on_program_complete=lambda: completed.set())
-    checker = InvariantChecker(ex, ps)
-    ex._on_status = checker.check
+    # Baseline tick
+    clock.advance(0.5)
+    rig.run_tick()
 
-    with fast_executor_time():
-        ex.load_program(blocks)
-        ex.start()
-        completed.wait(timeout=timeout)
-        if ex.is_running():
-            ex.stop()
+    rig.submit(LoadProgram(blocks))
+    rig.submit(StartProgram())
 
-    return checker, ex, ps
+    ran = False
+    for _ in range(max_ticks):
+        clock.advance(0.5)
+        rig.run_tick()
+        snap = rig.latest()
+        checker.check(snap)
+        if snap.program.running:
+            ran = True
+        elif ran:
+            break
+
+    return checker
 
 
 def test_invariants_voltage_ramp():
     blocks = [VoltageRampBlock(0.0, 3.0, 2), VoltageRampBlock(3.0, 0.0, 2)]
-    checker, ex, ps = _run_with_invariants(blocks)
+    checker = _run_with_invariants(blocks)
     checker.assert_no_violations()
 
 
@@ -93,7 +187,7 @@ def test_invariants_stable_hold():
         StableHoldBlock(300.0, 50.0, 0.1),
         VoltageRampBlock(2.0, 0.0, 1),
     ]
-    checker, ex, ps = _run_with_invariants(blocks)
+    checker = _run_with_invariants(blocks)
     checker.assert_no_violations()
 
 
@@ -102,7 +196,7 @@ def test_invariants_temp_ramp():
         TempRampBlock(rate_k_per_min=600.0, end_temp_k=600.0, tc_name="TC_1"),
         VoltageRampBlock(3.0, 0.0, 1),
     ]
-    checker, ex, ps = _run_with_invariants(blocks, temp_k=300.0)
+    checker = _run_with_invariants(blocks, temp_k=300.0)
     checker.assert_no_violations()
 
 
@@ -114,5 +208,5 @@ def test_block_index_never_decreases():
         VoltageRampBlock(2.0, 3.0, 1),
         VoltageRampBlock(3.0, 0.0, 1),
     ]
-    checker, ex, ps = _run_with_invariants(blocks)
+    checker = _run_with_invariants(blocks)
     checker.assert_no_violations()
