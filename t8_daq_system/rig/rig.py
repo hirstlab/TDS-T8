@@ -192,6 +192,9 @@ class Rig:
     def set_run_record(self, run_record: Any) -> None:
         """Attach a RunRecord as the step-7 Snapshot consumer for CSV logging."""
         self._run_record = run_record
+        if run_record is not None:
+            adapter_name = "simulated" if isinstance(self._adapter, SimulatedRig) else "t8"
+            self._run_record.put_event(f"ADAPTER {adapter_name}")
 
     def clear_run_record(self) -> None:
         """Detach the RunRecord; no more snapshots will be forwarded."""

@@ -179,3 +179,66 @@ def test_no_tkinter_or_gui_under_control_data_rig_settings():
                         violations.append(f"{rel_path}:{lineno} imports {mod_name}")
 
     assert not violations, "Forbidden GUI imports in pure logic packages:\n" + "\n".join(violations)
+
+
+def test_practice_mode_identifier_only_under_rig_and_gui_toggle():
+    """
+    Rule 5: The identifier `practice_mode` appears only under `rig/` and in
+    `gui/main_window.py`'s toggle handler (`_toggle_practice_mode`).
+    """
+    violations = []
+    main_window_path = Path("t8_daq_system/gui/main_window.py")
+
+    for py_file in _iter_python_files(PACKAGE_ROOT):
+        rel_parts = py_file.relative_to(PACKAGE_ROOT).parts
+        rel_path = py_file.relative_to(REPO_ROOT)
+
+        if rel_parts[0] == "rig":
+            continue
+
+        source = py_file.read_text(encoding="utf-8")
+        tree = ast.parse(source, filename=str(py_file))
+
+        is_main_window = (rel_path == main_window_path)
+
+        class Visitor(ast.NodeVisitor):
+            def __init__(self):
+                self.current_func: str | None = None
+
+            def visit_FunctionDef(self, node: ast.FunctionDef):
+                old_func = self.current_func
+                self.current_func = node.name
+                self.generic_visit(node)
+                self.current_func = old_func
+
+            def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef):
+                old_func = self.current_func
+                self.current_func = node.name
+                self.generic_visit(node)
+                self.current_func = old_func
+
+            def check_name(self, name: str, lineno: int):
+                if name in ("practice_mode", "_practice_mode"):
+                    if is_main_window and self.current_func == "_toggle_practice_mode":
+                        return
+                    violations.append(f"{rel_path}:{lineno} has identifier {name!r}")
+
+            def visit_Name(self, node: ast.Name):
+                self.check_name(node.id, node.lineno)
+                self.generic_visit(node)
+
+            def visit_Attribute(self, node: ast.Attribute):
+                self.check_name(node.attr, node.lineno)
+                self.generic_visit(node)
+
+            def visit_arg(self, node: ast.arg):
+                self.check_name(node.arg, node.lineno)
+                self.generic_visit(node)
+
+        Visitor().visit(tree)
+
+    assert not violations, (
+        "Identifier practice_mode appears outside rig/ and main_window.py:_toggle_practice_mode:\n"
+        + "\n".join(violations)
+    )
+

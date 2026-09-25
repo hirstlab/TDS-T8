@@ -6,8 +6,6 @@ Reads all sensors at the configured interval and delivers data via callback.
 
 import threading
 import time
-import math
-import random
 
 # ── Power Programmer Debug Configuration ──────────────────────────────────────
 # Set to False to disable verbose terminal output during Power Programmer runs.
@@ -74,18 +72,17 @@ def pp_dac_to_monitored_current(analog_input_current):
 class DataAcquisition:
     def __init__(self, config, tc_reader=None, frg702_reader=None,
                  ps_controller=None, safety_monitor=None,
-                 program_executor=None, practice_mode=False):
+                 program_executor=None):
         """
         Initialize the data acquisition engine.
 
         Args:
             config: Application config dict
-            tc_reader: ThermocoupleReader instance (or None for practice mode)
+            tc_reader: ThermocoupleReader instance (or None)
             frg702_reader: FRG702Reader instance (or None)
             ps_controller: PowerSupplyController instance (or None)
             safety_monitor: SafetyMonitor instance (or None)
             program_executor: ProgramExecutor instance (or None)
-            practice_mode: If True, generate simulated data
         """
         self.config = config
         self.tc_reader = tc_reader
@@ -93,7 +90,6 @@ class DataAcquisition:
         self.ps_controller = ps_controller
         self.safety_monitor = safety_monitor
         self.program_executor = program_executor
-        self.practice_mode = practice_mode
 
         self._acquisition_running = False
         self._acquisition_thread = None
@@ -135,104 +131,40 @@ class DataAcquisition:
         ps_readings = {}
         raw_voltages = {}
 
-        if self.practice_mode:
-            # Generate simulated thermocouple data
-            _t = time.time()
-            _enabled_idx = 0
-            for tc in self.config.get('thermocouples', []):
-                if not tc.get('enabled', True):
-                    continue
-                _name = tc['name']
-                if _enabled_idx == 0:
-                    # Primary TC: check TempRampExecutor first, then legacy ProgramExecutor
-                    _tramp = getattr(self, 'temp_ramp_executor', None)
-                    _prog = self.program_executor
-                    if (_tramp is not None
-                            and hasattr(_tramp, '_practice_temp_k')
-                            and _tramp.is_running()):
-                        sim_temp_k = _tramp._practice_temp_k or 293.15
-                        val = sim_temp_k - 273.15
-                    elif (_prog is not None
-                          and hasattr(_prog, '_practice_temp_k')
-                          and _prog.is_running()):
-                        sim_temp_k = _prog._practice_temp_k or 293.15
-                        val = sim_temp_k - 273.15
-                    else:
-                        val = 20.0 + 5.0 * math.sin(_t / 10.0) + random.uniform(-0.5, 0.5)
-                else:
-                    # Secondary TCs: independent sine-wave noise around room temperature
-                    val = 20.0 + 5.0 * math.sin(_t / 10.0 + _enabled_idx * 1.3) + random.uniform(-0.5, 0.5)
-                tc_readings[_name] = val
-                # Simulate raw TC voltage: typical range ±0.1V (100mV)
-                # Approximate back-calculation from temperature for Type K
-                # Just a plausible simulated value for practice mode
-                raw_voltages[f"{_name}_rawV"] = round(
-                    (val - 20.0) * 4.1e-5 + random.uniform(-2e-6, 2e-6), 8
-                )
-                _enabled_idx += 1
+        if self.tc_reader:
+            tc_readings = self.tc_reader.read_all()
+            # Also read raw input voltages for signal-chain verification
+            try:
+                raw_voltages = self.tc_reader.read_raw_voltages()
+            except Exception as e:
+                print(f"Raw voltage read skipped: {e}")
+                raw_voltages = {}
 
-            # Generate simulated FRG-702 data
-            for gauge in self.config.get('frg702_gauges', []):
-                if gauge.get('enabled', True):
-                    t = time.time()
-                    exponent = -6.0 + 1.5 * math.sin(t / 20.0) + random.uniform(-0.1, 0.1)
-                    frg702_readings[gauge['name']] = 10 ** exponent
+        if self.frg702_reader:
+            # Single serial read — derive the flat pressure dict from the
+            # detail dict so the plot buffer and status panel always share
+            # the exact same measurement (no second round-trip to hardware).
+            frg702_detail_readings = self.frg702_reader.read_all_with_status()
+            frg702_readings = {
+                name: info['pressure']
+                for name, info in frg702_detail_readings.items()
+            }
 
-            for gauge in self.config.get('frg702_gauges', []):
-                if gauge.get('enabled', True):
-                    frg702_detail_readings[gauge['name']] = {
-                        'pressure': frg702_readings.get(gauge['name']),
-                        'status': 'valid',
-                        'mode': 'Combined Pirani/Cold Cathode',
-                        'voltage': 5.0,
-                    }
+            if getattr(self.frg702_reader, 'DEBUG_PRESSURE', False):
+                from t8_daq_system.hardware.frg702_reader import UNIT_CONVERSIONS, FRG702Reader
+                display_unit = self.config.get('pressure_unit', 'mbar')
+                for name, detail in frg702_detail_readings.items():
+                    p_torr = detail.get('pressure')
+                    if p_torr is not None:
+                        converted = FRG702Reader.convert_pressure(p_torr, 'Torr', display_unit)
+                        print(
+                            f"[DISPLAY CHAIN] {name}: "
+                            f"{p_torr:.4e} Torr  ->  {converted:.4e} {display_unit}  "
+                            f"(conversion factor: {UNIT_CONVERSIONS.get(display_unit, 1.0)})"
+                        )
 
-            # Power supply readings — ProgramExecutor calls set_voltage() directly
-            # on the mock PS, so get_readings() returns what the executor commanded.
-            if self.ps_controller:
-                ps_readings = self.ps_controller.get_readings()
-            elif self.config.get('power_supply', {}).get('enabled', True):
-                t = time.time()
-                ps_readings = {
-                    'PS_Voltage': 12.0 + 2.0 * math.sin(t / 15.0) + random.uniform(-0.1, 0.1),
-                    'PS_Current': 2.0 + 0.5 * math.cos(t / 12.0) + random.uniform(-0.05, 0.05)
-                }
-        else:
-            # Read real hardware
-            if self.tc_reader:
-                tc_readings = self.tc_reader.read_all()
-                # Also read raw input voltages for signal-chain verification
-                try:
-                    raw_voltages = self.tc_reader.read_raw_voltages()
-                except Exception as e:
-                    print(f"Raw voltage read skipped: {e}")
-                    raw_voltages = {}
-
-            if self.frg702_reader:
-                # Single serial read — derive the flat pressure dict from the
-                # detail dict so the plot buffer and status panel always share
-                # the exact same measurement (no second round-trip to hardware).
-                frg702_detail_readings = self.frg702_reader.read_all_with_status()
-                frg702_readings = {
-                    name: info['pressure']
-                    for name, info in frg702_detail_readings.items()
-                }
-
-                if getattr(self.frg702_reader, 'DEBUG_PRESSURE', False):
-                    from t8_daq_system.hardware.frg702_reader import UNIT_CONVERSIONS, FRG702Reader
-                    display_unit = self.config.get('pressure_unit', 'mbar')
-                    for name, detail in frg702_detail_readings.items():
-                        p_torr = detail.get('pressure')
-                        if p_torr is not None:
-                            converted = FRG702Reader.convert_pressure(p_torr, 'Torr', display_unit)
-                            print(
-                                f"[DISPLAY CHAIN] {name}: "
-                                f"{p_torr:.4e} Torr  ->  {converted:.4e} {display_unit}  "
-                                f"(conversion factor: {UNIT_CONVERSIONS.get(display_unit, 1.0)})"
-                            )
-
-            if self.ps_controller:
-                ps_readings = self.ps_controller.get_readings()
+        if self.ps_controller:
+            ps_readings = self.ps_controller.get_readings()
 
         # Merge readings but exclude status flags (PS_Output_On is not a sensor value)
         ps_sensor_readings = {k: v for k, v in ps_readings.items() if k != 'PS_Output_On'}
@@ -400,22 +332,7 @@ class DataAcquisition:
         return None
 
     def get_tc_kelvin_by_name(self, tc_name: str):
-        """
-        Read a thermocouple by name and return in Kelvin.
-        In practice mode, returns simulated temperature from the active executor.
-        """
-        if self.practice_mode:
-            # Check TempRampExecutor first (PID-driven TC ramp simulation)
-            executor = getattr(self, 'temp_ramp_executor', None)
-            if executor is not None and hasattr(executor, '_practice_temp_k') and executor.is_running():
-                return float(executor._practice_temp_k)
-            # Fallback: check legacy ProgramExecutor
-            if self.program_executor is not None and hasattr(self.program_executor, '_practice_temp_k'):
-                if self.program_executor.is_running():
-                    return float(self.program_executor._practice_temp_k)
-            # No executor running: return room temp
-            return 293.15
-
+        """Read a thermocouple by name and return in Kelvin."""
         if self.tc_reader is None:
             return None
         try:

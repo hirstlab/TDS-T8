@@ -16,8 +16,6 @@ from tkinter import ttk, messagebox
 import time
 import os
 import sys
-import random
-import math
 
 from t8_daq_system.utils.startup_profiler import profiler
 from t8_daq_system.hardware.labjack_connection import LabJackConnection
@@ -148,109 +146,6 @@ def build_csv_header(config: dict, has_ps_controller: bool = True) -> list:
     return ['Timestamp'] + sensor_names
 
 
-class MockPowerSupplyController:
-    """
-    Simulated power supply for practice mode.
-
-    In normal practice mode, get_voltage() / get_current() add small sinusoidal
-    noise to make the display look realistic.
-
-    When Power Programmer execution is active (programmer_active = True) the
-    analog simulation is handled entirely by DataAcquisition.read_all_sensors()
-    using the shared pp_* scaling functions, so noise is suppressed here to
-    allow clean validation of the signal chain.
-    """
-
-    def __init__(self, voltage_limit=6.0, current_limit=180.0):
-        self.voltage = 0.0
-        self.current = 0.0
-        self.output_state = False
-        self.voltage_limit = voltage_limit
-        self.current_limit = current_limit
-        # Set True while the Power Programmer ramp is running so that
-        # get_readings() returns exact setpoints (no noise) and the DA
-        # layer can perform the proper analog round-trip validation.
-        self.programmer_active = False
-
-    def set_voltage(self, volts):
-        self.voltage = min(max(volts, 0.0), self.voltage_limit)
-        return True
-
-    def set_current(self, amps):
-        self.current = min(max(amps, 0.0), self.current_limit)
-        return True
-
-    def output_on(self):
-        self.output_state = True
-        return True
-
-    def output_off(self):
-        self.output_state = False
-        return True
-
-    def is_output_on(self):
-        return self.output_state
-
-    def get_voltage_setpoint(self):
-        return self.voltage
-
-    def get_current_setpoint(self):
-        return self.current
-
-    def get_voltage(self):
-        if not self.output_state:
-            return 0.0
-        # Suppress noise during programmer execution — the DA layer simulates
-        # the full analog round-trip and the validation requires exact values.
-        if self.programmer_active:
-            return self.voltage
-        t = time.time()
-        fluctuation = (self.voltage * 0.02) * math.sin(t / 8.0)
-        return self.voltage + fluctuation + random.uniform(-0.02, 0.02)
-
-    def get_current(self):
-        if not self.output_state:
-            return 0.0
-        if self.programmer_active:
-            return self.current
-        t = time.time()
-        fluctuation = (self.current * 0.03) * math.cos(t / 10.0)
-        return self.current + fluctuation + random.uniform(-0.01, 0.01)
-
-    def get_readings(self):
-        return {
-            'PS_Voltage': self.get_voltage(),
-            'PS_Current': self.get_current(),
-            'PS_Output_On': self.output_state
-        }
-
-    def get_status(self):
-        return {
-            'output_on': self.output_state,
-            'voltage_setpoint': self.voltage,
-            'current_setpoint': self.current,
-            'voltage_actual': self.get_voltage(),
-            'current_actual': self.get_current(),
-            'errors': [],
-            'in_current_limit': False
-        }
-
-    def get_errors(self):
-        return []
-
-    def reset(self):
-        self.voltage = 0.0
-        self.current = 0.0
-        self.output_state = False
-        return True
-
-    def emergency_shutdown(self):
-        self.output_state = False
-        self.voltage = 0.0
-        self.current = 0.0
-        return True
-
-
 class MainWindow:
     # Available sampling rates in milliseconds
     SAMPLE_RATES = [100, 200, 500, 1000, 2000]
@@ -299,7 +194,6 @@ class MainWindow:
         # LabJack reconnect guard
         self._last_labjack_read_failed = False
         self._pressure_interlock_fired = False
-        self._practice_mode = False
 
         profiler.section("Rig and Adapter Initialization")
         if rig is not None:
@@ -313,7 +207,7 @@ class MainWindow:
             self.clock = RealClock()
             self._hardware_adapter = T8Adapter(config=self.config, connection=self.connection)
             self._practice_adapter = SimulatedRig(clock=self.clock, tc_names=tc_names, gauge_names=gauge_names)
-            initial_adapter = self._practice_adapter if self._practice_mode else self._hardware_adapter
+            initial_adapter = self._hardware_adapter
 
             self.rig = Rig(
                 adapter=initial_adapter,
@@ -417,7 +311,6 @@ class MainWindow:
 
         # Mode tracking
         self._viewing_historical = False
-        self._practice_mode = False
         self._loaded_data = None
         self._loaded_data_units = {'temp': 'C', 'press': 'PSI'}
         self._loaded_tc_names = []
@@ -1194,11 +1087,13 @@ class MainWindow:
         """Toggle practice mode on/off."""
         if hasattr(self, 'practice_btn') and str(self.practice_btn.cget('state')) == 'disabled':
             return
-        self._practice_mode = not self._practice_mode
+        snap = self.rig.latest() if hasattr(self, 'rig') and self.rig is not None else None
+        current_is_practice = snap is not None and snap.adapter == "simulated"
+        practice_mode = not current_is_practice
         if hasattr(self, 'rig') and self.rig is not None:
-            self.rig.submit(SelectAdapter(practice=self._practice_mode))
+            self.rig.submit(SelectAdapter(practice=practice_mode))
 
-        if self._practice_mode:
+        if practice_mode:
             self._hardware_init_attempted = True  # Practice mode counts as initialized
             self.practice_btn.config(text="Practice Mode: ON")
             self.status_var.set("Practice Mode Active")
@@ -1209,13 +1104,7 @@ class MainWindow:
                 ]
             self.frg_count_var.set(str(len(self.config['frg702_gauges'])))
 
-            # Set up Mock Power Supply
-            self.ps_controller = MockPowerSupplyController()
-            if self._program_executor:
-                self._program_executor.set_power_supply(self.ps_controller)
-                self._program_executor.practice_mode = True
-
-            self.ps_resource_var.set("Mock Power Supply")
+            self.ps_resource_var.set("Simulated Rig")
             self._auto_start_acquisition()
 
             # ── Feature C: Window title ───────────────────────────────────
@@ -1238,11 +1127,6 @@ class MainWindow:
 
             # Stop practice acquisition before switching to real hardware
             self._on_stop()
-
-            self.ps_controller = getattr(self._hardware_adapter, 'ps_controller', None)
-            if self._program_executor:
-                self._program_executor.set_power_supply(self.ps_controller)
-                self._program_executor.practice_mode = False
 
             snap = self.rig.latest() if hasattr(self, 'rig') and self.rig else None
             if snap is not None and snap.labjack.state == "connected":
@@ -1777,7 +1661,6 @@ class MainWindow:
         # Load and start executor if present
         if self._program_executor:
             self._program_executor.load_program(blocks)
-            self._program_executor.practice_mode = self._practice_mode
 
             # Apply all PID settings from AppSettings before every run
             self._program_executor._pid.update_gains(
@@ -2074,8 +1957,9 @@ class MainWindow:
                 getattr(self, _plot_attr).clear()
         self.data_buffer.clear()
 
-        lj_ok = self.connection and self.connection.is_connected()
-        if lj_ok or self._practice_mode:
+        snap = self.rig.latest() if hasattr(self, 'rig') and self.rig is not None else None
+        lj_ok = (snap is not None and snap.labjack.state == "connected") or bool(self.connection and self.connection.is_connected())
+        if lj_ok:
             self.status_var.set("Connected")
             self.log_btn.config(state='normal' if self.is_running else 'disabled')
         else:
@@ -2458,7 +2342,7 @@ class MainWindow:
             self.indicators['PowerSupply'].config(bg='#00FF00' if ps_connected else '#333333')
 
         # If not connected, update status var
-        if not lj_connected and not self._practice_mode:
+        if not lj_connected:
             if self.status_var.get() != "Disconnected":
                 self._update_connection_state(False)
                 self.is_running = False
@@ -2686,7 +2570,6 @@ class MainWindow:
 
             if self._program_executor:
                 self._program_executor.set_power_supply(self.ps_controller)
-                self._program_executor.practice_mode = self._practice_mode
 
             v_pin = ps_config.get('voltage_pin', 'DAC0')
             i_pin = ps_config.get('current_pin', 'DAC1')
